@@ -1,0 +1,47 @@
+[network]
+[[network.interfaces]]
+name = "eth0"
+kind = "ethernet"
+mac = "00:11:22:33:44:55"
+has_link = true
+has_carrier = true
+
+[[network.interfaces]]
+name = "wlan0"
+kind = "wifi"
+mac = "aa:bb:cc:dd:ee:ff"
+has_link = false
+has_carrier = false
+
+[network.wifi_environment]
+[[network.wifi_environment.available_networks]]
+ssid = "OfficeWifi"
+signal_strength = -50
+frequency_mhz = 5180
+security = "wpa3"
+password = "office2024!"
+reachable = true
+
+[[disks]]
+device = "/dev/sda"
+make = "Seagate"
+model = "IronWolf"
+size_bytes = 2000398934016
+
+[[disks]]
+device = "/dev/sdb"
+make = "Seagate"
+model = "IronWolf"
+size_bytes = 2000398934016
+
+[[disks]]
+device = "/dev/sdc"
+make = "Seagate"
+model = "IronWolf"
+size_bytes = 2000398934016
+
+[[disks]]
+device = "/dev/sdd"
+make = "Seagate"
+model = "IronWolf"
+size_bytes = 2000398934016

@@ -1,0 +1,55 @@
+# Scenario 11: Ethernet-only auto-detect. Single ethernet interface with link up.
+# No wifi present. Installer proceeds directly from NetworkConfig to NetworkProgress.
+# Verifies the full sequence: EnableInterface -> CheckLink -> ConfigureDhcp -> CheckIp
+#   -> CheckRouter -> CheckInternet -> CheckDns -> SelectPrimaryInterface.
+# Hardware: ethernet_1disk — eth0 (link up), 1x Western Digital Blue SN570 500GB.
+hardware_file = "fixtures/hardware/ethernet_1disk.toml"
+
+# Flow:
+#   NetworkConfig -> Confirm (auto-detect eth0)
+#     -> EnableInterface(eth0) -> CheckLinkAvailability(LinkUp) -> ConfigureDhcp
+#     -> CheckIpAddress(192.168.1.20) -> CheckUpstreamRouter(192.168.1.1)
+#     -> CheckInternetRoutability(reachable) -> CheckDnsResolution(93.184.216.34)
+#     -> SelectPrimaryInterface(eth0) -> NetworkProgress (online)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall -> InstallProgress
+#   InstallProgress -> Confirm -> Reboot
+#   Reboot -> RebootSystem
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.20" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

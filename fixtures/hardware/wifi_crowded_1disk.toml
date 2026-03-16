@@ -1,0 +1,85 @@
+[network]
+[[network.interfaces]]
+name = "wlan0"
+kind = "wifi"
+mac = "aa:bb:cc:dd:ee:ff"
+has_link = false
+has_carrier = false
+
+[network.wifi_environment]
+[[network.wifi_environment.available_networks]]
+ssid = "HomeNetwork"
+signal_strength = -55
+frequency_mhz = 2437
+security = "wpa2"
+password = "mypassword123"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "NETGEAR-5G"
+signal_strength = -62
+frequency_mhz = 5180
+security = "wpa2"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "xfinitywifi"
+signal_strength = -65
+frequency_mhz = 2462
+security = "open"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "Apt301_WiFi"
+signal_strength = -68
+frequency_mhz = 2412
+security = "wpa2"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "DIRECT-roku-123"
+signal_strength = -71
+frequency_mhz = 5745
+security = "wpa2"
+reachable = false
+
+[[network.wifi_environment.available_networks]]
+ssid = "linksys"
+signal_strength = -74
+frequency_mhz = 2437
+security = "wep"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "HP-Print-A1"
+signal_strength = -78
+frequency_mhz = 2462
+security = "wpa2"
+reachable = false
+
+[[network.wifi_environment.available_networks]]
+ssid = "ATT-WIFI-5g8k"
+signal_strength = -80
+frequency_mhz = 5200
+security = "wpa3"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "CoxWiFi"
+signal_strength = -82
+frequency_mhz = 2422
+security = "open"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "hidden_network"
+signal_strength = -85
+frequency_mhz = 2447
+security = "wpa2"
+reachable = false
+
+[[disks]]
+device = "/dev/sda"
+make = "Crucial"
+model = "MX500"
+size_bytes = 500107862016

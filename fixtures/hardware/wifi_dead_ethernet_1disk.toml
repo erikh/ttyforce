@@ -1,0 +1,36 @@
+[network]
+[[network.interfaces]]
+name = "eth0"
+kind = "ethernet"
+mac = "00:11:22:33:44:55"
+has_link = false
+has_carrier = false
+
+[[network.interfaces]]
+name = "wlan0"
+kind = "wifi"
+mac = "aa:bb:cc:dd:ee:ff"
+has_link = false
+has_carrier = false
+
+[network.wifi_environment]
+[[network.wifi_environment.available_networks]]
+ssid = "HomeNetwork"
+signal_strength = -52
+frequency_mhz = 5180
+security = "wpa2"
+password = "wifipass456"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "Neighbor_Net"
+signal_strength = -75
+frequency_mhz = 2437
+security = "wpa2"
+reachable = true
+
+[[disks]]
+device = "/dev/sda"
+make = "Kingston"
+model = "A2000"
+size_bytes = 500107862016

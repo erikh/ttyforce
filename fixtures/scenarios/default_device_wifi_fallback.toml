@@ -1,0 +1,65 @@
+# Scenario 7: Ethernet is dead (no link/carrier), auto-detect falls back to wifi.
+# eth0 exists but has no link, so the installer falls through to wlan0.
+# Hardware: wifi_dead_ethernet_1disk — eth0 (dead) + wlan0, 1x Kingston A2000.
+hardware_file = "fixtures/hardware/wifi_dead_ethernet_1disk.toml"
+
+# Flow:
+#   NetworkConfig -> Confirm (auto-detect) -> eth0 has no link, skips to wlan0
+#     -> EnableInterface(wlan0) -> ScanWifiNetworks -> ReceiveWifiScanResults -> WifiSelect
+#   WifiSelect -> SelectWifiNetwork(0 = HomeNetwork) -> WifiPassword
+#   WifiPassword -> EnterWifiPassword("wifipass456") -> WifiAuthenticated
+#     -> ConfigureDhcp -> CheckIpAddress(10.0.0.25) -> CheckUpstreamRouter(10.0.0.1)
+#     -> CheckInternetRoutability -> CheckDnsResolution -> SelectPrimaryInterface(wlan0)
+#     -> NetworkProgress (online)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall -> InstallProgress
+#   InstallProgress -> Confirm -> Reboot
+#   Reboot -> RebootSystem
+inputs = [
+    "Confirm",
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "wifipass456" },
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "HomeNetwork", signal_strength = -52, frequency_mhz = 5180, security = "wpa2", reachable = true },
+    { ssid = "Neighbor_Net", signal_strength = -75, frequency_mhz = 2437, security = "wpa2", reachable = true },
+] }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "10.0.0.25" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "10.0.0.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

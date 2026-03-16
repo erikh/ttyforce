@@ -1,0 +1,53 @@
+# Scenario 6: Auto-detect picks connected ethernet first, ignores available wifi.
+# Ethernet (eth0) has link+carrier so it wins over wifi without any user intervention.
+# Hardware: wifi_ethernet_1disk — eth0 (link up) + wlan0, 1x Samsung 970 EVO Plus.
+hardware_file = "fixtures/hardware/wifi_ethernet_1disk.toml"
+
+# Flow:
+#   NetworkConfig -> Confirm (auto-detect) -> selects eth0, skips wifi
+#     -> EnableInterface(eth0) -> CheckLinkAvailability(LinkUp) -> ConfigureDhcp
+#     -> CheckIpAddress(192.168.1.10) -> CheckUpstreamRouter(192.168.1.1)
+#     -> CheckInternetRoutability -> CheckDnsResolution -> SelectPrimaryInterface(eth0)
+#     -> NetworkProgress (online, wlan0 not enabled so no shutdown needed)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall -> InstallProgress
+#   InstallProgress -> Confirm -> Reboot
+#   Reboot -> RebootSystem
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.10" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

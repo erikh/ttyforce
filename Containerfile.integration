@@ -1,0 +1,48 @@
+FROM docker.io/library/debian:bookworm
+
+# Install systemd and all the tools that SystemdExecutor expects to find
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        systemd \
+        dbus \
+        systemd-resolved \
+        udisks2 \
+        iproute2 \
+        iw \
+        wireless-regdb \
+        wpasupplicant \
+        isc-dhcp-client \
+        parted \
+        btrfs-progs \
+        dnsutils \
+        curl \
+        ca-certificates \
+        gcc \
+        libc6-dev \
+        pkg-config \
+        libdbus-1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust via rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Create virtual block devices for disk operation tests
+RUN mkdir -p /var/lib/ttyforce-test
+
+# Copy source tree
+WORKDIR /build
+COPY . .
+
+# Build all test binaries
+RUN cargo test --no-run 2>&1 | tail -5
+
+# systemd as init so dbus/networkd/resolved/udisks2 are available
+ENV container=docker
+STOPSIGNAL SIGRTMIN+3
+
+COPY integration/run-tests.sh /run-tests.sh
+RUN chmod +x /run-tests.sh
+
+# Default: run all tests under systemd
+CMD ["/run-tests.sh"]

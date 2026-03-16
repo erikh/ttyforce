@@ -1,0 +1,59 @@
+# Playbook: Workstation with mixed drives, select Crucial group with Btrfs RAID5
+description = "Mixed drives workstation: Crucial MX500 x4 Btrfs RAID5"
+hardware_file = "fixtures/hardware/mixed_drives_workstation.toml"
+expected_final_state = "Installed"
+
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 2 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+]
+
+# Network + 4 partitions + RAID5 + 3 subvolumes + install
+expected_operation_types = [
+    "EnableInterface",
+    "CheckLinkAvailability",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "PartitionDisk",
+    "PartitionDisk",
+    "PartitionDisk",
+    "PartitionDisk",
+    "BtrfsRaidSetup",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "InstallBaseSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "10.0.0.5" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "10.0.0.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

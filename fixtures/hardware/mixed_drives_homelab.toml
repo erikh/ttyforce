@@ -1,0 +1,64 @@
+# Homelab: recycled parts, every drive is different
+# 4 groups: 1x Samsung NVMe, 1x WD NVMe, 2x Toshiba SATA, 1x Seagate SATA
+[network]
+[[network.interfaces]]
+name = "enp3s0"
+kind = "ethernet"
+mac = "d8:bb:c1:aa:bb:cc"
+has_link = true
+has_carrier = true
+
+[[network.interfaces]]
+name = "wlp4s0"
+kind = "wifi"
+mac = "44:85:00:11:22:33"
+has_link = false
+has_carrier = false
+
+[network.wifi_environment]
+[[network.wifi_environment.available_networks]]
+ssid = "HomeLab_5G"
+signal_strength = -35
+frequency_mhz = 5180
+security = "wpa3"
+password = "labpass123"
+reachable = true
+
+# Samsung 970 EVO Plus NVMe (1x 250GB) - old boot drive
+[[disks]]
+device = "/dev/nvme0n1"
+make = "Samsung"
+model = "970 EVO Plus"
+size_bytes = 250059350016
+serial = "S4EWNX0M800001"
+
+# WD Black SN770 NVMe (1x 1TB) - newer addition
+[[disks]]
+device = "/dev/nvme1n1"
+make = "Western Digital"
+model = "Black SN770"
+size_bytes = 1000204886016
+serial = "2235G7100001"
+
+# Toshiba N300 NAS (2x 8TB) - bulk storage pair
+[[disks]]
+device = "/dev/sda"
+make = "Toshiba"
+model = "N300"
+size_bytes = 8001563222016
+serial = "59S0A0E7FVGG"
+
+[[disks]]
+device = "/dev/sdb"
+make = "Toshiba"
+model = "N300"
+size_bytes = 8001563222016
+serial = "59S0A0E7FVGH"
+
+# Seagate Barracuda (1x 2TB) - leftover
+[[disks]]
+device = "/dev/sdc"
+make = "Seagate"
+model = "Barracuda"
+size_bytes = 2000398934016
+serial = "ZA10ESKV0001"

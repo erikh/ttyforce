@@ -1,0 +1,65 @@
+# Scenario 8: Both ethernet and wifi available. User overrides auto-detect and manually
+# selects wifi (index 1) instead of letting ethernet be chosen automatically.
+# Hardware: wifi_ethernet_1disk — eth0 (link up, index 0) + wlan0 (index 1), 1x Samsung 970 EVO Plus.
+hardware_file = "fixtures/hardware/wifi_ethernet_1disk.toml"
+
+# Flow:
+#   NetworkConfig -> Select(1) (user picks wlan0 explicitly, bypasses auto-detect)
+#     -> EnableInterface(wlan0) -> ScanWifiNetworks -> ReceiveWifiScanResults -> WifiSelect
+#   WifiSelect -> SelectWifiNetwork(0 = HomeNetwork) -> WifiPassword
+#   WifiPassword -> EnterWifiPassword("homepass123") -> WifiAuthenticated
+#     -> ConfigureDhcp -> CheckIpAddress(192.168.0.77) -> CheckUpstreamRouter(192.168.0.1)
+#     -> CheckInternetRoutability -> CheckDnsResolution -> SelectPrimaryInterface(wlan0)
+#     -> ShutdownInterface(eth0) (primary selected, non-primary eth0 shut down)
+#     -> NetworkProgress (online)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall -> InstallProgress
+#   InstallProgress -> Confirm -> Reboot
+#   Reboot -> RebootSystem
+inputs = [
+    { Select = 1 },
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "homepass123" },
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "HomeNetwork", signal_strength = -48, frequency_mhz = 5180, security = "wpa2", reachable = true },
+] }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.0.77" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.0.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

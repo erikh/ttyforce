@@ -1,0 +1,70 @@
+# Playbook: Ethernet + 4 identical disks, Btrfs RAID5
+# This is fixture example #1 from CLAUDE.md: "ethernet + 4 disks all same"
+description = "Full install: ethernet, 4 disks same, Btrfs RAID5"
+hardware_file = "fixtures/hardware/ethernet_4disk_same.toml"
+expected_final_state = "Installed"
+
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 2 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+]
+
+# Assert the screen after each input — ethernet MUST be detected and
+# the installer MUST advance past NetworkProgress to disk selection.
+expected_screens = [
+    "NetworkProgress",
+    "FilesystemSelect",
+    "RaidConfig",
+    "DiskGroupSelect",
+    "Confirm",
+    "InstallProgress",
+]
+
+expected_operation_types = [
+    "EnableInterface",
+    "CheckLinkAvailability",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "PartitionDisk",
+    "PartitionDisk",
+    "PartitionDisk",
+    "PartitionDisk",
+    "BtrfsRaidSetup",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "InstallBaseSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.5" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

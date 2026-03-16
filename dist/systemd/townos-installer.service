@@ -1,0 +1,24 @@
+[Unit]
+Description=Town OS Installer
+Documentation=https://github.com/erikh/ttyforce
+Conflicts=getty@tty1.service
+After=systemd-vconsole-setup.service systemd-udev-settle.service
+ConditionPathExists=!/var/lib/townos/installed
+
+[Service]
+Type=idle
+ExecStartPre=/usr/lib/townos/detect-hardware --output /run/townos/hardware.toml
+ExecStart=/usr/bin/ttyforce /run/townos/hardware.toml
+ExecStartPost=/usr/bin/touch /var/lib/townos/installed
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

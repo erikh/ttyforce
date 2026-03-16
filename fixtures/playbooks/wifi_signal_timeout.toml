@@ -1,0 +1,79 @@
+# Playbook: Wifi connection timeout, then retry successfully
+description = "Wifi signal timeout -> rescan -> connect -> install"
+hardware_file = "fixtures/hardware/wifi_1disk.toml"
+expected_final_state = "Installed"
+
+inputs = [
+    "Confirm",
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "correctpassword" },
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "correctpassword" },
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+]
+
+expected_operation_types = [
+    "EnableInterface",
+    "ScanWifiNetworks",
+    "ReceiveWifiScanResults",
+    "ConfigureWifiSsidAuth",
+    "AuthenticateWifi",
+    "WifiConnectionTimeout",
+    "ConfigureWifiSsidAuth",
+    "AuthenticateWifi",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "PartitionDisk",
+    "MkfsBtrfs",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "InstallBaseSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "HomeNetwork", signal_strength = -45, frequency_mhz = 5180, security = "wpa2", reachable = true },
+] }
+consume = false
+
+# First auth: timeout (consumed)
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiTimeout"
+consume = true
+
+# Second auth: success (consumed)
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = true
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.42" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

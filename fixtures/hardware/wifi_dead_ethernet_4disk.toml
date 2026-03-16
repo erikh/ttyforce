@@ -1,0 +1,54 @@
+[network]
+[[network.interfaces]]
+name = "eth0"
+kind = "ethernet"
+mac = "00:11:22:33:44:55"
+has_link = false
+has_carrier = false
+
+[[network.interfaces]]
+name = "wlan0"
+kind = "wifi"
+mac = "aa:bb:cc:dd:ee:ff"
+has_link = false
+has_carrier = false
+
+[network.wifi_environment]
+[[network.wifi_environment.available_networks]]
+ssid = "ServerRoom_5G"
+signal_strength = -40
+frequency_mhz = 5180
+security = "wpa3"
+password = "serverpass789"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "Guest_Network"
+signal_strength = -60
+frequency_mhz = 2437
+security = "open"
+reachable = true
+
+[[disks]]
+device = "/dev/sda"
+make = "Toshiba"
+model = "N300"
+size_bytes = 4000787030016
+
+[[disks]]
+device = "/dev/sdb"
+make = "Toshiba"
+model = "N300"
+size_bytes = 4000787030016
+
+[[disks]]
+device = "/dev/sdc"
+make = "Toshiba"
+model = "N300"
+size_bytes = 4000787030016
+
+[[disks]]
+device = "/dev/sdd"
+make = "Toshiba"
+model = "N300"
+size_bytes = 4000787030016

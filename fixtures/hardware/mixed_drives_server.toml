@@ -1,0 +1,74 @@
+# Server: NVMe boot mirror + large HDD array for ZFS/btrfs storage
+# 2 groups: 2x Intel NVMe, 6x Seagate Exos spinning
+[network]
+[[network.interfaces]]
+name = "eno1"
+kind = "ethernet"
+mac = "a4:bf:01:22:33:44"
+has_link = true
+has_carrier = true
+
+[[network.interfaces]]
+name = "eno2"
+kind = "ethernet"
+mac = "a4:bf:01:22:33:45"
+has_link = false
+has_carrier = false
+
+# Intel Optane P5800X NVMe (2x 400GB)
+[[disks]]
+device = "/dev/nvme0n1"
+make = "Intel"
+model = "Optane P5800X"
+size_bytes = 400088457216
+serial = "PHAL1234000A"
+
+[[disks]]
+device = "/dev/nvme1n1"
+make = "Intel"
+model = "Optane P5800X"
+size_bytes = 400088457216
+serial = "PHAL1234000B"
+
+# Seagate Exos X18 (6x 16TB)
+[[disks]]
+device = "/dev/sda"
+make = "Seagate"
+model = "Exos X18"
+size_bytes = 16000900661248
+serial = "ZL2KATCG0001"
+
+[[disks]]
+device = "/dev/sdb"
+make = "Seagate"
+model = "Exos X18"
+size_bytes = 16000900661248
+serial = "ZL2KATCG0002"
+
+[[disks]]
+device = "/dev/sdc"
+make = "Seagate"
+model = "Exos X18"
+size_bytes = 16000900661248
+serial = "ZL2KATCG0003"
+
+[[disks]]
+device = "/dev/sdd"
+make = "Seagate"
+model = "Exos X18"
+size_bytes = 16000900661248
+serial = "ZL2KATCG0004"
+
+[[disks]]
+device = "/dev/sde"
+make = "Seagate"
+model = "Exos X18"
+size_bytes = 16000900661248
+serial = "ZL2KATCG0005"
+
+[[disks]]
+device = "/dev/sdf"
+make = "Seagate"
+model = "Exos X18"
+size_bytes = 16000900661248
+serial = "ZL2KATCG0006"

@@ -1,0 +1,26 @@
+# Scenario 13: Ethernet link fails (LinkDown), user aborts at NetworkProgress, then reboots.
+# Simulates a cable-unplugged situation: CheckLinkAvailability returns LinkDown,
+# the network setup fails, the installer reaches NetworkProgress in error state,
+# user presses Back to return to NetworkConfig, then aborts and reboots.
+# Hardware: ethernet_1disk — eth0 (link up in hardware, but simulated LinkDown), 1x WD Blue SN570.
+hardware_file = "fixtures/hardware/ethernet_1disk.toml"
+
+# Flow:
+#   NetworkConfig -> Confirm (auto-detect eth0)
+#     -> EnableInterface(eth0) -> CheckLinkAvailability(LinkDown) -> error state
+#     -> NetworkProgress (error: network not online)
+#   NetworkProgress -> Back -> NetworkConfig (network state reset to Offline)
+#   NetworkConfig -> AbortInstall -> Reboot screen (action recorded as Aborted)
+#   Reboot -> RebootSystem
+inputs = [
+    "Confirm",
+    "Back",
+    "AbortInstall",
+    "RebootSystem",
+]
+
+# Simulate cable unplugged / link failure
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkDown"
+consume = false

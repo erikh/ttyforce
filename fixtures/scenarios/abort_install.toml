@@ -1,0 +1,14 @@
+# Scenario 14: Abort immediately from the initial NetworkConfig screen.
+# No network setup, no disk selection — user presses abort right away.
+# Final state should be Aborted, and an Abort operation should be recorded.
+# Hardware: ethernet_1disk — eth0 (link up), 1x Western Digital Blue SN570.
+hardware_file = "fixtures/hardware/ethernet_1disk.toml"
+
+# No simulated_responses needed — abort happens before any operations run
+
+# Flow:
+#   NetworkConfig -> AbortInstall -> records Abort operation -> Reboot screen
+#   (final_state = Aborted; no network or disk operations performed)
+inputs = [
+    "AbortInstall",
+]

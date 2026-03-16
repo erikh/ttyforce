@@ -1,0 +1,56 @@
+# Scenario 9: Full install — ethernet auto-detect, 4 identical disks, Btrfs RAID5.
+# 4 disks of same make/model group into one group. SelectRaidOption(2) = BtrfsRaid5
+# (options for 4-disk Btrfs: 0=Single, 1=BtrfsRaid1, 2=BtrfsRaid5).
+# Hardware: ethernet_4disk_same — eth0 (link up), 4x Samsung 870 EVO 1TB.
+hardware_file = "fixtures/hardware/ethernet_4disk_same.toml"
+
+# Flow:
+#   NetworkConfig -> Confirm (auto-detect eth0) -> NetworkProgress (online)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#     (options: 0=Single, 1=BtrfsRaid1, 2=BtrfsRaid5)
+#   RaidConfig -> SelectRaidOption(2 = BtrfsRaid5) -> DiskGroupSelect (1 group: Samsung 870 EVO x4)
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall ->
+#     PartitionDisk(/dev/sda) + PartitionDisk(/dev/sdb) + PartitionDisk(/dev/sdc) + PartitionDisk(/dev/sdd)
+#     -> BtrfsRaidSetup([sda,sdb,sdc,sdd], raid5)
+#     -> CreateBtrfsSubvolume(@) + CreateBtrfsSubvolume(@home) + CreateBtrfsSubvolume(@snapshots)
+#     -> InstallBaseSystem(/mnt)
+#     -> InstallProgress
+#   InstallProgress -> Confirm -> Reboot
+#   Reboot -> RebootSystem
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 2 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.5" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

@@ -1,0 +1,28 @@
+[package]
+name = "ttyforce"
+version = "0.1.0"
+edition = "2021"
+default-run = "ttyforce"
+description = "Town OS installer TUI"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+thiserror = "2"
+zbus = { version = "5", features = ["blocking"] }
+serde_json = "1"
+
+[[bin]]
+name = "ttyforce"
+path = "src/main.rs"
+
+[[bin]]
+name = "detect-hardware"
+path = "src/bin/detect-hardware.rs"
+
+[dev-dependencies]
+pretty_assertions = "1"

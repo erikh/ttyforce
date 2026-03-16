@@ -1,0 +1,29 @@
+[network]
+[[network.interfaces]]
+name = "wlan0"
+kind = "wifi"
+mac = "aa:bb:cc:dd:ee:ff"
+has_link = false
+has_carrier = false
+
+[network.wifi_environment]
+[[network.wifi_environment.available_networks]]
+ssid = "HomeNetwork"
+signal_strength = -45
+frequency_mhz = 5180
+security = "wpa2"
+password = "correctpassword"
+reachable = true
+
+[[network.wifi_environment.available_networks]]
+ssid = "Neighbor_5G"
+signal_strength = -72
+frequency_mhz = 5240
+security = "wpa2"
+reachable = true
+
+[[disks]]
+device = "/dev/nvme0n1"
+make = "Samsung"
+model = "980 PRO"
+size_bytes = 1000204886016

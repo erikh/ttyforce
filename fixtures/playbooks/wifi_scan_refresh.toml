@@ -1,0 +1,72 @@
+# Playbook: Refresh wifi scan list, then connect
+description = "Wifi scan refresh with updated network list, then install"
+hardware_file = "fixtures/hardware/wifi_1disk.toml"
+expected_final_state = "Installed"
+
+inputs = [
+    "Confirm",
+    "RefreshWifiScan",
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "password123" },
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+]
+
+expected_operation_types = [
+    "EnableInterface",
+    "ScanWifiNetworks",
+    "ReceiveWifiScanResults",
+    "ScanWifiNetworks",
+    "ReceiveWifiScanResults",
+    "ConfigureWifiSsidAuth",
+    "AuthenticateWifi",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "PartitionDisk",
+    "MkfsBtrfs",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "InstallBaseSystem",
+]
+
+# First scan returns initial networks
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "NewNetwork", signal_strength = -40, frequency_mhz = 5180, security = "wpa2", reachable = true },
+    { ssid = "AnotherNet", signal_strength = -65, frequency_mhz = 2437, security = "open", reachable = true },
+] }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = true
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.42" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

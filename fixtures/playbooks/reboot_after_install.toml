@@ -1,0 +1,69 @@
+# Playbook: Full install then reboot
+description = "Full install with reboot at the end"
+hardware_file = "fixtures/hardware/ethernet_1disk.toml"
+expected_final_state = "Rebooted"
+
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+expected_screens = [
+    "NetworkProgress",
+    "FilesystemSelect",
+    "RaidConfig",
+    "DiskGroupSelect",
+    "Confirm",
+    "InstallProgress",
+    "Reboot",
+    "Reboot",
+]
+
+expected_operation_types = [
+    "EnableInterface",
+    "CheckLinkAvailability",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "PartitionDisk",
+    "MkfsBtrfs",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "InstallBaseSystem",
+    "Reboot",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.20" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

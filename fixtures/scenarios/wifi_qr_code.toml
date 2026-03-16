@@ -1,0 +1,73 @@
+# Scenario 12: QR code wifi configuration scenario.
+# The connect_wifi_qr() method is called directly by the TUI when a QR code is scanned.
+# Since QR connect is not a UserInput variant, this fixture exercises the standard
+# wifi password flow but simulates the ConfigureWifiQrCode operation being successful.
+# The simulated_responses include a WifiQrConfigured result for ConfigureWifiQrCode
+# so that if connect_wifi_qr() is called programmatically during testing, it succeeds.
+# The UserInput flow falls back to normal wifi password entry.
+# Hardware: wifi_1disk — wlan0 only, 1x Samsung 980 PRO NVMe. HomeNetwork has qr_data.
+hardware_file = "fixtures/hardware/wifi_1disk.toml"
+
+# Flow (UserInput-driven path):
+#   NetworkConfig -> Confirm -> WifiSelect
+#   WifiSelect -> SelectWifiNetwork(0 = HomeNetwork) -> WifiPassword
+#   WifiPassword -> EnterWifiPassword (represents QR code scanning producing the password)
+#     -> WifiAuthenticated -> NetworkProgress (online)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall -> InstallProgress
+#   InstallProgress -> Confirm -> Reboot
+#   Reboot -> RebootSystem
+inputs = [
+    "Confirm",
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "correctpassword" },
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "HomeNetwork", signal_strength = -45, frequency_mhz = 5180, security = "wpa2", reachable = true },
+    { ssid = "Neighbor_5G", signal_strength = -72, frequency_mhz = 5240, security = "wpa2", reachable = true },
+] }
+consume = false
+
+# Handles programmatic connect_wifi_qr() call if invoked directly
+[[simulated_responses]]
+operation_match = { by_type = "ConfigureWifiQrCode" }
+result = "WifiQrConfigured"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.42" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

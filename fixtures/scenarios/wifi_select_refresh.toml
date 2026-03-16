@@ -1,0 +1,70 @@
+# Scenario 2: Navigate to wifi select, refresh the scan (list changes), then select and connect.
+# Hardware: wifi_1disk — wlan0 only, 1x Samsung 980 PRO NVMe.
+hardware_file = "fixtures/hardware/wifi_1disk.toml"
+
+# Flow:
+#   NetworkConfig -> Confirm -> WifiSelect (initial scan: only Neighbor_5G)
+#   WifiSelect -> RefreshWifiScan -> WifiSelect (new scan: 3 networks)
+#   WifiSelect -> SelectWifiNetwork(0 = HomeNetwork) -> WifiPassword
+#   WifiPassword -> EnterWifiPassword -> NetworkProgress (online)
+#   NetworkProgress -> Confirm -> FilesystemSelect
+#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
+#   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
+#   Confirm -> ConfirmInstall -> InstallProgress
+inputs = [
+    "Confirm",
+    "RefreshWifiScan",
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "correctpassword" },
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+    "Confirm",
+    "RebootSystem",
+]
+
+# Initial scan on auto-detect returns only one network
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "Neighbor_5G", signal_strength = -72, frequency_mhz = 5240, security = "wpa2", reachable = true },
+] }
+consume = true
+
+# After refresh, scan returns a different/expanded list
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "HomeNetwork", signal_strength = -45, frequency_mhz = 5180, security = "wpa2", reachable = true },
+    { ssid = "Neighbor_5G", signal_strength = -70, frequency_mhz = 5240, security = "wpa2", reachable = true },
+    { ssid = "CoffeeShop_Free", signal_strength = -80, frequency_mhz = 2437, security = "open", reachable = true },
+] }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = true
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.42" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

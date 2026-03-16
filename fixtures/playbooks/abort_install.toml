@@ -1,0 +1,12 @@
+# Playbook: User aborts install at network config
+description = "Abort at network config screen"
+hardware_file = "fixtures/hardware/ethernet_1disk.toml"
+expected_final_state = "Aborted"
+
+inputs = [
+    "AbortInstall",
+]
+
+expected_operation_types = [
+    "Abort",
+]

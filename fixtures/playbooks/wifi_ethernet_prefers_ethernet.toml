@@ -1,0 +1,64 @@
+# Playbook: Both wifi and ethernet present, auto-detect picks ethernet
+description = "Wifi + ethernet: auto-detect prefers ethernet"
+hardware_file = "fixtures/hardware/wifi_ethernet_1disk.toml"
+expected_final_state = "Installed"
+
+inputs = [
+    "Confirm",
+    "Confirm",
+    { SelectFilesystem = 0 },
+    { SelectRaidOption = 0 },
+    { SelectDiskGroup = 0 },
+    "ConfirmInstall",
+]
+
+expected_screens = [
+    "NetworkProgress",
+    "FilesystemSelect",
+    "RaidConfig",
+    "DiskGroupSelect",
+    "Confirm",
+    "InstallProgress",
+]
+
+expected_operation_types = [
+    "EnableInterface",
+    "CheckLinkAvailability",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "PartitionDisk",
+    "MkfsBtrfs",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "CreateBtrfsSubvolume",
+    "InstallBaseSystem",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckLinkAvailability" }
+result = "LinkUp"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "10.0.0.50" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "10.0.0.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false
