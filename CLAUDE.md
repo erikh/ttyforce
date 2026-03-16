@@ -86,3 +86,5 @@ Inputs should drive interactions in the TUI which may involve internal state, or
 The result would be that in a real scenario, those operations will be evaluated immediately, and their results would be fed back as error or state changes, which then might interrupt the input for prepending, such as a ssid list, to wifi access point selection, to password entry, to network negotiation and online status, including DNS resolution of e.g. example.com, but resulting in a full series of inputs and any errors states in-between, and the operations that would have been performed in the series of errors to get to a final state of "installed" or "aborted". The option to reboot the machine should also be available.
 
 Please ensure any other additional functionality is tested.
+
+- don't commit or push unless I tell you to
