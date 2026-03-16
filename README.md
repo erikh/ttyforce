@@ -24,10 +24,11 @@ ttyforce --fixture fixtures/scenarios/full_install_ethernet_4disk.toml
 
 The installer prioritizes getting online with minimal user interaction:
 
-1. If a wired connection with link is available, it auto-selects ethernet
-2. If ethernet is dead or absent, it falls back to wifi
-3. Wifi presents a scannable network list with signal strength and security info
-4. Supports WPA2/WPA3 password entry and QR code configuration
+1. If a wired connection with link+carrier is already up, it selects it and advances directly to disk setup — no probing or DHCP reconfiguration
+2. If ethernet has link but no carrier, it brings the interface up step by step (enable, check link, DHCP, IP check, connectivity checks)
+3. If ethernet is dead or absent, it falls back to wifi
+4. Wifi presents a scannable network list with signal strength and security info
+5. Supports WPA2/WPA3 password entry and QR code configuration
 
 ### Disks
 
@@ -39,13 +40,21 @@ Disks are automatically grouped by make and model. RAID options are presented ba
 
 Both Btrfs and ZFS are supported as filesystem options.
 
+### Final screen
+
+After installation completes (or is aborted), the final screen offers three choices:
+
+- **Reboot** — restart the machine into the new system
+- **Exit** — return to the shell
+- **Power Off** — shut down
+
 ### Hardware detection
 
-Detection uses systemd dbus interfaces with sysfs fallback:
+Detection uses systemd dbus interfaces with sysfs/command fallbacks. Negative results from networkd are never trusted on their own — the installer always falls through to direct system checks (sysfs carrier, `ip addr show`, `ip route`, etc.):
 
-- **Network interfaces** — systemd-networkd (`org.freedesktop.network1`) for link/carrier state, wpa_supplicant dbus for wifi scanning
+- **Network interfaces** — systemd-networkd (`org.freedesktop.network1`) for link/carrier state, wpa_supplicant dbus for wifi scanning, sysfs and `ip` command as fallbacks
 - **Disks** — UDisks2 (`org.freedesktop.UDisks2`) for block device enumeration and drive metadata
-- **DNS** — systemd-resolved (`org.freedesktop.resolve1`) for name resolution
+- **DNS** — systemd-resolved (`org.freedesktop.resolve1`) for name resolution, with `dig`/`getent` fallback
 
 ## Testing
 

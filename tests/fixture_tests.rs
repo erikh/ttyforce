@@ -232,7 +232,8 @@ fn test_ethernet_auto_detect() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    assert_eq!(result, Some(ScreenId::NetworkProgress));
+    // Connected ethernet skips directly to filesystem select
+    assert_eq!(result, Some(ScreenId::FilesystemSelect));
     assert!(sm.network_state.is_online());
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
 }
@@ -255,7 +256,8 @@ fn test_ethernet_preferred_over_wifi() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    assert_eq!(result, Some(ScreenId::NetworkProgress));
+    // Connected ethernet skips directly to filesystem select
+    assert_eq!(result, Some(ScreenId::FilesystemSelect));
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
     assert!(sm.network_state.is_online());
 }

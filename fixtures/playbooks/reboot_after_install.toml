@@ -5,7 +5,6 @@ expected_final_state = "Rebooted"
 
 inputs = [
     "Confirm",
-    "Confirm",
     { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
@@ -15,7 +14,6 @@ inputs = [
 ]
 
 expected_screens = [
-    "NetworkProgress",
     "FilesystemSelect",
     "RaidConfig",
     "DiskGroupSelect",
@@ -26,12 +24,6 @@ expected_screens = [
 ]
 
 expected_operation_types = [
-    "EnableInterface",
-    "CheckLinkAvailability",
-    "CheckIpAddress",
-    "CheckUpstreamRouter",
-    "CheckInternetRoutability",
-    "CheckDnsResolution",
     "SelectPrimaryInterface",
     "PartitionDisk",
     "MkfsBtrfs",
@@ -41,28 +33,3 @@ expected_operation_types = [
     "InstallBaseSystem",
     "Reboot",
 ]
-
-[[simulated_responses]]
-operation_match = { by_type = "CheckLinkAvailability" }
-result = "LinkUp"
-consume = false
-
-[[simulated_responses]]
-operation_match = { by_type = "CheckIpAddress" }
-result = { IpAssigned = "192.168.1.20" }
-consume = false
-
-[[simulated_responses]]
-operation_match = { by_type = "CheckUpstreamRouter" }
-result = { RouterFound = "192.168.1.1" }
-consume = false
-
-[[simulated_responses]]
-operation_match = { by_type = "CheckInternetRoutability" }
-result = "InternetReachable"
-consume = false
-
-[[simulated_responses]]
-operation_match = { by_type = "CheckDnsResolution" }
-result = { DnsResolved = "93.184.216.34" }
-consume = false

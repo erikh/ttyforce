@@ -439,6 +439,33 @@ impl InstallerStateMachine {
         iface_name: String,
         executor: &mut dyn OperationExecutor,
     ) -> Option<ScreenId> {
+        // If the interface already has link+carrier, it's connected — just
+        // select it as primary, shut down the others, and advance directly.
+        let already_connected = self
+            .interfaces
+            .iter()
+            .any(|i| i.name == iface_name && i.has_link && i.has_carrier);
+
+        if already_connected {
+            let select_op = Operation::SelectPrimaryInterface {
+                interface: iface_name.clone(),
+            };
+            let result = executor.execute(&select_op);
+            self.action_manifest.record(select_op, result.to_outcome());
+
+            self.network_state = NetworkState::Online;
+
+            for sop in self.shutdown_other_interfaces(&iface_name) {
+                let sr = executor.execute(&sop);
+                self.action_manifest.record(sop, sr.to_outcome());
+            }
+
+            self.current_screen = ScreenId::FilesystemSelect;
+            return Some(ScreenId::FilesystemSelect);
+        }
+
+        // Interface is not already connected — bring it up step by step.
+
         // Step 1: Enable the interface
         let enable_op = Operation::EnableInterface {
             interface: iface_name.clone(),

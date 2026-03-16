@@ -5,6 +5,11 @@ edition = "2021"
 default-run = "ttyforce"
 description = "Town OS installer TUI"
 license = "MIT"
+repository = "https://github.com/erikh/ttyforce"
+homepage = "https://github.com/erikh/ttyforce"
+readme = "README.md"
+keywords = ["tui", "installer", "linux"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 ratatui = "0.29"

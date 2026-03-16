@@ -1,0 +1,13 @@
+[network]
+[[network.interfaces]]
+name = "eth0"
+kind = "ethernet"
+mac = "00:11:22:33:44:55"
+has_link = true
+has_carrier = false
+
+[[disks]]
+device = "/dev/sda"
+make = "Western Digital"
+model = "Blue SN570"
+size_bytes = 500107862016

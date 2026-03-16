@@ -24,12 +24,9 @@ fn run_ethernet_single_disk_install(
 ) -> InstallerStateMachine {
     let mut sm = InstallerStateMachine::new(hw);
 
-    // Auto-detect network (ethernet)
+    // Auto-detect network (connected ethernet skips straight to filesystem)
     sm.process_input(UserInput::Confirm, executor);
     assert!(sm.network_state.is_online());
-
-    // Continue to filesystem select
-    sm.process_input(UserInput::Confirm, executor);
     assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
 
     // Select btrfs (index 0)
@@ -385,41 +382,33 @@ fn test_full_install_wifi_1disk() {
 
 #[test]
 fn test_ethernet_auto_detect_records_all_ops() {
+    // Connected ethernet (has_link + has_carrier) skips straight to FilesystemSelect
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
+    assert!(sm.network_state.is_online());
 
     let ops = executor.recorded_operations();
     let op_types: Vec<&str> = ops
         .iter()
-        .map(|r| match &r.operation {
-            Operation::EnableInterface { .. } => "EnableInterface",
-            Operation::CheckLinkAvailability { .. } => "CheckLinkAvailability",
-            Operation::ConfigureDhcp { .. } => "ConfigureDhcp",
-            Operation::CheckIpAddress { .. } => "CheckIpAddress",
-            Operation::CheckUpstreamRouter { .. } => "CheckUpstreamRouter",
-            Operation::CheckInternetRoutability { .. } => "CheckInternetRoutability",
-            Operation::CheckDnsResolution { .. } => "CheckDnsResolution",
-            Operation::SelectPrimaryInterface { .. } => "SelectPrimaryInterface",
-            _ => "Other",
-        })
+        .map(|r| ttyforce::engine::executor::operation_type_name(&r.operation))
         .collect();
 
-    assert!(op_types.contains(&"EnableInterface"));
-    assert!(op_types.contains(&"CheckLinkAvailability"));
-    assert!(op_types.contains(&"ConfigureDhcp"));
-    assert!(op_types.contains(&"CheckIpAddress"));
-    assert!(op_types.contains(&"CheckUpstreamRouter"));
-    assert!(op_types.contains(&"CheckInternetRoutability"));
-    assert!(op_types.contains(&"CheckDnsResolution"));
+    // Only SelectPrimaryInterface should be recorded — no probing needed
     assert!(op_types.contains(&"SelectPrimaryInterface"));
+    assert!(!op_types.contains(&"EnableInterface"));
+    assert!(!op_types.contains(&"CheckLinkAvailability"));
+    assert!(!op_types.contains(&"ConfigureDhcp"));
 }
 
 #[test]
 fn test_ethernet_already_connected_skips_dhcp() {
-    let hw = load_hardware("ethernet_1disk");
+    // Use nocarrier fixture so bring_ethernet_online runs the step-by-step path,
+    // but simulate that CheckIpAddress finds an existing IP (skip DHCP).
+    let hw = load_hardware("ethernet_1disk_nocarrier");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![
         SimulatedResponse {
@@ -451,11 +440,9 @@ fn test_ethernet_already_connected_skips_dhcp() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
 
-    // Should be online and on the network progress screen
     assert!(sm.network_state.is_online());
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
 
-    // Verify DHCP was NOT called since we already had an IP
     let ops = executor.recorded_operations();
     let op_types: Vec<&str> = ops
         .iter()
@@ -466,9 +453,6 @@ fn test_ethernet_already_connected_skips_dhcp() {
     assert!(op_types.contains(&"CheckLinkAvailability"));
     assert!(op_types.contains(&"CheckIpAddress"));
     assert!(!op_types.contains(&"ConfigureDhcp"), "DHCP should be skipped when IP is already assigned");
-    assert!(op_types.contains(&"CheckUpstreamRouter"));
-    assert!(op_types.contains(&"CheckInternetRoutability"));
-    assert!(op_types.contains(&"CheckDnsResolution"));
     assert!(op_types.contains(&"SelectPrimaryInterface"));
 
     // Verify the IP was stored
@@ -478,9 +462,10 @@ fn test_ethernet_already_connected_skips_dhcp() {
 
 #[test]
 fn test_ethernet_no_ip_runs_dhcp() {
-    let hw = load_hardware("ethernet_1disk");
+    // Use nocarrier fixture so bring_ethernet_online runs the step-by-step path.
+    let hw = load_hardware("ethernet_1disk_nocarrier");
     let mut sm = InstallerStateMachine::new(hw);
-    // First CheckIpAddress returns NoIp, second (after DHCP) returns IpAssigned
+    // First CheckIpAddress returns NoIp, second (after DHCP) falls through to default (Success)
     let mut executor = TestExecutor::new(vec![
         SimulatedResponse {
             operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
@@ -490,7 +475,7 @@ fn test_ethernet_no_ip_runs_dhcp() {
         SimulatedResponse {
             operation_match: OperationMatcher::ByType("CheckIpAddress".to_string()),
             result: OperationResult::NoIp,
-            consume: true, // consumed so second call falls through to default (Success)
+            consume: true,
         },
         SimulatedResponse {
             operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
@@ -513,7 +498,6 @@ fn test_ethernet_no_ip_runs_dhcp() {
 
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
 
-    // Verify DHCP WAS called since we had no IP initially
     let ops = executor.recorded_operations();
     let op_types: Vec<&str> = ops
         .iter()
@@ -528,7 +512,8 @@ fn test_ethernet_no_ip_runs_dhcp() {
 
 #[test]
 fn test_ethernet_link_failure() {
-    let hw = load_hardware("ethernet_1disk");
+    // Use nocarrier fixture so bring_ethernet_online actually checks link
+    let hw = load_hardware("ethernet_1disk_nocarrier");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
