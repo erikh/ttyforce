@@ -418,6 +418,115 @@ fn test_ethernet_auto_detect_records_all_ops() {
 }
 
 #[test]
+fn test_ethernet_already_connected_skips_dhcp() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = TestExecutor::new(vec![
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+            result: OperationResult::LinkUp,
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckIpAddress".to_string()),
+            result: OperationResult::IpAssigned("192.168.1.50".to_string()),
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
+            result: OperationResult::RouterFound("192.168.1.1".to_string()),
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckInternetRoutability".to_string()),
+            result: OperationResult::InternetReachable,
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckDnsResolution".to_string()),
+            result: OperationResult::DnsResolved("93.184.216.34".to_string()),
+            consume: false,
+        },
+    ]);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+
+    // Should be online and on the network progress screen
+    assert!(sm.network_state.is_online());
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+
+    // Verify DHCP was NOT called since we already had an IP
+    let ops = executor.recorded_operations();
+    let op_types: Vec<&str> = ops
+        .iter()
+        .map(|r| ttyforce::engine::executor::operation_type_name(&r.operation))
+        .collect();
+
+    assert!(op_types.contains(&"EnableInterface"));
+    assert!(op_types.contains(&"CheckLinkAvailability"));
+    assert!(op_types.contains(&"CheckIpAddress"));
+    assert!(!op_types.contains(&"ConfigureDhcp"), "DHCP should be skipped when IP is already assigned");
+    assert!(op_types.contains(&"CheckUpstreamRouter"));
+    assert!(op_types.contains(&"CheckInternetRoutability"));
+    assert!(op_types.contains(&"CheckDnsResolution"));
+    assert!(op_types.contains(&"SelectPrimaryInterface"));
+
+    // Verify the IP was stored
+    let iface = sm.interfaces.iter().find(|i| i.name == "eth0").unwrap();
+    assert_eq!(iface.ip_address.as_deref(), Some("192.168.1.50"));
+}
+
+#[test]
+fn test_ethernet_no_ip_runs_dhcp() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    // First CheckIpAddress returns NoIp, second (after DHCP) returns IpAssigned
+    let mut executor = TestExecutor::new(vec![
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+            result: OperationResult::LinkUp,
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckIpAddress".to_string()),
+            result: OperationResult::NoIp,
+            consume: true, // consumed so second call falls through to default (Success)
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
+            result: OperationResult::RouterFound("192.168.1.1".to_string()),
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckInternetRoutability".to_string()),
+            result: OperationResult::InternetReachable,
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckDnsResolution".to_string()),
+            result: OperationResult::DnsResolved("93.184.216.34".to_string()),
+            consume: false,
+        },
+    ]);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+
+    // Verify DHCP WAS called since we had no IP initially
+    let ops = executor.recorded_operations();
+    let op_types: Vec<&str> = ops
+        .iter()
+        .map(|r| ttyforce::engine::executor::operation_type_name(&r.operation))
+        .collect();
+
+    assert!(op_types.contains(&"EnableInterface"));
+    assert!(op_types.contains(&"CheckLinkAvailability"));
+    assert!(op_types.contains(&"ConfigureDhcp"), "DHCP should run when no IP is assigned");
+    assert!(op_types.contains(&"CheckIpAddress"));
+}
+
+#[test]
 fn test_ethernet_link_failure() {
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);

@@ -439,50 +439,67 @@ impl InstallerStateMachine {
         iface_name: String,
         executor: &mut dyn OperationExecutor,
     ) -> Option<ScreenId> {
-        // Critical ops: must succeed or we can't proceed
-        let critical_ops = [
-            Operation::EnableInterface {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckLinkAvailability {
-                interface: iface_name.clone(),
-            },
-            Operation::ConfigureDhcp {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckIpAddress {
-                interface: iface_name.clone(),
-            },
-        ];
+        // Step 1: Enable the interface
+        let enable_op = Operation::EnableInterface {
+            interface: iface_name.clone(),
+        };
+        let enable_result = executor.execute(&enable_op);
+        self.action_manifest
+            .record(enable_op, enable_result.to_outcome());
+        if enable_result.is_error() {
+            return self.ethernet_error(&iface_name, &enable_result, executor);
+        }
+        self.network_state = NetworkState::DeviceEnabled;
 
-        let critical_states = [
-            NetworkState::DeviceEnabled,
-            NetworkState::DeviceEnabled,
-            NetworkState::DhcpConfiguring,
-            NetworkState::IpAssigned,
-        ];
+        // Step 2: Check link
+        let link_op = Operation::CheckLinkAvailability {
+            interface: iface_name.clone(),
+        };
+        let link_result = executor.execute(&link_op);
+        self.action_manifest
+            .record(link_op, link_result.to_outcome());
+        if link_result.is_error() {
+            return self.ethernet_error(&iface_name, &link_result, executor);
+        }
 
-        for (op, state) in critical_ops.iter().zip(critical_states.iter()) {
-            let result = executor.execute(op);
-            self.action_manifest.record(op.clone(), result.to_outcome());
+        // Step 3: Check if we already have an IP (skip DHCP if so)
+        let ip_op = Operation::CheckIpAddress {
+            interface: iface_name.clone(),
+        };
+        let ip_result = executor.execute(&ip_op);
+        self.action_manifest
+            .record(ip_op.clone(), ip_result.to_outcome());
 
-            if result.is_error() {
-                self.network_state = NetworkState::Error(format!("{:?}", result));
-                self.error_message = Some(format!("Network error: {:?}", result));
-
-                // Shutdown non-primary interfaces
-                for sop in self.shutdown_other_interfaces(&iface_name) {
-                    let sr = executor.execute(&sop);
-                    self.action_manifest.record(sop, sr.to_outcome());
-                }
-
-                self.current_screen = ScreenId::NetworkProgress;
-                return Some(ScreenId::NetworkProgress);
+        let already_has_ip = matches!(&ip_result, OperationResult::IpAssigned(_));
+        if let OperationResult::IpAssigned(ip) = &ip_result {
+            if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
+                iface.ip_address = Some(ip.clone());
             }
+            self.network_state = NetworkState::IpAssigned;
+        }
 
-            self.network_state = state.clone();
+        if !already_has_ip {
+            // Step 4: No IP yet — configure DHCP and re-check
+            let dhcp_op = Operation::ConfigureDhcp {
+                interface: iface_name.clone(),
+            };
+            let dhcp_result = executor.execute(&dhcp_op);
+            self.action_manifest
+                .record(dhcp_op, dhcp_result.to_outcome());
+            if dhcp_result.is_error() {
+                return self.ethernet_error(&iface_name, &dhcp_result, executor);
+            }
+            self.network_state = NetworkState::DhcpConfiguring;
 
-            if let OperationResult::IpAssigned(ip) = &result {
+            let ip_result2 = executor.execute(&ip_op);
+            self.action_manifest
+                .record(ip_op, ip_result2.to_outcome());
+            if ip_result2.is_error() {
+                return self.ethernet_error(&iface_name, &ip_result2, executor);
+            }
+            self.network_state = NetworkState::IpAssigned;
+
+            if let OperationResult::IpAssigned(ip) = &ip_result2 {
                 if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
                     iface.ip_address = Some(ip.clone());
                 }
@@ -527,6 +544,24 @@ impl InstallerStateMachine {
 
         // Shutdown non-primary interfaces
         for sop in self.shutdown_other_interfaces(&iface_name) {
+            let sr = executor.execute(&sop);
+            self.action_manifest.record(sop, sr.to_outcome());
+        }
+
+        self.current_screen = ScreenId::NetworkProgress;
+        Some(ScreenId::NetworkProgress)
+    }
+
+    fn ethernet_error(
+        &mut self,
+        iface_name: &str,
+        result: &OperationResult,
+        executor: &mut dyn OperationExecutor,
+    ) -> Option<ScreenId> {
+        self.network_state = NetworkState::Error(format!("{:?}", result));
+        self.error_message = Some(format!("Network error: {:?}", result));
+
+        for sop in self.shutdown_other_interfaces(iface_name) {
             let sr = executor.execute(&sop);
             self.action_manifest.record(sop, sr.to_outcome());
         }

@@ -28,7 +28,6 @@ expected_screens = [
 expected_operation_types = [
     "EnableInterface",
     "CheckLinkAvailability",
-    "ConfigureDhcp",
     "CheckIpAddress",
     "CheckUpstreamRouter",
     "CheckInternetRoutability",
