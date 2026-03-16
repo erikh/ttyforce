@@ -281,6 +281,8 @@ pub fn check_link_availability(interface: &str) -> OperationResult {
 }
 
 /// Check link via systemd-networkd dbus.
+/// Returns Some(LinkUp) only on a positive match; returns None otherwise
+/// so the caller falls through to sysfs.
 fn check_link_via_networkd(
     conn: &zbus::blocking::Connection,
     interface: &str,
@@ -290,10 +292,12 @@ fn check_link_via_networkd(
 
     let carrier_state = get_networkd_property(conn, &link_path, "CarrierState")?;
 
-    Some(match carrier_state.as_str() {
-        "carrier" | "degraded-carrier" | "enslaved" => OperationResult::LinkUp,
-        _ => OperationResult::LinkDown,
-    })
+    match carrier_state.as_str() {
+        "carrier" | "degraded-carrier" | "enslaved" => Some(OperationResult::LinkUp),
+        // Don't trust a negative from networkd — it may not be managing this
+        // interface. Fall through to sysfs check instead.
+        _ => None,
+    }
 }
 
 /// Check if an IP address is assigned to the interface.
@@ -311,6 +315,8 @@ pub fn check_ip_address(interface: &str) -> OperationResult {
 }
 
 /// Check IP address via systemd-networkd dbus.
+/// Returns Some only on a positive match; returns None otherwise
+/// so the caller falls through to the ip command check.
 fn check_ip_via_networkd(
     conn: &zbus::blocking::Connection,
     interface: &str,
@@ -326,7 +332,9 @@ fn check_ip_via_networkd(
             // since networkd doesn't directly expose the address string
             Some(check_ip_via_command(interface))
         }
-        _ => Some(OperationResult::NoIp),
+        // Don't trust a negative from networkd — it may not be managing this
+        // interface. Fall through to ip command check instead.
+        _ => None,
     }
 }
 
