@@ -70,6 +70,7 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::CreateZfsDataset { .. } => "CreateZfsDataset",
         Operation::InstallBaseSystem { .. } => "InstallBaseSystem",
         Operation::Reboot => "Reboot",
+        Operation::Exit => "Exit",
         Operation::Abort { .. } => "Abort",
     }
 }

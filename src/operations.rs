@@ -97,6 +97,7 @@ pub enum Operation {
         target: String,
     },
     Reboot,
+    Exit,
     Abort {
         reason: String,
     },
@@ -191,6 +192,7 @@ impl std::fmt::Display for Operation {
                 write!(f, "Install base system to {}", target)
             }
             Operation::Reboot => write!(f, "Reboot"),
+            Operation::Exit => write!(f, "Exit"),
             Operation::Abort { reason } => write!(f, "Abort: {}", reason),
         }
     }

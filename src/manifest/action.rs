@@ -30,6 +30,7 @@ pub enum InstallerFinalState {
     Installed,
     Aborted,
     Rebooted,
+    Exited,
     Error(String),
 }
 

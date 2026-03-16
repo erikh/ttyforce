@@ -188,6 +188,7 @@ fn print_operations_summary(state_machine: &InstallerStateMachine) {
         ttyforce::manifest::InstallerFinalState::Installed => "\x1b[32mInstalled\x1b[0m",
         ttyforce::manifest::InstallerFinalState::Rebooted => "\x1b[32mRebooted\x1b[0m",
         ttyforce::manifest::InstallerFinalState::Aborted => "\x1b[33mAborted\x1b[0m",
+        ttyforce::manifest::InstallerFinalState::Exited => "\x1b[36mExited\x1b[0m",
         ttyforce::manifest::InstallerFinalState::Error(msg) => {
             eprintln!("  Error: {}", msg);
             "\x1b[31mError\x1b[0m"

@@ -77,6 +77,7 @@ pub fn execute(op: &Operation) -> OperationResult {
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),
         Operation::Reboot => system::reboot(),
+        Operation::Exit => OperationResult::Success,
         Operation::Abort { .. } => OperationResult::Success,
     }
 }

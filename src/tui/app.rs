@@ -541,20 +541,32 @@ impl App {
     }
 
     fn render_reboot(&self, f: &mut ratatui::Frame, area: Rect) {
-        let text = "  Installation complete!\
-                    \n\
-                    \n  Enter: reboot  |  a: abort";
+        let options = ["Reboot", "Exit", "Power Off"];
+        let items: Vec<ListItem> = options
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let style = if i == self.selected_index {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("  {}", label)).style(style)
+            })
+            .collect();
 
         let center = centered_rect(50, 30, area);
 
-        let paragraph = Paragraph::new(text).block(
+        let list = List::new(items).block(
             Block::default()
-                .title(" Reboot ")
+                .title(" Installation Complete — ↑↓: navigate, Enter: select ")
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green)),
         );
-        f.render_widget(paragraph, center);
+        f.render_widget(list, center);
     }
 
     fn handle_key(&mut self, key: KeyEvent, executor: &mut dyn OperationExecutor) {
@@ -614,12 +626,16 @@ impl App {
                 self.should_quit = true;
                 return;
             }
+            let is_exit = matches!(input, UserInput::ExitInstaller);
             if self
                 .state_machine
                 .process_input(input, executor)
                 .is_some()
             {
                 self.selected_index = 0;
+            }
+            if is_exit {
+                self.should_quit = true;
             }
         }
     }

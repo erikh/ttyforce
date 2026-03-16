@@ -31,6 +31,10 @@ fn map_enter(screen: &ScreenId, selected_index: usize) -> Option<UserInput> {
         ScreenId::RaidConfig => Some(UserInput::SelectRaidOption(selected_index)),
         ScreenId::Confirm => Some(UserInput::ConfirmInstall),
         ScreenId::InstallProgress => Some(UserInput::Confirm),
-        ScreenId::Reboot => Some(UserInput::RebootSystem),
+        ScreenId::Reboot => match selected_index {
+            0 => Some(UserInput::RebootSystem),
+            1 => Some(UserInput::ExitInstaller),
+            _ => Some(UserInput::AbortInstall),
+        },
     }
 }

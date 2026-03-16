@@ -87,6 +87,7 @@ fn run_playbook(name: &str) {
         "Installed" => InstallerFinalState::Installed,
         "Rebooted" => InstallerFinalState::Rebooted,
         "Aborted" => InstallerFinalState::Aborted,
+        "Exited" => InstallerFinalState::Exited,
         other => panic!(
             "[{}] unknown expected_final_state: {}",
             playbook.description, other

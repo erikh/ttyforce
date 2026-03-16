@@ -11,6 +11,7 @@ build:
 
 test: lint
 	cargo test --lib --tests -- --skip integration
+	$(MAKE) test-integration
 
 lint:
 	cargo check

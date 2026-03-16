@@ -80,6 +80,11 @@ impl Screen for RebootScreen {
                 "The system is rebooting now.",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ),
+            InstallerFinalState::Exited => (
+                "Exiting...",
+                "Returning to the shell.",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
         };
 
         // Handle the Error variant body separately to avoid borrow issues
@@ -115,47 +120,50 @@ impl Screen for RebootScreen {
         // --- Buttons ---
         let button_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+            ])
             .split(chunks[1]);
 
-        let reboot_style = if self.selected_index == 0 {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Green)
-        };
-        let abort_style = if self.selected_index == 1 {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Yellow)
+        let btn_style = |idx: usize, fg: Color| {
+            if self.selected_index == idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(fg)
+            }
         };
 
         let reboot_label = match &state.action_manifest.final_state {
             InstallerFinalState::Installed => "  [ Reboot Now ]  ",
             InstallerFinalState::Aborted | InstallerFinalState::Error(_) => "  [ Reboot / Retry ]  ",
-            InstallerFinalState::Rebooted => "  [ Reboot ]  ",
+            InstallerFinalState::Rebooted | InstallerFinalState::Exited => "  [ Reboot ]  ",
         };
 
         let reboot_btn = Paragraph::new(reboot_label)
-            .style(reboot_style)
+            .style(btn_style(0, Color::Green))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
-        let abort_btn = Paragraph::new("  [ Power Off / Exit ]  ")
-            .style(abort_style)
+        let exit_btn = Paragraph::new("  [ Exit ]  ")
+            .style(btn_style(1, Color::Cyan))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL));
+        let abort_btn = Paragraph::new("  [ Power Off ]  ")
+            .style(btn_style(2, Color::Yellow))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
 
         f.render_widget(reboot_btn, button_chunks[0]);
-        f.render_widget(abort_btn, button_chunks[1]);
+        f.render_widget(exit_btn, button_chunks[1]);
+        f.render_widget(abort_btn, button_chunks[2]);
 
         // --- Hints ---
         let hints = Paragraph::new(
-            "Tab/←/→: switch button  Enter: confirm  q: quit without rebooting",
+            "Tab/←/→: switch button  Enter: confirm  q: quit",
         )
         .style(Style::default().fg(Color::DarkGray));
         f.render_widget(hints, chunks[2]);

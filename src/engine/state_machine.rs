@@ -50,6 +50,7 @@ pub enum UserInput {
     // System
     ConfirmInstall,
     RebootSystem,
+    ExitInstaller,
     AbortInstall,
 }
 
@@ -259,6 +260,14 @@ impl InstallerStateMachine {
                     .record(Operation::Reboot, OperationOutcome::Success);
                 self.action_manifest.final_state = InstallerFinalState::Rebooted;
                 let result = executor.execute(&Operation::Reboot);
+                let _ = result;
+                None
+            }
+            (ScreenId::Reboot, UserInput::ExitInstaller) => {
+                self.action_manifest
+                    .record(Operation::Exit, OperationOutcome::Success);
+                self.action_manifest.final_state = InstallerFinalState::Exited;
+                let result = executor.execute(&Operation::Exit);
                 let _ = result;
                 None
             }
