@@ -38,15 +38,15 @@ dbus-daemon --system --fork 2>/dev/null || true
 
 echo "=== Starting systemd-networkd ==="
 systemctl start systemd-networkd 2>/dev/null || \
-    systemd-networkd &
+    /usr/lib/systemd/systemd-networkd &
 
 echo "=== Starting systemd-resolved ==="
 systemctl start systemd-resolved 2>/dev/null || \
-    systemd-resolved &
+    /usr/lib/systemd/systemd-resolved &
 
 echo "=== Starting udisks2 ==="
 systemctl start udisks2 2>/dev/null || \
-    /usr/lib/udisks2/udisksd &
+    /usr/libexec/udisks2/udisksd &
 
 # Give services a moment
 sleep 2
