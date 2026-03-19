@@ -6,6 +6,12 @@ RUN apt-get update && \
         systemd \
         dbus \
         systemd-resolved \
+        systemd-sysv \
+        udev \
+        systemd-timesyncd \
+        systemd-container \
+        systemd-coredump \
+        systemd-journal-remote \
         udisks2 \
         iproute2 \
         iw \

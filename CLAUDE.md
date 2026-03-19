@@ -1,6 +1,18 @@
-Do this all in a subdirectory under the guises it may be converted to a rust crate later.
+# TERMS:
 
-Please build a rust-based text user interface for installing Town OS. It should
+- input: data about hardware, connection status, etc.
+- operation: an action that is taken on the system
+
+# RULES:
+
+- tests: unless said otherwise, they perform with simulated input and produce output on the operations that would be performed. They never affect the running system.
+- running tests: use the make tasks every time.
+- tests should always include the linting checks
+- lint checks should be a rust community standard of linters, run as the `lint` make tasks
+
+# DESIGN:
+
+A rust-based text user interface for installing Town OS. It should
 be presented when the user would normally be expected to provision disks.
 
 This text user interface should work similarly to nmtui but should make the

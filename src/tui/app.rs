@@ -627,6 +627,10 @@ impl App {
                 return;
             }
             let is_exit = matches!(input, UserInput::ExitInstaller);
+            let is_terminal = matches!(
+                input,
+                UserInput::ConfirmInstall | UserInput::AbortInstall
+            ) && self.state_machine.current_screen == ScreenId::Confirm;
             if self
                 .state_machine
                 .process_input(input, executor)
@@ -634,7 +638,7 @@ impl App {
             {
                 self.selected_index = 0;
             }
-            if is_exit {
+            if is_exit || is_terminal {
                 self.should_quit = true;
             }
         }
