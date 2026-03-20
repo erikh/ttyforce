@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0-alpha2 (2026-03-19)
+
+### Breaking changes
+
+- Remove ZFS support entirely (filesystem variants, operations, tests, fixtures)
+- Restructure CLI into subcommands (`detect`, `output`, `run`) replacing flags (`--detect`, `--fixture`)
+- Remove filesystem selection screen — Btrfs is now auto-selected
+
+### Features
+
+- CLI subcommand `detect` — prints hardware manifest (replaces `--detect`)
+- CLI subcommand `output` — dry-run TUI with mock executor, prints operations that would be performed
+- CLI subcommand `run` — launches the real installer
+- Global `-i/--input` and `-o/--output` flags for all subcommands
+- Configurable mount point (default `/town-os`, was hardcoded `/mnt`)
+- CLI test suite (`tests/cli_tests.rs`)
+
+### Improvements
+
+- Skip filesystem selection screen, advance directly from network to RAID config
+- `detect-hardware` binary now uses clap for argument parsing
+- Updated README and CLAUDE.md with full CLI documentation
+
 ## 0.2.0-alpha (2026-03-19)
 
 ### Features
