@@ -1,6 +1,6 @@
 [package]
 name = "ttyforce"
-version = "0.1.0"
+version = "0.2.0-alpha"
 edition = "2021"
 default-run = "ttyforce"
 description = "Town OS installer TUI"
@@ -8,6 +8,7 @@ license = "MIT"
 repository = "https://github.com/erikh/ttyforce"
 homepage = "https://github.com/erikh/ttyforce"
 readme = "README.md"
+changelog = "CHANGELOG.md"
 keywords = ["tui", "installer", "linux"]
 categories = ["command-line-utilities"]
 
