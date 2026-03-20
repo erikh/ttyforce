@@ -112,23 +112,23 @@ fn test_disk_grouping_single() {
 // === RAID Option Tests ===
 
 #[test]
-fn test_raid_options_1disk_btrfs() {
-    let options = RaidConfig::for_disk_count(1, &FilesystemType::Btrfs);
+fn test_raid_options_1disk() {
+    let options = RaidConfig::for_disk_count(1);
     assert_eq!(options.len(), 1);
     assert_eq!(options[0], RaidConfig::Single);
 }
 
 #[test]
-fn test_raid_options_2disk_btrfs() {
-    let options = RaidConfig::for_disk_count(2, &FilesystemType::Btrfs);
+fn test_raid_options_2disk() {
+    let options = RaidConfig::for_disk_count(2);
     assert_eq!(options.len(), 2);
     assert!(options.contains(&RaidConfig::Single));
     assert!(options.contains(&RaidConfig::BtrfsRaid1));
 }
 
 #[test]
-fn test_raid_options_4disk_btrfs() {
-    let options = RaidConfig::for_disk_count(4, &FilesystemType::Btrfs);
+fn test_raid_options_4disk() {
+    let options = RaidConfig::for_disk_count(4);
     assert_eq!(options.len(), 3);
     assert!(options.contains(&RaidConfig::Single));
     assert!(options.contains(&RaidConfig::BtrfsRaid1));
@@ -136,50 +136,18 @@ fn test_raid_options_4disk_btrfs() {
 }
 
 #[test]
-fn test_raid_options_1disk_zfs() {
-    let options = RaidConfig::for_disk_count(1, &FilesystemType::Zfs);
-    assert_eq!(options.len(), 1);
-    assert_eq!(options[0], RaidConfig::Single);
-}
-
-#[test]
-fn test_raid_options_2disk_zfs() {
-    let options = RaidConfig::for_disk_count(2, &FilesystemType::Zfs);
-    assert_eq!(options.len(), 2);
-    assert!(options.contains(&RaidConfig::Single));
-    assert!(options.contains(&RaidConfig::Mirror));
-}
-
-#[test]
-fn test_raid_options_4disk_zfs() {
-    let options = RaidConfig::for_disk_count(4, &FilesystemType::Zfs);
-    assert_eq!(options.len(), 3);
-    assert!(options.contains(&RaidConfig::Single));
-    assert!(options.contains(&RaidConfig::Mirror));
-    assert!(options.contains(&RaidConfig::RaidZ));
-}
-
-#[test]
 fn test_raid_recommended() {
     assert_eq!(
-        RaidConfig::recommended_for_count(1, &FilesystemType::Btrfs),
+        RaidConfig::recommended_for_count(1),
         RaidConfig::Single
     );
     assert_eq!(
-        RaidConfig::recommended_for_count(2, &FilesystemType::Btrfs),
+        RaidConfig::recommended_for_count(2),
         RaidConfig::BtrfsRaid1
     );
     assert_eq!(
-        RaidConfig::recommended_for_count(4, &FilesystemType::Btrfs),
+        RaidConfig::recommended_for_count(4),
         RaidConfig::BtrfsRaid5
-    );
-    assert_eq!(
-        RaidConfig::recommended_for_count(2, &FilesystemType::Zfs),
-        RaidConfig::Mirror
-    );
-    assert_eq!(
-        RaidConfig::recommended_for_count(4, &FilesystemType::Zfs),
-        RaidConfig::RaidZ
     );
 }
 
@@ -187,8 +155,6 @@ fn test_raid_recommended() {
 fn test_raid_usable_capacity() {
     let total = 4_000_000_000_000u64; // 4TB total
     assert_eq!(RaidConfig::Single.usable_capacity(total, 4), total);
-    assert_eq!(RaidConfig::Mirror.usable_capacity(total, 2), total / 2);
-    assert_eq!(RaidConfig::RaidZ.usable_capacity(total, 4), total * 3 / 4);
     assert_eq!(RaidConfig::BtrfsRaid1.usable_capacity(total, 2), total / 2);
     assert_eq!(RaidConfig::BtrfsRaid5.usable_capacity(total, 4), total * 3 / 4);
 }
@@ -232,8 +198,8 @@ fn test_ethernet_auto_detect() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    // Connected ethernet skips directly to filesystem select
-    assert_eq!(result, Some(ScreenId::FilesystemSelect));
+    // Connected ethernet skips directly to raid config
+    assert_eq!(result, Some(ScreenId::RaidConfig));
     assert!(sm.network_state.is_online());
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
 }
@@ -256,8 +222,8 @@ fn test_ethernet_preferred_over_wifi() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    // Connected ethernet skips directly to filesystem select
-    assert_eq!(result, Some(ScreenId::FilesystemSelect));
+    // Connected ethernet skips directly to raid config
+    assert_eq!(result, Some(ScreenId::RaidConfig));
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
     assert!(sm.network_state.is_online());
 }
@@ -280,7 +246,6 @@ fn test_dead_ethernet_falls_back_to_wifi() {
 fn test_filesystem_default_is_btrfs() {
     assert_eq!(FilesystemType::default(), FilesystemType::Btrfs);
     assert!(FilesystemType::Btrfs.is_default());
-    assert!(!FilesystemType::Zfs.is_default());
 }
 
 #[test]

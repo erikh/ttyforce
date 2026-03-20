@@ -5,14 +5,12 @@ expected_final_state = "Installed"
 
 inputs = [
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
 ]
 
 expected_screens = [
-    "FilesystemSelect",
     "RaidConfig",
     "DiskGroupSelect",
     "Confirm",

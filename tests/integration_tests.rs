@@ -470,50 +470,6 @@ fn integration_partition_nonexistent_device() {
 }
 
 // ---------------------------------------------------------------------------
-// Disk — ZFS (may not be installed; skip gracefully)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn integration_create_zpool() {
-    let devs = loop_devices();
-    if devs.is_empty() {
-        eprintln!("skipping (no loop devices)");
-        return;
-    }
-
-    // Check if zpool command exists
-    if std::process::Command::new("which")
-        .arg("zpool")
-        .output()
-        .map(|o| !o.status.success())
-        .unwrap_or(true)
-    {
-        eprintln!("skipping (zpool not installed)");
-        return;
-    }
-
-    let mut exec = SystemdExecutor::new();
-
-    let result = exec.execute(&Operation::CreateZpool {
-        name: "ttyforce-test".into(),
-        devices: vec![devs[0].clone()],
-        raid_level: "stripe".into(),
-    });
-    match &result {
-        OperationResult::Success => {
-            // Clean up: destroy the pool
-            let _ = std::process::Command::new("zpool")
-                .args(["destroy", "-f", "ttyforce-test"])
-                .output();
-        }
-        OperationResult::Error(msg) => {
-            eprintln!("zpool create failed (may be expected): {}", msg);
-        }
-        other => panic!("unexpected result: {:?}", other),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // System — reboot and install (should NOT actually reboot in test)
 // ---------------------------------------------------------------------------
 

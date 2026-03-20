@@ -37,13 +37,6 @@ fn filesystem_options() -> Vec<FsOption> {
                           Supports snapshots, compression, and transparent RAID.\n\
                           Excellent tooling support. Recommended for most installations.",
         },
-        FsOption {
-            fs: FilesystemType::Zfs,
-            label: "ZFS",
-            description: "Advanced filesystem with built-in volume management.\n\
-                          Outstanding data integrity and scrubbing features.\n\
-                          Requires an additional kernel module (OpenZFS).",
-        },
     ]
 }
 

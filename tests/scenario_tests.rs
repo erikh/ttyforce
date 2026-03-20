@@ -1,4 +1,3 @@
-use ttyforce::disk::FilesystemType;
 use ttyforce::engine::executor::{OperationMatcher, SimulatedResponse, TestExecutor};
 use ttyforce::engine::feedback::OperationResult;
 use ttyforce::engine::state_machine::{InstallerStateMachine, ScreenId, UserInput};
@@ -24,13 +23,9 @@ fn run_ethernet_single_disk_install(
 ) -> InstallerStateMachine {
     let mut sm = InstallerStateMachine::new(hw);
 
-    // Auto-detect network (connected ethernet skips straight to filesystem)
+    // Auto-detect network (connected ethernet skips straight to raid config)
     sm.process_input(UserInput::Confirm, executor);
     assert!(sm.network_state.is_online());
-    assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
-
-    // Select btrfs (index 0)
-    sm.process_input(UserInput::SelectFilesystem(0), executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     // Select single (index 0)
@@ -261,7 +256,7 @@ fn test_default_device_user_choice() {
 // === Full Install Scenarios ===
 
 #[test]
-fn test_full_install_ethernet_4disk_btrfs_raidz() {
+fn test_full_install_ethernet_4disk_btrfs_raid5() {
     let hw = load_hardware("ethernet_4disk_same");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
@@ -269,12 +264,8 @@ fn test_full_install_ethernet_4disk_btrfs_raidz() {
     // Network
     sm.process_input(UserInput::Confirm, &mut executor);
     assert!(sm.network_state.is_online());
-    sm.process_input(UserInput::Confirm, &mut executor);
 
-    // Btrfs
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
-
-    // RAID5 (index 2 for 4 disks btrfs: Single, RAID1, RAID5)
+    // RAID5 (index 2 for 4 disks: Single, RAID1, RAID5)
     sm.process_input(UserInput::SelectRaidOption(2), &mut executor);
 
     // Disk
@@ -295,37 +286,6 @@ fn test_full_install_ethernet_4disk_btrfs_raidz() {
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::RebootSystem, &mut executor);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Rebooted);
-}
-
-#[test]
-fn test_full_install_ethernet_4disk_zfs_raidz() {
-    let hw = load_hardware("ethernet_4disk_same");
-    let mut sm = InstallerStateMachine::new(hw);
-    let mut executor = success_executor();
-
-    // Network
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-
-    // ZFS (index 1)
-    sm.process_input(UserInput::SelectFilesystem(1), &mut executor);
-
-    // RaidZ (index 2 for 4 disks zfs: Single, Mirror, RaidZ)
-    sm.process_input(UserInput::SelectRaidOption(2), &mut executor);
-
-    // Disk
-    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
-
-    // Install
-    sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
-
-    // Check ZFS operations
-    let ops = executor.recorded_operations();
-    let has_zpool = ops.iter().any(|r| matches!(&r.operation, Operation::CreateZpool { .. }));
-    let has_dataset = ops.iter().any(|r| matches!(&r.operation, Operation::CreateZfsDataset { .. }));
-    assert!(has_zpool);
-    assert!(has_dataset);
 }
 
 #[test]
@@ -365,11 +325,10 @@ fn test_full_install_wifi_1disk() {
     );
     assert!(sm.network_state.is_online());
 
-    // Continue to filesystem select
+    // Continue to raid config
     sm.process_input(UserInput::Confirm, &mut executor);
 
     // Disk setup
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
 
@@ -382,13 +341,13 @@ fn test_full_install_wifi_1disk() {
 
 #[test]
 fn test_ethernet_auto_detect_records_all_ops() {
-    // Connected ethernet (has_link + has_carrier) skips straight to FilesystemSelect
+    // Connected ethernet (has_link + has_carrier) skips straight to RaidConfig
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
+    assert_eq!(sm.current_screen, ScreenId::RaidConfig);
     assert!(sm.network_state.is_online());
 
     let ops = executor.recorded_operations();
@@ -589,8 +548,6 @@ fn test_abort_at_confirmation() {
 
     // Get to confirm screen
     sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     assert_eq!(sm.current_screen, ScreenId::Confirm);
@@ -608,10 +565,9 @@ fn test_back_navigation() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Get to filesystem select
+    // Get to raid config (connected ethernet skips to RaidConfig)
     sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
+    assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     // Go back to network progress
     sm.process_input(UserInput::Back, &mut executor);
@@ -619,18 +575,16 @@ fn test_back_navigation() {
 }
 
 #[test]
-fn test_back_from_raid_to_filesystem() {
+fn test_back_from_raid_to_network_progress() {
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     sm.process_input(UserInput::Back, &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
 }
 
 #[test]
@@ -640,8 +594,6 @@ fn test_back_from_confirm_to_disk_group() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     assert_eq!(sm.current_screen, ScreenId::Confirm);
@@ -689,69 +641,6 @@ fn test_wifi_dead_ethernet_4disk_falls_to_wifi() {
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.selected_interface, Some("wlan0".to_string()));
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
-}
-
-// === ZFS Path Tests ===
-
-#[test]
-fn test_zfs_single_disk() {
-    let hw = load_hardware("ethernet_1disk");
-    let mut sm = InstallerStateMachine::new(hw);
-    let mut executor = success_executor();
-
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-
-    // Select ZFS
-    sm.process_input(UserInput::SelectFilesystem(1), &mut executor);
-    assert_eq!(sm.selected_filesystem, FilesystemType::Zfs);
-
-    // Single (only option for 1 disk)
-    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::DiskGroupSelect);
-
-    // Select disk group
-    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::Confirm);
-
-    // Install
-    sm.process_input(UserInput::ConfirmInstall, &mut executor);
-
-    let ops = executor.recorded_operations();
-    let has_zpool = ops.iter().any(|r| matches!(&r.operation, Operation::CreateZpool { .. }));
-    let has_dataset = ops.iter().any(|r| matches!(&r.operation, Operation::CreateZfsDataset { .. }));
-    let has_install = ops
-        .iter()
-        .any(|r| matches!(&r.operation, Operation::InstallBaseSystem { target } if target.contains("rpool")));
-    assert!(has_zpool);
-    assert!(has_dataset);
-    assert!(has_install);
-}
-
-#[test]
-fn test_zfs_mirror_2disk() {
-    // Create a 2 disk setup by using the 4disk and checking we can do mirror
-    let hw = load_hardware("ethernet_4disk_same");
-    let mut sm = InstallerStateMachine::new(hw);
-    let mut executor = success_executor();
-
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::SelectFilesystem(1), &mut executor); // ZFS
-
-    // Mirror is index 1
-    sm.process_input(UserInput::SelectRaidOption(1), &mut executor);
-    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
-    sm.process_input(UserInput::ConfirmInstall, &mut executor);
-
-    let ops = executor.recorded_operations();
-    let zpool_op = ops.iter().find(|r| matches!(&r.operation, Operation::CreateZpool { .. }));
-    assert!(zpool_op.is_some());
-    if let Some(r) = zpool_op {
-        if let Operation::CreateZpool { raid_level, .. } = &r.operation {
-            assert_eq!(raid_level, "mirror");
-        }
-    }
 }
 
 // === Action Manifest Recording ===
@@ -842,8 +731,6 @@ fn test_invalid_disk_group_selection() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
 
     // Try invalid selection
@@ -854,28 +741,12 @@ fn test_invalid_disk_group_selection() {
 }
 
 #[test]
-fn test_invalid_filesystem_selection() {
-    let hw = load_hardware("ethernet_1disk");
-    let mut sm = InstallerStateMachine::new(hw);
-    let mut executor = success_executor();
-
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-
-    let result = sm.process_input(UserInput::SelectFilesystem(99), &mut executor);
-    assert!(result.is_none());
-    assert!(sm.error_message.is_some());
-}
-
-#[test]
 fn test_invalid_raid_selection() {
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::Confirm, &mut executor);
-    sm.process_input(UserInput::SelectFilesystem(0), &mut executor);
 
     let result = sm.process_input(UserInput::SelectRaidOption(99), &mut executor);
     assert!(result.is_none());

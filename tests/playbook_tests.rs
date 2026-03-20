@@ -29,7 +29,7 @@ struct Playbook {
     expected_operation_types: Vec<String>,
     /// Expected screen after each input, in order.
     /// Values: "NetworkConfig", "NetworkProgress", "WifiSelect", "WifiPassword",
-    ///         "FilesystemSelect", "RaidConfig", "DiskGroupSelect", "Confirm",
+    ///         "RaidConfig", "DiskGroupSelect", "Confirm",
     ///         "InstallProgress", "Reboot"
     #[serde(default)]
     expected_screens: Vec<String>,
@@ -170,11 +170,6 @@ fn playbook_ethernet_1disk_full_install() {
 #[test]
 fn playbook_ethernet_4disk_btrfs_raid5() {
     run_playbook("ethernet_4disk_btrfs_raid5");
-}
-
-#[test]
-fn playbook_ethernet_4disk_zfs_raidz() {
-    run_playbook("ethernet_4disk_zfs_raidz");
 }
 
 #[test]

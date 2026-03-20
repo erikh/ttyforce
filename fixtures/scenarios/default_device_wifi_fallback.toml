@@ -11,8 +11,7 @@ hardware_file = "fixtures/hardware/wifi_dead_ethernet_1disk.toml"
 #     -> ConfigureDhcp -> CheckIpAddress(10.0.0.25) -> CheckUpstreamRouter(10.0.0.1)
 #     -> CheckInternetRoutability -> CheckDnsResolution -> SelectPrimaryInterface(wlan0)
 #     -> NetworkProgress (online)
-#   NetworkProgress -> Confirm -> FilesystemSelect
-#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   NetworkProgress -> Confirm -> RaidConfig
 #   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
 #   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
 #   Confirm -> ConfirmInstall -> InstallProgress
@@ -23,7 +22,6 @@ inputs = [
     { SelectWifiNetwork = 0 },
     { EnterWifiPassword = "wifipass456" },
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",

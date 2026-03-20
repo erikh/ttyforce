@@ -6,8 +6,7 @@ hardware_file = "fixtures/hardware/ethernet_4disk_same.toml"
 
 # Flow:
 #   NetworkConfig -> Confirm (auto-detect eth0) -> NetworkProgress (online)
-#   NetworkProgress -> Confirm -> FilesystemSelect
-#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   NetworkProgress -> Confirm -> RaidConfig
 #     (options: 0=Single, 1=BtrfsRaid1, 2=BtrfsRaid5)
 #   RaidConfig -> SelectRaidOption(2 = BtrfsRaid5) -> DiskGroupSelect (1 group: Samsung 870 EVO x4)
 #   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
@@ -15,14 +14,13 @@ hardware_file = "fixtures/hardware/ethernet_4disk_same.toml"
 #     PartitionDisk(/dev/sda) + PartitionDisk(/dev/sdb) + PartitionDisk(/dev/sdc) + PartitionDisk(/dev/sdd)
 #     -> BtrfsRaidSetup([sda,sdb,sdc,sdd], raid5)
 #     -> CreateBtrfsSubvolume(@) + CreateBtrfsSubvolume(@home) + CreateBtrfsSubvolume(@snapshots)
-#     -> InstallBaseSystem(/mnt)
+#     -> InstallBaseSystem(/town-os)
 #     -> InstallProgress
 #   InstallProgress -> Confirm -> Reboot
 #   Reboot -> RebootSystem
 inputs = [
     "Confirm",
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 2 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",

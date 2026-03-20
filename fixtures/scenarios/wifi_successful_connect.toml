@@ -10,8 +10,7 @@ hardware_file = "fixtures/hardware/wifi_1disk.toml"
 #     -> ConfigureDhcp -> CheckIpAddress(192.168.1.100) -> CheckUpstreamRouter(192.168.1.1)
 #     -> CheckInternetRoutability -> CheckDnsResolution(93.184.216.34)
 #     -> SelectPrimaryInterface -> NetworkProgress (fully online)
-#   NetworkProgress -> Confirm -> FilesystemSelect
-#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   NetworkProgress -> Confirm -> RaidConfig
 #   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
 #   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
 #   Confirm -> ConfirmInstall -> InstallProgress
@@ -22,7 +21,6 @@ inputs = [
     { SelectWifiNetwork = 0 },
     { EnterWifiPassword = "correctpassword" },
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",

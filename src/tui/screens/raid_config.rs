@@ -81,8 +81,8 @@ impl Screen for RaidConfigScreen {
         f.render_widget(context_para, chunks[0]);
 
         // --- Option list ---
-        let options = RaidConfig::for_disk_count(disk_count, &state.selected_filesystem);
-        let recommended = RaidConfig::recommended_for_count(disk_count, &state.selected_filesystem);
+        let options = RaidConfig::for_disk_count(disk_count);
+        let recommended = RaidConfig::recommended_for_count(disk_count);
 
         let items: Vec<ListItem> = options
             .iter()

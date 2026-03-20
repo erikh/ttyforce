@@ -6,8 +6,7 @@ hardware_file = "fixtures/hardware/wifi_1disk.toml"
 #   NetworkConfig -> Confirm (auto-detect wifi, scan) -> WifiSelect
 #   WifiSelect -> SelectWifiNetwork(0) -> WifiPassword
 #   WifiPassword -> EnterWifiPassword -> NetworkProgress (online)
-#   NetworkProgress -> Confirm -> FilesystemSelect
-#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   NetworkProgress -> Confirm -> RaidConfig
 #   RaidConfig -> SelectRaidOption(0 = Single, only 1 disk) -> DiskGroupSelect
 #   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
 #   Confirm -> ConfirmInstall -> InstallProgress
@@ -18,7 +17,6 @@ inputs = [
     { SelectWifiNetwork = 0 },
     { EnterWifiPassword = "correctpassword" },
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",

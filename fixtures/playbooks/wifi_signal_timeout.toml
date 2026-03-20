@@ -10,7 +10,6 @@ inputs = [
     { SelectWifiNetwork = 0 },
     { EnterWifiPassword = "correctpassword" },
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
@@ -46,13 +45,11 @@ result = { WifiScanResults = [
 ] }
 consume = false
 
-# First auth: timeout (consumed)
 [[simulated_responses]]
 operation_match = { by_type = "AuthenticateWifi" }
 result = "WifiTimeout"
 consume = true
 
-# Second auth: success (consumed)
 [[simulated_responses]]
 operation_match = { by_type = "AuthenticateWifi" }
 result = "WifiAuthenticated"

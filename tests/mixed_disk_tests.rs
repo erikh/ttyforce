@@ -13,22 +13,15 @@ fn success_executor() -> TestExecutor {
     TestExecutor::new(vec![])
 }
 
-/// Drive the state machine through network, filesystem, raid, disk group, confirm, install
+/// Drive the state machine through network, raid, disk group, confirm, install
 fn run_install(
     sm: &mut InstallerStateMachine,
     executor: &mut TestExecutor,
-    fs_idx: usize,
     raid_idx: usize,
     disk_group_idx: usize,
 ) {
-    // Network auto-detect
+    // Network auto-detect (connected ethernet goes straight to RaidConfig)
     sm.process_input(UserInput::Confirm, executor);
-    // Continue past network progress
-    sm.process_input(UserInput::Confirm, executor);
-    assert_eq!(sm.current_screen, ScreenId::FilesystemSelect);
-
-    // Filesystem
-    sm.process_input(UserInput::SelectFilesystem(fs_idx), executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     // RAID
@@ -84,8 +77,8 @@ fn test_workstation_select_crucial_btrfs_raid5() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Btrfs (0), RAID5 (2: Single/RAID1/RAID5 for max 4 disks), Crucial group (0)
-    run_install(&mut sm, &mut executor, 0, 2, 0);
+    // RAID5 (2: Single/RAID1/RAID5 for max 4 disks), Crucial group (0)
+    run_install(&mut sm, &mut executor, 2, 0);
 
     let ops = executor.recorded_operations();
     // Should partition 4 Crucial drives
@@ -114,10 +107,10 @@ fn test_workstation_select_samsung_btrfs_mirror() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Btrfs (0), RAID1 (1: Single/RAID1/RAID5 for max 4), Samsung group
+    // RAID1 (1: Single/RAID1/RAID5 for max 4), Samsung group
     // Samsung is group index 1 in disk_groups, but in compatible_disk_groups
     // for RAID1 (needs >=2), all 3 groups qualify, so compatible index 1 = Samsung
-    run_install(&mut sm, &mut executor, 0, 1, 1);
+    run_install(&mut sm, &mut executor, 1, 1);
 
     let ops = executor.recorded_operations();
     let partitions: Vec<_> = ops
@@ -137,14 +130,13 @@ fn test_workstation_select_samsung_btrfs_mirror() {
 }
 
 #[test]
-fn test_workstation_select_wd_zfs_mirror() {
+fn test_workstation_select_wd_btrfs_mirror() {
     let hw = load_hardware("mixed_drives_workstation");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // ZFS (1), Mirror (1: Single/Mirror/RaidZ for max 4), WD group
-    // For ZFS mirror (needs >=2), all 3 groups qualify, compatible index 2 = WD
-    run_install(&mut sm, &mut executor, 1, 1, 2);
+    // RAID1 (1), WD group (compatible index 2)
+    run_install(&mut sm, &mut executor, 1, 2);
 
     let ops = executor.recorded_operations();
     let partitions: Vec<_> = ops
@@ -156,15 +148,13 @@ fn test_workstation_select_wd_zfs_mirror() {
         .collect();
     assert_eq!(partitions, vec!["/dev/sde", "/dev/sdf"]);
 
-    let has_zpool = ops.iter().any(|r| match &r.operation {
-        Operation::CreateZpool {
-            devices,
-            raid_level,
-            ..
-        } => devices.len() == 2 && raid_level == "mirror",
+    let has_btrfs_raid = ops.iter().any(|r| match &r.operation {
+        Operation::BtrfsRaidSetup { devices, raid_level } => {
+            devices.len() == 2 && raid_level == "raid1"
+        }
         _ => false,
     });
-    assert!(has_zpool);
+    assert!(has_btrfs_raid);
 }
 
 #[test]
@@ -173,9 +163,9 @@ fn test_workstation_select_crucial_single() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Btrfs (0), Single (0), disk index 2 = /dev/sda (first Crucial MX500)
+    // Single (0), disk index 2 = /dev/sda (first Crucial MX500)
     // Workstation all_disks order: nvme0n1, nvme1n1, sda, sdb, sdc, sdd, sde, sdf
-    run_install(&mut sm, &mut executor, 0, 0, 2);
+    run_install(&mut sm, &mut executor, 0, 2);
 
     let ops = executor.recorded_operations();
     // Single mode: only 1 disk
@@ -216,14 +206,14 @@ fn test_server_disk_grouping() {
 }
 
 #[test]
-fn test_server_select_seagate_zfs_raidz() {
+fn test_server_select_seagate_btrfs_raid5() {
     let hw = load_hardware("mixed_drives_server");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // ZFS (1), RaidZ (2: Single/Mirror/RaidZ for max 6), Seagate group
-    // Compatible groups for RaidZ (needs >=3): only Seagate (6 disks), so index 0
-    run_install(&mut sm, &mut executor, 1, 2, 0);
+    // RAID5 (2: Single/RAID1/RAID5 for max 6), Seagate group
+    // Compatible groups for RAID5 (needs >=3): only Seagate (6 disks), so index 0
+    run_install(&mut sm, &mut executor, 2, 0);
 
     let ops = executor.recorded_operations();
     let partitions: Vec<_> = ops
@@ -238,21 +228,20 @@ fn test_server_select_seagate_zfs_raidz() {
         vec!["/dev/sda", "/dev/sdb", "/dev/sdc", "/dev/sdd", "/dev/sde", "/dev/sdf"]
     );
 
-    let has_zpool = ops.iter().any(|r| match &r.operation {
-        Operation::CreateZpool {
-            name,
+    let has_btrfs_raid = ops.iter().any(|r| match &r.operation {
+        Operation::BtrfsRaidSetup {
             devices,
             raid_level,
-        } => name == "rpool" && devices.len() == 6 && raid_level == "raidz",
+        } => devices.len() == 6 && raid_level == "raid5",
         _ => false,
     });
-    assert!(has_zpool);
+    assert!(has_btrfs_raid);
 
-    let dataset_count = ops
+    let subvol_count = ops
         .iter()
-        .filter(|r| matches!(&r.operation, Operation::CreateZfsDataset { .. }))
+        .filter(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }))
         .count();
-    assert_eq!(dataset_count, 4); // ROOT, ROOT/townos, home, var
+    assert_eq!(subvol_count, 3); // @, @home, @snapshots
 }
 
 #[test]
@@ -261,9 +250,9 @@ fn test_server_select_intel_btrfs_mirror() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Btrfs (0), RAID1 (1), Intel group
+    // RAID1 (1), Intel group
     // Compatible for RAID1 (needs >=2): Intel (2) index 0, Seagate (6) index 1
-    run_install(&mut sm, &mut executor, 0, 1, 0);
+    run_install(&mut sm, &mut executor, 1, 0);
 
     let ops = executor.recorded_operations();
     let partitions: Vec<_> = ops
@@ -290,9 +279,9 @@ fn test_server_raidz_filters_small_groups() {
     let hw = load_hardware("mixed_drives_server");
     let sm = InstallerStateMachine::new(hw);
 
-    // For RaidZ/RAID5 (needs >=3), Intel (2 disks) should be filtered out
+    // For BtrfsRaid5 (needs >=3), Intel (2 disks) should be filtered out
     let mut sm_copy = sm;
-    sm_copy.selected_raid = Some(RaidConfig::RaidZ);
+    sm_copy.selected_raid = Some(RaidConfig::BtrfsRaid5);
     let compatible = sm_copy.compatible_disk_groups();
     assert_eq!(compatible.len(), 1); // only Seagate
     assert_eq!(sm_copy.disk_groups[compatible[0]].make, "Seagate");
@@ -333,9 +322,9 @@ fn test_homelab_select_toshiba_btrfs_mirror() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Btrfs (0), RAID1 (1: Single/RAID1 for max 2 disks), Toshiba group
+    // RAID1 (1: Single/RAID1 for max 2 disks), Toshiba group
     // Compatible for RAID1 (needs >=2): only Toshiba (2 disks), so index 0
-    run_install(&mut sm, &mut executor, 0, 1, 0);
+    run_install(&mut sm, &mut executor, 1, 0);
 
     let ops = executor.recorded_operations();
     let partitions: Vec<_> = ops
@@ -358,51 +347,14 @@ fn test_homelab_select_toshiba_btrfs_mirror() {
 }
 
 #[test]
-fn test_homelab_select_samsung_single_zfs() {
-    let hw = load_hardware("mixed_drives_homelab");
-    let mut sm = InstallerStateMachine::new(hw);
-    let mut executor = success_executor();
-
-    // ZFS (1), Single (0), disk index 0 = /dev/nvme0n1 (Samsung 970 EVO Plus)
-    run_install(&mut sm, &mut executor, 1, 0, 0);
-
-    let ops = executor.recorded_operations();
-    let partitions: Vec<_> = ops
-        .iter()
-        .filter_map(|r| match &r.operation {
-            Operation::PartitionDisk { device } => Some(device.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(partitions, vec!["/dev/nvme0n1"]);
-
-    let has_zpool = ops.iter().any(|r| match &r.operation {
-        Operation::CreateZpool {
-            devices,
-            raid_level,
-            ..
-        } => devices.len() == 1 && raid_level == "stripe",
-        _ => false,
-    });
-    assert!(has_zpool);
-
-    // Install target should be /rpool/ROOT/townos
-    let has_install = ops.iter().any(|r| match &r.operation {
-        Operation::InstallBaseSystem { target } => target == "/rpool/ROOT/townos",
-        _ => false,
-    });
-    assert!(has_install);
-}
-
-#[test]
 fn test_homelab_select_wd_single_btrfs() {
     let hw = load_hardware("mixed_drives_homelab");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Btrfs (0), Single (0), disk index 1 = /dev/nvme1n1 (WD Black SN770)
+    // Single (0), disk index 1 = /dev/nvme1n1 (WD Black SN770)
     // Homelab all_disks order: nvme0n1 (Samsung), nvme1n1 (WD), sda (Toshiba), sdb (Toshiba), sdc (Seagate)
-    run_install(&mut sm, &mut executor, 0, 0, 1);
+    run_install(&mut sm, &mut executor, 0, 1);
 
     let ops = executor.recorded_operations();
     let partitions: Vec<_> = ops
@@ -420,9 +372,9 @@ fn test_homelab_select_wd_single_btrfs() {
     });
     assert!(has_mkfs);
 
-    // Install target should be /mnt for btrfs
+    // Install target should be /town-os
     let has_install = ops.iter().any(|r| match &r.operation {
-        Operation::InstallBaseSystem { target } => target == "/mnt",
+        Operation::InstallBaseSystem { target } => target == "/town-os",
         _ => false,
     });
     assert!(has_install);
@@ -451,7 +403,7 @@ fn test_workstation_crucial_raid5_manifest_output() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    run_install(&mut sm, &mut executor, 0, 2, 0);
+    run_install(&mut sm, &mut executor, 2, 0);
 
     // Verify manifest is well-formed
     assert!(!sm.action_manifest.operations.is_empty());
@@ -475,20 +427,4 @@ fn test_workstation_crucial_raid5_manifest_output() {
     assert!(serialized.contains("PartitionDisk"));
     assert!(serialized.contains("BtrfsRaidSetup"));
     assert!(serialized.contains("InstallBaseSystem"));
-}
-
-#[test]
-fn test_server_seagate_raidz_manifest_output() {
-    let hw = load_hardware("mixed_drives_server");
-    let mut sm = InstallerStateMachine::new(hw);
-    let mut executor = success_executor();
-
-    run_install(&mut sm, &mut executor, 1, 2, 0);
-
-    let serialized = toml::to_string_pretty(&sm.action_manifest).unwrap();
-    assert!(serialized.contains("CreateZpool"));
-    assert!(serialized.contains("CreateZfsDataset"));
-    assert!(serialized.contains("raidz"));
-    assert!(serialized.contains("/dev/sda"));
-    assert!(serialized.contains("/dev/sdf"));
 }

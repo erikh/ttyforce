@@ -67,12 +67,6 @@ pub fn execute(op: &Operation) -> OperationResult {
             devices,
             raid_level,
         } => disk::btrfs_raid_setup(devices, raid_level),
-        Operation::CreateZpool {
-            name,
-            devices,
-            raid_level,
-        } => disk::create_zpool(name, devices, raid_level),
-        Operation::CreateZfsDataset { pool, name } => disk::create_zfs_dataset(pool, name),
 
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),

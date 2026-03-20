@@ -1,14 +1,17 @@
-use std::env;
 use std::process;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
+use clap::Parser;
 
-    let output_path = if args.len() >= 3 && args[1] == "--output" {
-        Some(args[2].as_str())
-    } else {
-        None
-    };
+#[derive(Parser)]
+#[command(name = "detect-hardware", about = "Detect hardware and print manifest")]
+struct Cli {
+    /// Write output to a file instead of stdout
+    #[arg(short, long)]
+    output: Option<String>,
+}
+
+fn main() {
+    let cli = Cli::parse();
 
     let hardware = match ttyforce::detect::detect_hardware() {
         Ok(h) => h,
@@ -26,18 +29,21 @@ fn main() {
         }
     };
 
-    match output_path {
+    match cli.output {
         Some(path) => {
-            // Ensure parent directory exists
-            if let Some(parent) = std::path::Path::new(path).parent() {
-                if !parent.exists() {
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
                     if let Err(e) = std::fs::create_dir_all(parent) {
-                        eprintln!("detect-hardware: failed to create {}: {}", parent.display(), e);
+                        eprintln!(
+                            "detect-hardware: failed to create {}: {}",
+                            parent.display(),
+                            e
+                        );
                         process::exit(1);
                     }
                 }
             }
-            if let Err(e) = std::fs::write(path, &toml_output) {
+            if let Err(e) = std::fs::write(&path, &toml_output) {
                 eprintln!("detect-hardware: failed to write {}: {}", path, e);
                 process::exit(1);
             }

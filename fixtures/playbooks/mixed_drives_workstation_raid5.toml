@@ -5,13 +5,11 @@ expected_final_state = "Installed"
 
 inputs = [
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 2 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
 ]
 
-# Network + 4 partitions + RAID5 + 3 subvolumes + install
 expected_operation_types = [
     "SelectPrimaryInterface",
     "PartitionDisk",

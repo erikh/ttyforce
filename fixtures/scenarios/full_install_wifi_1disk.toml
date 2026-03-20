@@ -6,15 +6,14 @@ hardware_file = "fixtures/hardware/wifi_1disk.toml"
 #   NetworkConfig -> Confirm -> WifiSelect
 #   WifiSelect -> SelectWifiNetwork(0 = HomeNetwork) -> WifiPassword
 #   WifiPassword -> EnterWifiPassword -> NetworkProgress (online)
-#   NetworkProgress -> Confirm -> FilesystemSelect
-#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   NetworkProgress -> Confirm -> RaidConfig
 #     (only option for 1 disk: 0=Single)
 #   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect (1 group: Samsung 980 PRO x1)
 #   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
 #   Confirm -> ConfirmInstall ->
 #     PartitionDisk(/dev/nvme0n1) -> MkfsBtrfs([nvme0n1])
 #     -> CreateBtrfsSubvolume(@) + (@home) + (@snapshots)
-#     -> InstallBaseSystem(/mnt)
+#     -> InstallBaseSystem(/town-os)
 #     -> InstallProgress
 #   InstallProgress -> Confirm -> Reboot
 #   Reboot -> RebootSystem
@@ -23,7 +22,6 @@ inputs = [
     { SelectWifiNetwork = 0 },
     { EnterWifiPassword = "correctpassword" },
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",

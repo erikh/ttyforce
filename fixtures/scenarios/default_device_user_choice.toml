@@ -12,8 +12,7 @@ hardware_file = "fixtures/hardware/wifi_ethernet_1disk.toml"
 #     -> CheckInternetRoutability -> CheckDnsResolution -> SelectPrimaryInterface(wlan0)
 #     -> ShutdownInterface(eth0) (primary selected, non-primary eth0 shut down)
 #     -> NetworkProgress (online)
-#   NetworkProgress -> Confirm -> FilesystemSelect
-#   FilesystemSelect -> SelectFilesystem(0 = Btrfs) -> RaidConfig
+#   NetworkProgress -> Confirm -> RaidConfig
 #   RaidConfig -> SelectRaidOption(0 = Single) -> DiskGroupSelect
 #   DiskGroupSelect -> SelectDiskGroup(0) -> Confirm
 #   Confirm -> ConfirmInstall -> InstallProgress
@@ -24,7 +23,6 @@ inputs = [
     { SelectWifiNetwork = 0 },
     { EnterWifiPassword = "homepass123" },
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",

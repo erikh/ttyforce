@@ -120,7 +120,6 @@ impl App {
             ScreenId::WifiPassword => self.render_wifi_password(f, area),
             ScreenId::NetworkProgress => self.render_network_progress(f, area),
             ScreenId::DiskGroupSelect => self.render_disk_select(f, area),
-            ScreenId::FilesystemSelect => self.render_filesystem_select(f, area),
             ScreenId::RaidConfig => self.render_raid_config(f, area),
             ScreenId::Confirm => self.render_confirm(f, area),
             ScreenId::InstallProgress => self.render_install_progress(f, area),
@@ -376,51 +375,11 @@ impl App {
         f.render_widget(list, center);
     }
 
-    fn render_filesystem_select(&self, f: &mut ratatui::Frame, area: Rect) {
-        let options = [
-            (
-                "Btrfs (recommended)",
-                "Modern copy-on-write filesystem. Built into the Linux kernel.",
-            ),
-            (
-                "ZFS",
-                "Advanced filesystem with volume management. Requires kernel module.",
-            ),
-        ];
-
-        let items: Vec<ListItem> = options
-            .iter()
-            .enumerate()
-            .map(|(i, (name, desc))| {
-                let style = if i == self.selected_index {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(format!("  {}\n    {}", name, desc)).style(style)
-            })
-            .collect();
-
-        let center = centered_rect(60, 40, area);
-
-        let list = List::new(items).block(
-            Block::default()
-                .title(" Select Filesystem ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
-        f.render_widget(list, center);
-    }
-
     fn render_raid_config(&self, f: &mut ratatui::Frame, area: Rect) {
         use crate::disk::RaidConfig;
 
         let disk_count = self.state_machine.max_disk_count();
-        let options =
-            RaidConfig::for_disk_count(disk_count, &self.state_machine.selected_filesystem);
+        let options = RaidConfig::for_disk_count(disk_count);
 
         let items: Vec<ListItem> = options
             .iter()

@@ -27,7 +27,6 @@ fn map_enter(screen: &ScreenId, selected_index: usize) -> Option<UserInput> {
         ScreenId::WifiPassword => None, // handled by text input widget
         ScreenId::NetworkProgress => Some(UserInput::Confirm),
         ScreenId::DiskGroupSelect => Some(UserInput::SelectDiskGroup(selected_index)),
-        ScreenId::FilesystemSelect => Some(UserInput::SelectFilesystem(selected_index)),
         ScreenId::RaidConfig => Some(UserInput::SelectRaidOption(selected_index)),
         ScreenId::Confirm => Some(UserInput::ConfirmInstall),
         ScreenId::InstallProgress => Some(UserInput::Confirm),

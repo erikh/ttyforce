@@ -57,38 +57,3 @@ pub fn btrfs_raid_setup(devices: &[String], raid_level: &str) -> OperationResult
         )),
     }
 }
-
-/// Create a ZFS pool.
-pub fn create_zpool(name: &str, devices: &[String], raid_level: &str) -> OperationResult {
-    let mut args = vec!["create", name];
-
-    // Map raid level name to zpool vdev type
-    match raid_level {
-        "mirror" => args.push("mirror"),
-        "raidz" | "raidz1" => args.push("raidz"),
-        "raidz2" => args.push("raidz2"),
-        "raidz3" => args.push("raidz3"),
-        "stripe" | "" => {} // no vdev keyword for stripe
-        other => args.push(other),
-    }
-
-    let dev_refs: Vec<&str> = devices.iter().map(|d| d.as_str()).collect();
-    args.extend(dev_refs);
-
-    match run_cmd("zpool", &args) {
-        Ok(_) => OperationResult::Success,
-        Err(e) => OperationResult::Error(format!(
-            "zpool create {} ({}) failed: {}",
-            name, raid_level, e
-        )),
-    }
-}
-
-/// Create a ZFS dataset.
-pub fn create_zfs_dataset(pool: &str, name: &str) -> OperationResult {
-    let dataset = format!("{}/{}", pool, name);
-    match run_cmd("zfs", &["create", &dataset]) {
-        Ok(_) => OperationResult::Success,
-        Err(e) => OperationResult::Error(format!("zfs create {} failed: {}", dataset, e)),
-    }
-}

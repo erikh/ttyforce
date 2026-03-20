@@ -66,8 +66,6 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::MkfsBtrfs { .. } => "MkfsBtrfs",
         Operation::CreateBtrfsSubvolume { .. } => "CreateBtrfsSubvolume",
         Operation::BtrfsRaidSetup { .. } => "BtrfsRaidSetup",
-        Operation::CreateZpool { .. } => "CreateZpool",
-        Operation::CreateZfsDataset { .. } => "CreateZfsDataset",
         Operation::InstallBaseSystem { .. } => "InstallBaseSystem",
         Operation::Reboot => "Reboot",
         Operation::Exit => "Exit",

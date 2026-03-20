@@ -81,17 +81,6 @@ pub enum Operation {
         raid_level: String,
     },
 
-    // ZFS operations
-    CreateZpool {
-        name: String,
-        devices: Vec<String>,
-        raid_level: String,
-    },
-    CreateZfsDataset {
-        pool: String,
-        name: String,
-    },
-
     // System operations
     InstallBaseSystem {
         target: String,
@@ -174,20 +163,6 @@ impl std::fmt::Display for Operation {
                 raid_level,
                 devices.join(", ")
             ),
-            Operation::CreateZpool {
-                name,
-                devices,
-                raid_level,
-            } => write!(
-                f,
-                "Create zpool {} ({}) on {}",
-                name,
-                raid_level,
-                devices.join(", ")
-            ),
-            Operation::CreateZfsDataset { pool, name } => {
-                write!(f, "Create dataset {}/{}", pool, name)
-            }
             Operation::InstallBaseSystem { target } => {
                 write!(f, "Install base system to {}", target)
             }

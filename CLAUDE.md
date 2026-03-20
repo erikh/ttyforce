@@ -10,6 +10,42 @@
 - tests should always include the linting checks
 - lint checks should be a rust community standard of linters, run as the `lint` make tasks
 
+# CLI:
+
+The binary has three subcommands and two global flags.
+
+## Subcommands
+
+- `detect` — Detect hardware and print the hardware manifest to stdout. With
+  `--fixture <file>`, runs a scripted scenario file and prints the resulting
+  operations manifest instead.
+- `output` — Detect real hardware (or load via `-i`), run the full TUI with a
+  mock executor (no real side effects), then print the operations that would
+  have been performed. This is a dry-run mode.
+- `run` — Detect hardware (or load via `-i`) and launch the real installer.
+  Uses the real executor when auto-detecting hardware, mock executor when
+  loading from a file.
+
+## Global flags
+
+- `-i, --input <FILE>` — Load hardware from a manifest file instead of
+  auto-detecting. Works with all subcommands.
+- `-o, --output <FILE>` — Write output to a file instead of stdout. Works
+  with all subcommands.
+
+## Examples
+
+```bash
+ttyforce detect                          # auto-detect, print hardware manifest
+ttyforce detect -i hw.toml               # print manifest from file
+ttyforce detect -o hw.toml               # auto-detect, save to file
+ttyforce detect --fixture scenario.toml  # run scenario, print operations
+ttyforce output                          # dry-run with real hardware
+ttyforce output -i hw.toml               # dry-run with manifest from file
+ttyforce run                             # real installer
+ttyforce run -i hw.toml                  # TUI with mock executor
+```
+
 # DESIGN:
 
 A rust-based text user interface for installing Town OS. It should
@@ -32,6 +68,9 @@ Then offer RAID options with explanations:
 - 1 disk - all one drive
 - 2 disks - mirror
 - 3+ Disks - raidz
+
+The filesystem is always Btrfs. The installation target mount point defaults
+to `/town-os`.
 
 This should be testable -- a manifest of actions taken in this case instead of
 actually taking them. Likewise, inputs for the available wifi networks, ethernet

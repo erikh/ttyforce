@@ -5,18 +5,49 @@ Text user interface for installing Town OS. Presented during disk provisioning, 
 ## Usage
 
 ```bash
-# Auto-detect hardware and launch installer
-ttyforce
+# Detect hardware and print the manifest to stdout
+ttyforce detect
 
-# Launch with a hardware manifest (simulated environment)
-ttyforce fixtures/hardware/ethernet_4disk_same.toml
+# Detect hardware, save manifest to a file
+ttyforce detect -o hardware.toml
 
-# Detect hardware and print manifest
-ttyforce --detect
+# Print manifest from an existing hardware file (no auto-detection)
+ttyforce detect -i fixtures/hardware/ethernet_4disk_same.toml
 
-# Run a scripted test scenario
-ttyforce --fixture fixtures/scenarios/full_install_ethernet_4disk.toml
+# Run a scripted fixture scenario and print the resulting operations
+ttyforce detect --fixture fixtures/scenarios/full_install_ethernet_4disk.toml
+
+# Detect real hardware, run the TUI with a mock executor,
+# and print the operations that would be performed (dry run)
+ttyforce output
+
+# Same dry run, but load hardware from a file
+ttyforce output -i fixtures/hardware/ethernet_1disk.toml
+
+# Save the dry-run operations manifest to a file
+ttyforce output -o operations.toml
+
+# Detect hardware and launch the real installer
+ttyforce run
+
+# Launch the real installer with hardware from a file (mock executor)
+ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 ```
+
+### Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `detect` | Detect hardware and print the hardware manifest. With `--fixture`, runs a scripted scenario and prints the resulting operations manifest instead. |
+| `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
+| `run` | Detect hardware (or load via `-i`) and launch the real installer. Uses the real executor when auto-detecting, mock executor when loading from file. |
+
+### Global flags
+
+| Flag | Description |
+|---|---|
+| `-i, --input <FILE>` | Load hardware from a manifest file instead of auto-detecting. |
+| `-o, --output <FILE>` | Write output to a file instead of stdout. |
 
 ## How it works
 
@@ -32,13 +63,13 @@ The installer prioritizes getting online with minimal user interaction:
 
 ### Disks
 
-Disks are automatically grouped by make and model. RAID options are presented based on disk count:
+Disks are automatically grouped by make and model. The filesystem is always Btrfs. RAID options are presented based on disk count:
 
 - **1 disk** — single drive
-- **2 disks** — mirror (btrfs RAID1 or ZFS mirror)
-- **3+ disks** — raidz (btrfs RAID5 or ZFS raidz)
+- **2 disks** — RAID1 (Btrfs mirror)
+- **3+ disks** — RAID5 (Btrfs striped with parity)
 
-Both Btrfs and ZFS are supported as filesystem options.
+The installation target mount point defaults to `/town-os`.
 
 ### Final screen
 
@@ -59,7 +90,7 @@ Detection uses systemd dbus interfaces with sysfs/command fallbacks. Negative re
 ## Testing
 
 ```bash
-# Unit + fixture + scenario + playbook tests
+# Unit + fixture + scenario + playbook + CLI tests (includes lint)
 make test
 
 # Integration tests in a container (requires podman, uses sudo if needed)
@@ -78,10 +109,11 @@ Hardware manifests in `fixtures/hardware/` define simulated hardware configurati
 - `wifi_dead_ethernet_*` — dead ethernet, wifi available
 - `mixed_drives_*` — workstation/server/homelab with mixed drive vendors
 
-Pass any of these as argument #1 to run the TUI in a simulated environment:
+Use with `detect` or `output` via `-i`:
 
 ```bash
-ttyforce fixtures/hardware/ethernet_4disk_same.toml
+ttyforce detect -i fixtures/hardware/ethernet_4disk_same.toml
+ttyforce output -i fixtures/hardware/ethernet_4disk_same.toml
 ```
 
 ### Scenarios
@@ -89,7 +121,7 @@ ttyforce fixtures/hardware/ethernet_4disk_same.toml
 Scripted test cases in `fixtures/scenarios/` feed inputs and mock responses to the state machine non-interactively:
 
 ```bash
-ttyforce --fixture fixtures/scenarios/full_install_ethernet_4disk.toml
+ttyforce detect --fixture fixtures/scenarios/full_install_ethernet_4disk.toml
 ```
 
 ### Playbooks

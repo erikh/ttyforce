@@ -1,21 +1,16 @@
 # Playbook: Ethernet + 4 identical disks, Btrfs RAID5
-# This is fixture example #1 from CLAUDE.md: "ethernet + 4 disks all same"
 description = "Full install: ethernet, 4 disks same, Btrfs RAID5"
 hardware_file = "fixtures/hardware/ethernet_4disk_same.toml"
 expected_final_state = "Installed"
 
 inputs = [
     "Confirm",
-    { SelectFilesystem = 0 },
     { SelectRaidOption = 2 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
 ]
 
-# Assert the screen after each input — ethernet MUST be detected and
-# the installer MUST advance past network to disk selection.
 expected_screens = [
-    "FilesystemSelect",
     "RaidConfig",
     "DiskGroupSelect",
     "Confirm",

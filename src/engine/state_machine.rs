@@ -16,7 +16,6 @@ pub enum ScreenId {
     WifiPassword,
     NetworkProgress,
     DiskGroupSelect,
-    FilesystemSelect,
     RaidConfig,
     Confirm,
     InstallProgress,
@@ -44,7 +43,6 @@ pub enum UserInput {
 
     // Disk
     SelectDiskGroup(usize),
-    SelectFilesystem(usize),
     SelectRaidOption(usize),
 
     // System
@@ -66,10 +64,11 @@ pub struct InstallerStateMachine {
     pub selected_disk_group: Option<usize>,
     pub selected_disk: Option<usize>,
     pub selected_filesystem: FilesystemType,
-    pub selected_raid: Option<RaidConfig>,
+    pub selected_raid: Option<crate::disk::RaidConfig>,
     pub action_manifest: ActionManifest,
     pub hardware: HardwareManifest,
     pub error_message: Option<String>,
+    pub mount_point: String,
 }
 
 impl InstallerStateMachine {
@@ -107,7 +106,13 @@ impl InstallerStateMachine {
             action_manifest: ActionManifest::new(),
             hardware,
             error_message: None,
+            mount_point: "/town-os".to_string(),
         }
+    }
+
+    pub fn with_mount_point(mut self, mp: String) -> Self {
+        self.mount_point = mp;
+        self
     }
 
     pub fn process_input(
@@ -159,8 +164,8 @@ impl InstallerStateMachine {
             // === Network Progress Screen ===
             (ScreenId::NetworkProgress, UserInput::Confirm) => {
                 if self.network_state.is_online() {
-                    self.current_screen = ScreenId::FilesystemSelect;
-                    Some(ScreenId::FilesystemSelect)
+                    self.current_screen = ScreenId::RaidConfig;
+                    Some(ScreenId::RaidConfig)
                 } else {
                     self.error_message = Some("Network is not yet online".to_string());
                     None
@@ -172,34 +177,13 @@ impl InstallerStateMachine {
                 Some(ScreenId::NetworkConfig)
             }
 
-            // === Filesystem Select ===
-            (ScreenId::FilesystemSelect, UserInput::SelectFilesystem(idx)) => {
-                match idx {
-                    0 => self.selected_filesystem = FilesystemType::Btrfs,
-                    1 => self.selected_filesystem = FilesystemType::Zfs,
-                    _ => {
-                        self.error_message = Some("Invalid filesystem selection".to_string());
-                        return None;
-                    }
-                }
-                self.current_screen = ScreenId::RaidConfig;
-                Some(ScreenId::RaidConfig)
-            }
-            (ScreenId::FilesystemSelect, UserInput::Back) => {
-                self.current_screen = ScreenId::NetworkProgress;
-                Some(ScreenId::NetworkProgress)
-            }
-            (ScreenId::FilesystemSelect, UserInput::AbortInstall) => {
-                self.abort(executor, "User aborted at filesystem selection".to_string())
-            }
-
             // === RAID Config ===
             (ScreenId::RaidConfig, UserInput::SelectRaidOption(idx)) => {
                 self.select_raid_option(idx)
             }
             (ScreenId::RaidConfig, UserInput::Back) => {
-                self.current_screen = ScreenId::FilesystemSelect;
-                Some(ScreenId::FilesystemSelect)
+                self.current_screen = ScreenId::NetworkProgress;
+                Some(ScreenId::NetworkProgress)
             }
 
             // === Disk Group Select (now after RAID) ===
@@ -460,8 +444,8 @@ impl InstallerStateMachine {
                 self.action_manifest.record(sop, sr.to_outcome());
             }
 
-            self.current_screen = ScreenId::FilesystemSelect;
-            return Some(ScreenId::FilesystemSelect);
+            self.current_screen = ScreenId::RaidConfig;
+            return Some(ScreenId::RaidConfig);
         }
 
         // Interface is not already connected — bring it up step by step.
@@ -799,7 +783,7 @@ impl InstallerStateMachine {
 
     fn select_raid_option(&mut self, idx: usize) -> Option<ScreenId> {
         let max_disks = self.max_disk_count();
-        let options = RaidConfig::for_disk_count(max_disks, &self.selected_filesystem);
+        let options = RaidConfig::for_disk_count(max_disks);
 
         if idx >= options.len() {
             self.error_message = Some("Invalid RAID option".to_string());
@@ -822,8 +806,8 @@ impl InstallerStateMachine {
     pub fn min_disks_for_raid(&self) -> usize {
         match &self.selected_raid {
             Some(RaidConfig::Single) => 1,
-            Some(RaidConfig::Mirror | RaidConfig::BtrfsRaid1) => 2,
-            Some(RaidConfig::RaidZ | RaidConfig::BtrfsRaid5) => 3,
+            Some(RaidConfig::BtrfsRaid1) => 2,
+            Some(RaidConfig::BtrfsRaid5) => 3,
             None => 1,
         }
     }
@@ -844,7 +828,6 @@ impl InstallerStateMachine {
 
     fn run_install(&mut self, executor: &mut dyn OperationExecutor) -> Option<ScreenId> {
         let raid = self.selected_raid.clone()?;
-        let fs = self.selected_filesystem.clone();
 
         let devices = if self.is_single_disk_mode() {
             let disk_idx = self.selected_disk?;
@@ -864,72 +847,38 @@ impl InstallerStateMachine {
             self.action_manifest.record(op, result.to_outcome());
         }
 
-        // Filesystem-specific operations
-        match fs {
-            FilesystemType::Btrfs => {
-                match &raid {
-                    RaidConfig::Single => {
-                        let op = Operation::MkfsBtrfs {
-                            devices: devices.clone(),
-                        };
-                        let result = executor.execute(&op);
-                        self.action_manifest.record(op, result.to_outcome());
-                    }
-                    RaidConfig::BtrfsRaid1 | RaidConfig::BtrfsRaid5 => {
-                        let op = Operation::BtrfsRaidSetup {
-                            devices: devices.clone(),
-                            raid_level: raid.zfs_vdev_type().to_string(),
-                        };
-                        let result = executor.execute(&op);
-                        self.action_manifest.record(op, result.to_outcome());
-                    }
-                    _ => {
-                        // Mirror/RaidZ shouldn't happen with btrfs but handle gracefully
-                        let op = Operation::MkfsBtrfs {
-                            devices: devices.clone(),
-                        };
-                        let result = executor.execute(&op);
-                        self.action_manifest.record(op, result.to_outcome());
-                    }
-                }
-
-                // Create subvolumes
-                for name in &["@", "@home", "@snapshots"] {
-                    let op = Operation::CreateBtrfsSubvolume {
-                        mount_point: "/mnt".to_string(),
-                        name: name.to_string(),
-                    };
-                    let result = executor.execute(&op);
-                    self.action_manifest.record(op, result.to_outcome());
-                }
-            }
-            FilesystemType::Zfs => {
-                let op = Operation::CreateZpool {
-                    name: "rpool".to_string(),
+        // Filesystem operations (always Btrfs)
+        match &raid {
+            RaidConfig::Single => {
+                let op = Operation::MkfsBtrfs {
                     devices: devices.clone(),
-                    raid_level: raid.zfs_vdev_type().to_string(),
                 };
                 let result = executor.execute(&op);
                 self.action_manifest.record(op, result.to_outcome());
-
-                for name in &["ROOT", "ROOT/townos", "home", "var"] {
-                    let op = Operation::CreateZfsDataset {
-                        pool: "rpool".to_string(),
-                        name: name.to_string(),
-                    };
-                    let result = executor.execute(&op);
-                    self.action_manifest.record(op, result.to_outcome());
-                }
+            }
+            RaidConfig::BtrfsRaid1 | RaidConfig::BtrfsRaid5 => {
+                let op = Operation::BtrfsRaidSetup {
+                    devices: devices.clone(),
+                    raid_level: raid.raid_level().to_string(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
             }
         }
 
+        // Create subvolumes
+        for name in &["@", "@home", "@snapshots"] {
+            let op = Operation::CreateBtrfsSubvolume {
+                mount_point: self.mount_point.clone(),
+                name: name.to_string(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
+        }
+
         // Install base system
-        let target = match fs {
-            FilesystemType::Btrfs => "/mnt".to_string(),
-            FilesystemType::Zfs => "/rpool/ROOT/townos".to_string(),
-        };
         let op = Operation::InstallBaseSystem {
-            target: target.clone(),
+            target: self.mount_point.clone(),
         };
         let result = executor.execute(&op);
         self.action_manifest.record(op, result.to_outcome());
