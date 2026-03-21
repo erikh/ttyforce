@@ -5,12 +5,14 @@ expected_final_state = "Installed"
 
 inputs = [
     "Confirm",
+    "Confirm",
     { SelectRaidOption = 2 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
 ]
 
 expected_screens = [
+    "NetworkProgress",
     "RaidConfig",
     "DiskGroupSelect",
     "Confirm",
@@ -18,6 +20,12 @@ expected_screens = [
 ]
 
 expected_operation_types = [
+    "CheckIpAddress",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
     "SelectPrimaryInterface",
     "PartitionDisk",
     "PartitionDisk",

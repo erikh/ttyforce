@@ -176,6 +176,9 @@ impl InstallerStateMachine {
                 self.network_state = NetworkState::Offline;
                 Some(ScreenId::NetworkConfig)
             }
+            (ScreenId::NetworkProgress, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at network progress".to_string())
+            }
 
             // === RAID Config ===
             (ScreenId::RaidConfig, UserInput::SelectRaidOption(idx)) => {
@@ -184,6 +187,9 @@ impl InstallerStateMachine {
             (ScreenId::RaidConfig, UserInput::Back) => {
                 self.current_screen = ScreenId::NetworkProgress;
                 Some(ScreenId::NetworkProgress)
+            }
+            (ScreenId::RaidConfig, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at RAID config".to_string())
             }
 
             // === Disk Group Select (now after RAID) ===
@@ -236,6 +242,9 @@ impl InstallerStateMachine {
             (ScreenId::InstallProgress, UserInput::Confirm) => {
                 self.current_screen = ScreenId::Reboot;
                 Some(ScreenId::Reboot)
+            }
+            (ScreenId::InstallProgress, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at install progress".to_string())
             }
 
             // === Reboot ===
@@ -423,54 +432,36 @@ impl InstallerStateMachine {
         iface_name: String,
         executor: &mut dyn OperationExecutor,
     ) -> Option<ScreenId> {
-        // If the interface already has link+carrier, it's connected — just
-        // select it as primary, shut down the others, and advance directly.
+        // If the interface already has link+carrier, skip enable/link-check.
+        // Otherwise bring it up step by step.
         let already_connected = self
             .interfaces
             .iter()
             .any(|i| i.name == iface_name && i.has_link && i.has_carrier);
 
-        if already_connected {
-            let select_op = Operation::SelectPrimaryInterface {
+        if !already_connected {
+            // Step 1: Enable the interface
+            let enable_op = Operation::EnableInterface {
                 interface: iface_name.clone(),
             };
-            let result = executor.execute(&select_op);
-            self.action_manifest.record(select_op, result.to_outcome());
-
-            self.network_state = NetworkState::Online;
-
-            for sop in self.shutdown_other_interfaces(&iface_name) {
-                let sr = executor.execute(&sop);
-                self.action_manifest.record(sop, sr.to_outcome());
+            let enable_result = executor.execute(&enable_op);
+            self.action_manifest
+                .record(enable_op, enable_result.to_outcome());
+            if enable_result.is_error() {
+                return self.ethernet_error(&iface_name, &enable_result, executor);
             }
+            self.network_state = NetworkState::DeviceEnabled;
 
-            self.current_screen = ScreenId::RaidConfig;
-            return Some(ScreenId::RaidConfig);
-        }
-
-        // Interface is not already connected — bring it up step by step.
-
-        // Step 1: Enable the interface
-        let enable_op = Operation::EnableInterface {
-            interface: iface_name.clone(),
-        };
-        let enable_result = executor.execute(&enable_op);
-        self.action_manifest
-            .record(enable_op, enable_result.to_outcome());
-        if enable_result.is_error() {
-            return self.ethernet_error(&iface_name, &enable_result, executor);
-        }
-        self.network_state = NetworkState::DeviceEnabled;
-
-        // Step 2: Check link
-        let link_op = Operation::CheckLinkAvailability {
-            interface: iface_name.clone(),
-        };
-        let link_result = executor.execute(&link_op);
-        self.action_manifest
-            .record(link_op, link_result.to_outcome());
-        if link_result.is_error() {
-            return self.ethernet_error(&iface_name, &link_result, executor);
+            // Step 2: Check link
+            let link_op = Operation::CheckLinkAvailability {
+                interface: iface_name.clone(),
+            };
+            let link_result = executor.execute(&link_op);
+            self.action_manifest
+                .record(link_op, link_result.to_outcome());
+            if link_result.is_error() {
+                return self.ethernet_error(&iface_name, &link_result, executor);
+            }
         }
 
         // Step 3: Check if we already have an IP (skip DHCP if so)
@@ -900,6 +891,8 @@ impl InstallerStateMachine {
         executor: &mut dyn OperationExecutor,
         reason: String,
     ) -> Option<ScreenId> {
+        self.cleanup(executor);
+
         let op = Operation::Abort {
             reason: reason.clone(),
         };
@@ -908,6 +901,62 @@ impl InstallerStateMachine {
         self.action_manifest.final_state = InstallerFinalState::Aborted;
         self.current_screen = ScreenId::Reboot;
         Some(ScreenId::Reboot)
+    }
+
+    fn cleanup(&mut self, executor: &mut dyn OperationExecutor) {
+        use std::collections::BTreeSet;
+
+        let mut networkd_interfaces: BTreeSet<String> = BTreeSet::new();
+        let mut wpa_interfaces: BTreeSet<String> = BTreeSet::new();
+        let mut needs_unmount = false;
+
+        for entry in &self.action_manifest.operations {
+            match &entry.operation {
+                Operation::ConfigureDhcp { interface }
+                | Operation::SelectPrimaryInterface { interface } => {
+                    networkd_interfaces.insert(interface.clone());
+                }
+                Operation::AuthenticateWifi { interface, .. }
+                | Operation::ConfigureWifiSsidAuth { interface, .. }
+                | Operation::ConfigureWifiQrCode { interface, .. } => {
+                    wpa_interfaces.insert(interface.clone());
+                }
+                Operation::MkfsBtrfs { .. }
+                | Operation::BtrfsRaidSetup { .. }
+                | Operation::CreateBtrfsSubvolume { .. }
+                | Operation::InstallBaseSystem { .. } => {
+                    needs_unmount = true;
+                }
+                _ => {}
+            }
+        }
+
+        // Unmount first
+        if needs_unmount {
+            let op = Operation::CleanupUnmount {
+                mount_point: self.mount_point.clone(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
+        }
+
+        // Kill wpa_supplicant processes
+        for interface in &wpa_interfaces {
+            let op = Operation::CleanupWpaSupplicant {
+                interface: interface.clone(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
+        }
+
+        // Remove networkd configs
+        for interface in &networkd_interfaces {
+            let op = Operation::CleanupNetworkConfig {
+                interface: interface.clone(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
+        }
     }
 
     pub fn connect_wifi_qr(

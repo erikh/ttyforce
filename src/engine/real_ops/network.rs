@@ -8,18 +8,17 @@ use crate::network::wifi::WifiNetwork;
 
 use super::run_cmd;
 
-/// Enable a network interface.
-/// Uses `ip link set up` (networkd doesn't expose a simple "bring up" via dbus).
+/// Enable a network interface via networkctl.
 pub fn enable_interface(interface: &str) -> OperationResult {
-    match run_cmd("ip", &["link", "set", interface, "up"]) {
+    match run_cmd("networkctl", &["up", interface]) {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!("failed to enable {}: {}", interface, e)),
     }
 }
 
-/// Disable a network interface.
+/// Disable a network interface via networkctl.
 pub fn disable_interface(interface: &str) -> OperationResult {
-    match run_cmd("ip", &["link", "set", interface, "down"]) {
+    match run_cmd("networkctl", &["down", interface]) {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!("failed to disable {}: {}", interface, e)),
     }
@@ -204,31 +203,82 @@ pub fn configure_wifi_qr_code(interface: &str, qr_data: &str) -> OperationResult
     }
 }
 
-/// Configure DHCP on an interface.
-/// Tries systemd-networkd reconfigure via dbus, falls back to dhclient/dhcpcd.
+/// Configure DHCP on an interface via systemd-networkd.
+/// After triggering DHCP, polls for an IP address (up to 30s) before returning.
 pub fn configure_dhcp(interface: &str) -> OperationResult {
-    if let Ok(conn) = zbus::blocking::Connection::system() {
-        if let Ok(index) = get_link_index_networkd(&conn, interface) {
-            let result = conn.call_method(
-                Some("org.freedesktop.network1"),
-                ObjectPath::try_from("/org/freedesktop/network1").unwrap(),
-                Some("org.freedesktop.network1.Manager"),
-                "ReconfigureLink",
-                &(index as i32,),
-            );
-            if result.is_ok() {
-                return OperationResult::Success;
-            }
+    configure_dhcp_with(
+        interface,
+        try_trigger_dhcp,
+        check_ip_via_command,
+        30,
+        std::time::Duration::from_secs(1),
+    )
+}
+
+/// Testable inner function with injected dependencies for DHCP trigger, IP check,
+/// retry count, and poll interval.
+fn configure_dhcp_with(
+    interface: &str,
+    trigger: fn(&str) -> OperationResult,
+    check_ip: fn(&str) -> OperationResult,
+    max_attempts: u32,
+    poll_interval: std::time::Duration,
+) -> OperationResult {
+    let dhcp_triggered = trigger(interface);
+
+    if let OperationResult::Error(e) = dhcp_triggered {
+        return OperationResult::Error(e);
+    }
+
+    for _ in 0..max_attempts {
+        std::thread::sleep(poll_interval);
+        if let OperationResult::IpAssigned(_) = check_ip(interface) {
+            return OperationResult::Success;
         }
     }
 
-    // Fallback: try dhclient
-    if run_cmd("dhclient", &[interface]).is_ok() {
-        return OperationResult::Success;
+    OperationResult::Error(format!(
+        "DHCP timeout on {}: no IP assigned after {}s",
+        interface,
+        max_attempts as u64 * poll_interval.as_secs()
+    ))
+}
+
+/// Build the path for a ttyforce-managed networkd `.network` unit.
+fn networkd_unit_path(interface: &str) -> String {
+    format!("/etc/systemd/network/80-ttyforce-{}.network", interface)
+}
+
+/// Generate the networkd `.network` unit content for DHCP on an interface.
+fn generate_dhcp_network_config(interface: &str) -> String {
+    format!(
+        "[Match]\nName={}\n\n[Network]\nDHCP=yes\n",
+        interface
+    )
+}
+
+/// Trigger DHCP on an interface via systemd-networkd.
+///
+/// Writes a `.network` unit with `DHCP=yes` for the interface, then tells
+/// networkd to reload config and reconfigure the link.  DNS is handled by
+/// systemd-resolved — no dhclient/dhcpcd needed.
+fn try_trigger_dhcp(interface: &str) -> OperationResult {
+    let network_path = networkd_unit_path(interface);
+    let network_content = generate_dhcp_network_config(interface);
+    if let Err(e) = fs::write(&network_path, network_content) {
+        return OperationResult::Error(format!(
+            "failed to write networkd config for {}: {}",
+            interface, e
+        ));
     }
 
-    // Fallback: try dhcpcd
-    match run_cmd("dhcpcd", &[interface]) {
+    // Tell networkd to pick up the new config file
+    if let Err(e) = run_cmd("networkctl", &["reload"]) {
+        return OperationResult::Error(format!("networkctl reload failed: {}", e));
+    }
+
+    // Reconfigure the link to apply DHCP
+    match run_cmd("networkctl", &["reconfigure", interface]) {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!(
             "DHCP configuration failed on {}: {}",
@@ -237,15 +287,58 @@ pub fn configure_dhcp(interface: &str) -> OperationResult {
     }
 }
 
-/// Select an interface as primary by adjusting default route metric.
+/// Merge a `[DHCPv4]` section with `RouteMetric=100` into an existing networkd
+/// config, or generate a fresh one.  Pure function — no I/O.
+fn merge_primary_interface_config(interface: &str, existing: &str) -> String {
+    if existing.contains("[DHCPv4]") {
+        // Update existing DHCPv4 section
+        if existing.contains("RouteMetric=") {
+            existing
+                .lines()
+                .map(|l| {
+                    if l.starts_with("RouteMetric=") {
+                        "RouteMetric=100"
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        } else {
+            existing.replace("[DHCPv4]", "[DHCPv4]\nRouteMetric=100")
+        }
+    } else if existing.is_empty() {
+        format!(
+            "[Match]\nName={}\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nRouteMetric=100\n",
+            interface
+        )
+    } else {
+        format!("{}\n[DHCPv4]\nRouteMetric=100\n", existing.trim_end())
+    }
+}
+
+/// Select an interface as primary by writing a networkd config with a low
+/// route metric and reconfiguring the link.
 pub fn select_primary_interface(interface: &str) -> OperationResult {
-    let _ = run_cmd("ip", &["route", "del", "default"]);
-    match run_cmd(
-        "ip",
-        &[
-            "route", "add", "default", "dev", interface, "metric", "100",
-        ],
-    ) {
+    let network_path = networkd_unit_path(interface);
+
+    // Read existing config or start fresh
+    let existing = fs::read_to_string(&network_path).unwrap_or_default();
+    let network_content = merge_primary_interface_config(interface, &existing);
+
+    if let Err(e) = fs::write(&network_path, network_content) {
+        return OperationResult::Error(format!(
+            "failed to write networkd config for {}: {}",
+            interface, e
+        ));
+    }
+
+    if let Err(e) = run_cmd("networkctl", &["reload"]) {
+        return OperationResult::Error(format!("networkctl reload failed: {}", e));
+    }
+
+    match run_cmd("networkctl", &["reconfigure", interface]) {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!(
             "failed to set primary interface {}: {}",
@@ -254,9 +347,48 @@ pub fn select_primary_interface(interface: &str) -> OperationResult {
     }
 }
 
-/// Shut down a network interface.
+/// Remove the ttyforce-managed networkd config for an interface and reload networkd.
+/// Best-effort: missing files and reload failures are not errors.
+pub fn cleanup_network_config(interface: &str) -> OperationResult {
+    let path = networkd_unit_path(interface);
+    match fs::remove_file(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return OperationResult::Error(format!(
+                "failed to remove networkd config {}: {}",
+                path, e
+            ));
+        }
+    }
+    // Best-effort reload
+    let _ = run_cmd("networkctl", &["reload"]);
+    OperationResult::Success
+}
+
+/// Kill wpa_supplicant for an interface and remove its config file.
+/// Best-effort: missing processes and files are not errors.
+pub fn cleanup_wpa_supplicant(interface: &str) -> OperationResult {
+    // Kill any wpa_supplicant for this interface (ignore failure)
+    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    // Remove config file (ignore NotFound)
+    let conf_path = format!("/tmp/wpa_supplicant_{}.conf", interface);
+    match fs::remove_file(&conf_path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return OperationResult::Error(format!(
+                "failed to remove wpa_supplicant config {}: {}",
+                conf_path, e
+            ));
+        }
+    }
+    OperationResult::Success
+}
+
+/// Shut down a network interface via networkctl.
 pub fn shutdown_interface(interface: &str) -> OperationResult {
-    match run_cmd("ip", &["link", "set", interface, "down"]) {
+    match run_cmd("networkctl", &["down", interface]) {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!("failed to shut down {}: {}", interface, e)),
     }
@@ -554,4 +686,253 @@ fn wpa_supplicant_iface_path(interface: &str) -> Result<ObjectPath<'static>, zbu
         .collect();
     let path = format!("/fi/w1/wpa_supplicant1/Interfaces/{}", escaped);
     ObjectPath::try_from(path).map(|p| p.into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    // ---------------------------------------------------------------
+    // DHCP polling tests
+    // ---------------------------------------------------------------
+
+    // Fast poll settings for unit tests
+    const TEST_ATTEMPTS: u32 = 3;
+    const TEST_INTERVAL: Duration = Duration::from_millis(1);
+
+    fn trigger_success(_interface: &str) -> OperationResult {
+        OperationResult::Success
+    }
+
+    fn trigger_error(_interface: &str) -> OperationResult {
+        OperationResult::Error("trigger failed".into())
+    }
+
+    fn check_ip_always_assigned(_interface: &str) -> OperationResult {
+        OperationResult::IpAssigned("10.0.0.1".into())
+    }
+
+    fn check_ip_always_none(_interface: &str) -> OperationResult {
+        OperationResult::NoIp
+    }
+
+    static CALL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+    fn check_ip_on_third_call(_interface: &str) -> OperationResult {
+        let count = CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+        if count >= 2 {
+            OperationResult::IpAssigned("10.0.0.1".into())
+        } else {
+            OperationResult::NoIp
+        }
+    }
+
+    #[test]
+    fn test_dhcp_polling_immediate_ip() {
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_success,
+            check_ip_always_assigned,
+            TEST_ATTEMPTS,
+            TEST_INTERVAL,
+        );
+        assert!(
+            result.is_success(),
+            "expected Success, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_dhcp_polling_ip_on_third_attempt() {
+        CALL_COUNT.store(0, Ordering::SeqCst);
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_success,
+            check_ip_on_third_call,
+            5,
+            TEST_INTERVAL,
+        );
+        assert!(
+            result.is_success(),
+            "expected Success, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_dhcp_polling_timeout() {
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_success,
+            check_ip_always_none,
+            TEST_ATTEMPTS,
+            TEST_INTERVAL,
+        );
+        match &result {
+            OperationResult::Error(msg) => {
+                assert!(
+                    msg.contains("DHCP timeout"),
+                    "expected timeout message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dhcp_trigger_failure_skips_polling() {
+        // Use a static to track whether check_ip is ever called
+        static CHECK_IP_CALLED: AtomicU32 = AtomicU32::new(0);
+
+        fn check_ip_tracking(_interface: &str) -> OperationResult {
+            CHECK_IP_CALLED.fetch_add(1, Ordering::SeqCst);
+            OperationResult::NoIp
+        }
+
+        CHECK_IP_CALLED.store(0, Ordering::SeqCst);
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_error,
+            check_ip_tracking,
+            TEST_ATTEMPTS,
+            TEST_INTERVAL,
+        );
+
+        assert!(
+            matches!(result, OperationResult::Error(_)),
+            "expected Error, got {:?}",
+            result
+        );
+        assert_eq!(
+            CHECK_IP_CALLED.load(Ordering::SeqCst),
+            0,
+            "check_ip should not have been called when trigger fails"
+        );
+    }
+
+    #[test]
+    fn test_dhcp_polling_zero_attempts_is_timeout() {
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_success,
+            check_ip_always_assigned,
+            0, // zero attempts — should never check
+            TEST_INTERVAL,
+        );
+        match &result {
+            OperationResult::Error(msg) => {
+                assert!(msg.contains("DHCP timeout"), "got: {}", msg);
+            }
+            other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Networkd unit path tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_networkd_unit_path() {
+        assert_eq!(
+            networkd_unit_path("eth0"),
+            "/etc/systemd/network/80-ttyforce-eth0.network"
+        );
+        assert_eq!(
+            networkd_unit_path("wlan0"),
+            "/etc/systemd/network/80-ttyforce-wlan0.network"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // DHCP config generation tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_generate_dhcp_config_content() {
+        let config = generate_dhcp_network_config("eth0");
+        assert!(config.contains("[Match]"), "missing [Match] section");
+        assert!(config.contains("Name=eth0"), "missing Name=eth0");
+        assert!(config.contains("[Network]"), "missing [Network] section");
+        assert!(config.contains("DHCP=yes"), "missing DHCP=yes");
+    }
+
+    #[test]
+    fn test_generate_dhcp_config_interface_name_substitution() {
+        let config = generate_dhcp_network_config("wlan0");
+        assert!(config.contains("Name=wlan0"));
+        assert!(!config.contains("Name=eth0"));
+    }
+
+    // ---------------------------------------------------------------
+    // Primary interface config merging tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_merge_primary_empty_config() {
+        let result = merge_primary_interface_config("eth0", "");
+        assert!(result.contains("[Match]"), "missing [Match]");
+        assert!(result.contains("Name=eth0"), "missing Name=eth0");
+        assert!(result.contains("[Network]"), "missing [Network]");
+        assert!(result.contains("DHCP=yes"), "missing DHCP=yes");
+        assert!(result.contains("[DHCPv4]"), "missing [DHCPv4]");
+        assert!(result.contains("RouteMetric=100"), "missing RouteMetric=100");
+    }
+
+    #[test]
+    fn test_merge_primary_existing_without_dhcpv4() {
+        let existing = "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n";
+        let result = merge_primary_interface_config("eth0", existing);
+        assert!(result.contains("[DHCPv4]"), "missing [DHCPv4]");
+        assert!(result.contains("RouteMetric=100"), "missing RouteMetric=100");
+        // Should preserve existing content
+        assert!(result.contains("[Match]"));
+        assert!(result.contains("DHCP=yes"));
+    }
+
+    #[test]
+    fn test_merge_primary_existing_dhcpv4_without_route_metric() {
+        let existing = "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nUseDNS=true\n";
+        let result = merge_primary_interface_config("eth0", existing);
+        assert!(
+            result.contains("[DHCPv4]\nRouteMetric=100"),
+            "RouteMetric should be inserted right after [DHCPv4], got:\n{}",
+            result
+        );
+        assert!(result.contains("UseDNS=true"), "should preserve existing keys");
+    }
+
+    #[test]
+    fn test_merge_primary_existing_dhcpv4_with_route_metric() {
+        let existing =
+            "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nRouteMetric=500\n";
+        let result = merge_primary_interface_config("eth0", existing);
+        assert!(
+            result.contains("RouteMetric=100"),
+            "RouteMetric should be updated to 100"
+        );
+        assert!(
+            !result.contains("RouteMetric=500"),
+            "old RouteMetric=500 should be replaced"
+        );
+    }
+
+    #[test]
+    fn test_merge_primary_does_not_duplicate_dhcpv4_section() {
+        let existing = "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nRouteMetric=200\n";
+        let result = merge_primary_interface_config("eth0", existing);
+        let count = result.matches("[DHCPv4]").count();
+        assert_eq!(count, 1, "should have exactly one [DHCPv4] section, got {}", count);
+    }
+
+    #[test]
+    fn test_merge_primary_preserves_match_section_for_correct_interface() {
+        // When generating from scratch, should use the interface name provided
+        let result = merge_primary_interface_config("wlan0", "");
+        assert!(result.contains("Name=wlan0"));
+        assert!(!result.contains("Name=eth0"));
+    }
 }

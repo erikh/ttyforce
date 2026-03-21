@@ -198,8 +198,8 @@ fn test_ethernet_auto_detect() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    // Connected ethernet skips directly to raid config
-    assert_eq!(result, Some(ScreenId::RaidConfig));
+    // Connected ethernet runs IP/DHCP/connectivity checks, lands on NetworkProgress
+    assert_eq!(result, Some(ScreenId::NetworkProgress));
     assert!(sm.network_state.is_online());
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
 }
@@ -222,8 +222,8 @@ fn test_ethernet_preferred_over_wifi() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    // Connected ethernet skips directly to raid config
-    assert_eq!(result, Some(ScreenId::RaidConfig));
+    // Connected ethernet runs IP/DHCP/connectivity checks, lands on NetworkProgress
+    assert_eq!(result, Some(ScreenId::NetworkProgress));
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
     assert!(sm.network_state.is_online());
 }

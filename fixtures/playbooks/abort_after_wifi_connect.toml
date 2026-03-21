@@ -1,0 +1,69 @@
+# Playbook: Wifi connects successfully, then user aborts at RAID config
+description = "Abort after wifi connect: cleanup wpa_supplicant and networkd"
+hardware_file = "fixtures/hardware/wifi_1disk.toml"
+expected_final_state = "Aborted"
+
+inputs = [
+    "Confirm",
+    { SelectWifiNetwork = 0 },
+    { EnterWifiPassword = "correctpassword" },
+    "Confirm",
+    "AbortInstall",
+]
+
+expected_screens = [
+    "WifiSelect",
+    "WifiPassword",
+    "NetworkProgress",
+    "RaidConfig",
+    "Reboot",
+]
+
+expected_operation_types = [
+    "EnableInterface",
+    "ScanWifiNetworks",
+    "ReceiveWifiScanResults",
+    "ConfigureWifiSsidAuth",
+    "AuthenticateWifi",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "CleanupWpaSupplicant",
+    "CleanupNetworkConfig",
+    "Abort",
+]
+
+[[simulated_responses]]
+operation_match = { by_type = "ScanWifiNetworks" }
+result = { WifiScanResults = [
+    { ssid = "HomeNetwork", signal_strength = -45, frequency_mhz = 5180, security = "wpa2", reachable = true },
+] }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "AuthenticateWifi" }
+result = "WifiAuthenticated"
+consume = true
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckIpAddress" }
+result = { IpAssigned = "192.168.1.42" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckUpstreamRouter" }
+result = { RouterFound = "192.168.1.1" }
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckInternetRoutability" }
+result = "InternetReachable"
+consume = false
+
+[[simulated_responses]]
+operation_match = { by_type = "CheckDnsResolution" }
+result = { DnsResolved = "93.184.216.34" }
+consume = false

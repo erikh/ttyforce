@@ -1,0 +1,28 @@
+# Playbook: Ethernet comes online, then user aborts at RAID config
+description = "Abort after ethernet online: cleanup networkd config"
+hardware_file = "fixtures/hardware/ethernet_1disk.toml"
+expected_final_state = "Aborted"
+
+inputs = [
+    "Confirm",
+    "Confirm",
+    "AbortInstall",
+]
+
+expected_screens = [
+    "NetworkProgress",
+    "RaidConfig",
+    "Reboot",
+]
+
+expected_operation_types = [
+    "CheckIpAddress",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
+    "SelectPrimaryInterface",
+    "CleanupNetworkConfig",
+    "Abort",
+]

@@ -5,6 +5,7 @@ expected_final_state = "Rebooted"
 
 inputs = [
     "Confirm",
+    "Confirm",
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
@@ -13,6 +14,7 @@ inputs = [
 ]
 
 expected_screens = [
+    "NetworkProgress",
     "RaidConfig",
     "DiskGroupSelect",
     "Confirm",
@@ -22,6 +24,12 @@ expected_screens = [
 ]
 
 expected_operation_types = [
+    "CheckIpAddress",
+    "ConfigureDhcp",
+    "CheckIpAddress",
+    "CheckUpstreamRouter",
+    "CheckInternetRoutability",
+    "CheckDnsResolution",
     "SelectPrimaryInterface",
     "PartitionDisk",
     "MkfsBtrfs",

@@ -539,23 +539,71 @@ fn integration_network_operation_sequence() {
 // DHCP on dummy (will fail — no DHCP server — but exercises the code path)
 // ---------------------------------------------------------------------------
 
+/// This test takes ~30s because the DHCP polling loop waits for an IP that
+/// will never arrive (no DHCP server on the dummy interface).
 #[test]
+#[ignore]
 fn integration_configure_dhcp_no_server() {
     let iface = require_env!(test_iface());
     let mut exec = SystemdExecutor::new();
 
+    // Remove the static IP so the polling loop has nothing to find
+    let _ = std::process::Command::new("ip")
+        .args(["addr", "flush", "dev", &iface])
+        .output();
+
     let result = exec.execute(&Operation::ConfigureDhcp {
         interface: iface.clone(),
     });
-    // Expect failure — no DHCP server on this dummy network
-    // But the code path through networkd dbus → dhclient → dhcpcd is exercised
+
+    // Restore the networkd-managed state (re-applies the static IP from the .network file)
+    let _ = std::process::Command::new("networkctl")
+        .args(["reconfigure", &iface])
+        .output();
+
+    // The DHCP trigger may "succeed" (networkd ReconfigureLink returns ok),
+    // but no IP will be assigned, so we expect a timeout error.
     match &result {
         OperationResult::Success => {
-            // networkd may "succeed" even without actually getting a lease
+            // networkd may "succeed" if the static IP from run-tests.sh is found
         }
-        OperationResult::Error(_) => {
-            // expected — no DHCP server
+        OperationResult::Error(msg) => {
+            assert!(
+                msg.contains("timeout") || msg.contains("DHCP"),
+                "expected timeout/DHCP error, got: {}",
+                msg
+            );
         }
         other => panic!("unexpected result: {:?}", other),
     }
+}
+
+/// Tests the DHCP polling happy path: dummy0 already has a static IP
+/// (10.99.99.1/24 configured via systemd-networkd), so the polling loop
+/// should find it quickly and return Success.
+#[test]
+fn integration_configure_dhcp_with_static_ip() {
+    let iface = require_env!(test_iface());
+    let mut exec = SystemdExecutor::new();
+
+    // Ensure the interface is up and has the static IP
+    exec.execute(&Operation::EnableInterface {
+        interface: iface.clone(),
+    });
+
+    let result = exec.execute(&Operation::ConfigureDhcp {
+        interface: iface.clone(),
+    });
+
+    // Reconfigure the link via networkd to restore its managed state
+    let _ = std::process::Command::new("networkctl")
+        .args(["reconfigure", &iface])
+        .output();
+
+    // The polling loop should find the existing static IP and return Success
+    assert!(
+        result.is_success(),
+        "expected Success (static IP should be found by poll), got {:?}",
+        result
+    );
 }

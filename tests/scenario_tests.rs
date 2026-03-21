@@ -23,9 +23,11 @@ fn run_ethernet_single_disk_install(
 ) -> InstallerStateMachine {
     let mut sm = InstallerStateMachine::new(hw);
 
-    // Auto-detect network (connected ethernet skips straight to raid config)
+    // Auto-detect network (connected ethernet runs IP/DHCP/connectivity, lands on NetworkProgress)
     sm.process_input(UserInput::Confirm, executor);
     assert!(sm.network_state.is_online());
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    sm.process_input(UserInput::Confirm, executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     // Select single (index 0)
@@ -261,9 +263,12 @@ fn test_full_install_ethernet_4disk_btrfs_raid5() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Network
+    // Network (connected ethernet runs IP/DHCP/connectivity, lands on NetworkProgress)
     sm.process_input(UserInput::Confirm, &mut executor);
     assert!(sm.network_state.is_online());
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     // RAID5 (index 2 for 4 disks: Single, RAID1, RAID5)
     sm.process_input(UserInput::SelectRaidOption(2), &mut executor);
@@ -341,13 +346,13 @@ fn test_full_install_wifi_1disk() {
 
 #[test]
 fn test_ethernet_auto_detect_records_all_ops() {
-    // Connected ethernet (has_link + has_carrier) skips straight to RaidConfig
+    // Connected ethernet (has_link + has_carrier) skips Enable/CheckLink but runs IP/DHCP/connectivity
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::RaidConfig);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
     assert!(sm.network_state.is_online());
 
     let ops = executor.recorded_operations();
@@ -356,11 +361,12 @@ fn test_ethernet_auto_detect_records_all_ops() {
         .map(|r| ttyforce::engine::executor::operation_type_name(&r.operation))
         .collect();
 
-    // Only SelectPrimaryInterface should be recorded — no probing needed
-    assert!(op_types.contains(&"SelectPrimaryInterface"));
+    // EnableInterface and CheckLinkAvailability should be skipped for already-connected
     assert!(!op_types.contains(&"EnableInterface"));
     assert!(!op_types.contains(&"CheckLinkAvailability"));
-    assert!(!op_types.contains(&"ConfigureDhcp"));
+    // IP check and connectivity ops should be present
+    assert!(op_types.contains(&"CheckIpAddress"));
+    assert!(op_types.contains(&"SelectPrimaryInterface"));
 }
 
 #[test]
@@ -548,6 +554,7 @@ fn test_abort_at_confirmation() {
 
     // Get to confirm screen
     sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     assert_eq!(sm.current_screen, ScreenId::Confirm);
@@ -565,7 +572,9 @@ fn test_back_navigation() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
-    // Get to raid config (connected ethernet skips to RaidConfig)
+    // Get to raid config (connected ethernet → NetworkProgress → RaidConfig)
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
@@ -581,6 +590,8 @@ fn test_back_from_raid_to_network_progress() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
     sm.process_input(UserInput::Back, &mut executor);
@@ -593,6 +604,7 @@ fn test_back_from_confirm_to_disk_group() {
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
+    sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
@@ -731,6 +743,7 @@ fn test_invalid_disk_group_selection() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
 
     // Try invalid selection
@@ -740,12 +753,144 @@ fn test_invalid_disk_group_selection() {
     assert_eq!(sm.current_screen, ScreenId::DiskGroupSelect);
 }
 
+// === Cleanup on abort ===
+
+#[test]
+fn test_abort_after_ethernet_cleanup_ops() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Get ethernet online
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert!(sm.network_state.is_online());
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::RaidConfig);
+
+    // Abort
+    sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    // CleanupNetworkConfig should appear before Abort
+    let cleanup_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig");
+    let abort_idx = op_types.iter().position(|t| *t == "Abort");
+    assert!(cleanup_idx.is_some(), "expected CleanupNetworkConfig in ops: {:?}", op_types);
+    assert!(abort_idx.is_some());
+    assert!(cleanup_idx.unwrap() < abort_idx.unwrap());
+}
+
+#[test]
+fn test_abort_after_wifi_cleanup_ops() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Connect wifi
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(
+        UserInput::EnterWifiPassword("correctpassword".to_string()),
+        &mut executor,
+    );
+    assert!(sm.network_state.is_online());
+    sm.process_input(UserInput::Confirm, &mut executor);
+
+    // Abort at RaidConfig
+    sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    let has_wpa_cleanup = op_types.contains(&"CleanupWpaSupplicant");
+    let has_net_cleanup = op_types.contains(&"CleanupNetworkConfig");
+    let abort_idx = op_types.iter().position(|t| *t == "Abort").unwrap();
+    let wpa_idx = op_types.iter().position(|t| *t == "CleanupWpaSupplicant").unwrap();
+    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig").unwrap();
+
+    assert!(has_wpa_cleanup, "expected CleanupWpaSupplicant");
+    assert!(has_net_cleanup, "expected CleanupNetworkConfig");
+    assert!(wpa_idx < net_idx, "wpa cleanup should come before networkd cleanup");
+    assert!(net_idx < abort_idx, "cleanup should come before Abort");
+}
+
+#[test]
+fn test_abort_no_artifacts_no_cleanup() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Abort immediately at NetworkConfig
+    sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    // Only Abort, no cleanup ops
+    assert_eq!(op_types, vec!["Abort"], "expected only Abort, got: {:?}", op_types);
+}
+
+#[test]
+fn test_abort_after_install_unmounts() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Full install
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::InstallProgress);
+
+    // Abort at install progress
+    sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    let has_unmount = op_types.contains(&"CleanupUnmount");
+    let has_net_cleanup = op_types.contains(&"CleanupNetworkConfig");
+    let abort_idx = op_types.iter().position(|t| *t == "Abort").unwrap();
+
+    assert!(has_unmount, "expected CleanupUnmount in ops: {:?}", op_types);
+    assert!(has_net_cleanup, "expected CleanupNetworkConfig in ops: {:?}", op_types);
+
+    let unmount_idx = op_types.iter().position(|t| *t == "CleanupUnmount").unwrap();
+    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig").unwrap();
+    assert!(unmount_idx < net_idx, "unmount should come before network cleanup");
+    assert!(net_idx < abort_idx, "cleanup should come before Abort");
+}
+
 #[test]
 fn test_invalid_raid_selection() {
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
+    sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::Confirm, &mut executor);
 
     let result = sm.process_input(UserInput::SelectRaidOption(99), &mut executor);

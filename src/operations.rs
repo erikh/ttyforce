@@ -90,6 +90,17 @@ pub enum Operation {
     Abort {
         reason: String,
     },
+
+    // Cleanup operations (emitted on abort to revert artifacts)
+    CleanupNetworkConfig {
+        interface: String,
+    },
+    CleanupWpaSupplicant {
+        interface: String,
+    },
+    CleanupUnmount {
+        mount_point: String,
+    },
 }
 
 impl std::fmt::Display for Operation {
@@ -169,6 +180,15 @@ impl std::fmt::Display for Operation {
             Operation::Reboot => write!(f, "Reboot"),
             Operation::Exit => write!(f, "Exit"),
             Operation::Abort { reason } => write!(f, "Abort: {}", reason),
+            Operation::CleanupNetworkConfig { interface } => {
+                write!(f, "Cleanup networkd config for {}", interface)
+            }
+            Operation::CleanupWpaSupplicant { interface } => {
+                write!(f, "Cleanup wpa_supplicant for {}", interface)
+            }
+            Operation::CleanupUnmount { mount_point } => {
+                write!(f, "Cleanup unmount {}", mount_point)
+            }
         }
     }
 }

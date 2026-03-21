@@ -41,6 +41,13 @@ pub fn create_btrfs_subvolume(mount_point: &str, name: &str) -> OperationResult 
     }
 }
 
+/// Recursively unmount a mount point. Best-effort: returns Success even on
+/// failure since the mount may not exist.
+pub fn cleanup_unmount(mount_point: &str) -> OperationResult {
+    let _ = run_cmd("umount", &["-R", mount_point]);
+    OperationResult::Success
+}
+
 /// Set up btrfs with RAID.
 pub fn btrfs_raid_setup(devices: &[String], raid_level: &str) -> OperationResult {
     let mut args = vec!["-f", "-d", raid_level, "-m", raid_level];

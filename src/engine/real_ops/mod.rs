@@ -73,6 +73,15 @@ pub fn execute(op: &Operation) -> OperationResult {
         Operation::Reboot => system::reboot(),
         Operation::Exit => OperationResult::Success,
         Operation::Abort { .. } => OperationResult::Success,
+
+        // Cleanup
+        Operation::CleanupNetworkConfig { interface } => {
+            network::cleanup_network_config(interface)
+        }
+        Operation::CleanupWpaSupplicant { interface } => {
+            network::cleanup_wpa_supplicant(interface)
+        }
+        Operation::CleanupUnmount { mount_point } => disk::cleanup_unmount(mount_point),
     }
 }
 

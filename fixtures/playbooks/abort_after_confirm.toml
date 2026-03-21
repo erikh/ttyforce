@@ -1,14 +1,14 @@
-# Playbook: Ethernet + 1 disk full install (Btrfs, single drive)
-description = "Full install: ethernet auto-detect, 1 disk, Btrfs single"
+# Playbook: Full flow through Confirm screen, then abort (no disk ops yet)
+description = "Abort at confirm screen: cleanup networkd config only"
 hardware_file = "fixtures/hardware/ethernet_1disk.toml"
-expected_final_state = "Installed"
+expected_final_state = "Aborted"
 
 inputs = [
     "Confirm",
     "Confirm",
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
-    "ConfirmInstall",
+    "AbortInstall",
 ]
 
 expected_screens = [
@@ -16,7 +16,7 @@ expected_screens = [
     "RaidConfig",
     "DiskGroupSelect",
     "Confirm",
-    "InstallProgress",
+    "Reboot",
 ]
 
 expected_operation_types = [
@@ -27,10 +27,6 @@ expected_operation_types = [
     "CheckInternetRoutability",
     "CheckDnsResolution",
     "SelectPrimaryInterface",
-    "PartitionDisk",
-    "MkfsBtrfs",
-    "CreateBtrfsSubvolume",
-    "CreateBtrfsSubvolume",
-    "CreateBtrfsSubvolume",
-    "InstallBaseSystem",
+    "CleanupNetworkConfig",
+    "Abort",
 ]

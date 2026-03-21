@@ -70,6 +70,9 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::Reboot => "Reboot",
         Operation::Exit => "Exit",
         Operation::Abort { .. } => "Abort",
+        Operation::CleanupNetworkConfig { .. } => "CleanupNetworkConfig",
+        Operation::CleanupWpaSupplicant { .. } => "CleanupWpaSupplicant",
+        Operation::CleanupUnmount { .. } => "CleanupUnmount",
     }
 }
 

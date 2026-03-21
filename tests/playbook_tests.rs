@@ -217,6 +217,21 @@ fn playbook_reboot_after_install() {
     run_playbook("reboot_after_install");
 }
 
+#[test]
+fn playbook_abort_after_ethernet_online() {
+    run_playbook("abort_after_ethernet_online");
+}
+
+#[test]
+fn playbook_abort_after_wifi_connect() {
+    run_playbook("abort_after_wifi_connect");
+}
+
+#[test]
+fn playbook_abort_after_confirm() {
+    run_playbook("abort_after_confirm");
+}
+
 // === Discovery test: automatically find and run all playbooks ===
 
 #[test]

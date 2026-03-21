@@ -17,7 +17,6 @@ RUN apt-get update && \
         iw \
         wireless-regdb \
         wpasupplicant \
-        isc-dhcp-client \
         parted \
         btrfs-progs \
         dnsutils \
