@@ -184,14 +184,22 @@ pub fn configure_wifi_qr_code(interface: &str, qr_data: &str) -> OperationResult
 
 /// Configure DHCP on an interface via dhcpcd.
 /// Polls for an IP address (up to 30s) before returning.
+/// After IP is confirmed, writes /etc/resolv.conf from the lease.
 pub fn configure_dhcp(interface: &str) -> OperationResult {
-    configure_dhcp_with(
+    let result = configure_dhcp_with(
         interface,
         try_trigger_dhcp,
         check_ip_sysfs,
         30,
         std::time::Duration::from_secs(1),
-    )
+    );
+
+    if result.is_success() {
+        // IP is assigned, so the lease is complete — write resolv.conf now
+        write_resolv_conf_from_lease(interface);
+    }
+
+    result
 }
 
 /// Testable inner function with injected dependencies.
@@ -223,20 +231,12 @@ fn configure_dhcp_with(
 }
 
 /// Trigger DHCP on an interface via dhcpcd.
-/// After dhcpcd succeeds, writes /etc/resolv.conf from the lease so DNS works
-/// even when dhcpcd's hook scripts are absent in the initrd.
 fn try_trigger_dhcp(interface: &str) -> OperationResult {
     let _ = run_cmd("dhcpcd", &["--release", interface]);
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     match run_cmd("dhcpcd", &["-b", interface]) {
-        Ok(_) => {
-            // Give dhcpcd a moment to obtain the lease
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            // Write /etc/resolv.conf from the lease in case hook scripts are missing
-            write_resolv_conf_from_lease(interface);
-            OperationResult::Success
-        }
+        Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!("dhcpcd failed on {}: {}", interface, e)),
     }
 }
