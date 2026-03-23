@@ -6,8 +6,9 @@ SHELL := /bin/bash
 CONTAINER_ENGINE ?= podman
 INTEGRATION_IMAGE = ttyforce-integration
 
-# Use sudo for the container engine if not running as root and not using podman rootless
-SUDO := $(shell if [ "$$(id -u)" != "0" ] && ! $(CONTAINER_ENGINE) info >/dev/null 2>&1; then echo sudo; fi)
+# Use sudo for the container engine — integration tests need real root for
+# losetup / loop devices, which rootless podman cannot provide even with --privileged.
+SUDO := $(shell if [ "$$(id -u)" != "0" ]; then echo sudo; fi)
 
 build:
 	cargo build --release
