@@ -1,18 +1,20 @@
-pub mod disk;
 pub mod network;
 pub mod system;
 
-use std::process::Command;
+use std::fs;
 
 use crate::engine::feedback::OperationResult;
+use crate::engine::real_ops::disk;
 use crate::operations::Operation;
 
-/// Execute an operation using real system commands and dbus calls.
+/// Execute an operation using initrd-compatible tools (no systemd dbus).
 pub fn execute(op: &Operation) -> OperationResult {
     match op {
-        // Network — dbus / shell
+        // Network — ip link
         Operation::EnableInterface { interface } => network::enable_interface(interface),
         Operation::DisableInterface { interface } => network::disable_interface(interface),
+
+        // Network — wifi (iw + wpa_supplicant CLI, no dbus)
         Operation::ScanWifiNetworks { interface } => network::scan_wifi_networks(interface),
         Operation::ReceiveWifiScanResults { interface } => {
             network::receive_wifi_scan_results(interface)
@@ -31,13 +33,15 @@ pub fn execute(op: &Operation) -> OperationResult {
             interface,
             qr_data,
         } => network::configure_wifi_qr_code(interface, qr_data),
+
+        // Network — DHCP via dhcpcd
         Operation::ConfigureDhcp { interface } => network::configure_dhcp(interface),
         Operation::SelectPrimaryInterface { interface } => {
             network::select_primary_interface(interface)
         }
         Operation::ShutdownInterface { interface } => network::shutdown_interface(interface),
 
-        // Network — checks
+        // Network — checks (sysfs/ip/ping/getent, no dbus)
         Operation::CheckLinkAvailability { interface } => {
             network::check_link_availability(interface)
         }
@@ -57,7 +61,7 @@ pub fn execute(op: &Operation) -> OperationResult {
         Operation::WifiConnectionTimeout { .. } => OperationResult::WifiTimeout,
         Operation::WifiAuthError { .. } => OperationResult::WifiAuthFailed("auth error".into()),
 
-        // Disk
+        // Disk — reuse real_ops (same tools: parted, mkfs.btrfs, mount)
         Operation::PartitionDisk { device } => disk::partition_disk(device),
         Operation::MkfsBtrfs { devices } => disk::mkfs_btrfs(devices),
         Operation::CreateBtrfsSubvolume { mount_point, name } => {
@@ -71,16 +75,19 @@ pub fn execute(op: &Operation) -> OperationResult {
             device,
             mount_point,
             fs_type,
-        } => disk::mount_filesystem(device, mount_point, fs_type),
+        } => mount_filesystem_syscall(device, mount_point, fs_type),
+
+        // Persist network config to installed system
+        Operation::PersistNetworkConfig {
+            mount_point,
+            interface,
+        } => network::persist_network_config(mount_point, interface),
 
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),
         Operation::Reboot => system::reboot(),
         Operation::Exit => OperationResult::Success,
         Operation::Abort { .. } => OperationResult::Success,
-
-        // Persist network config — no-op for systemd executor (config already in place)
-        Operation::PersistNetworkConfig { .. } => OperationResult::Success,
 
         // Cleanup
         Operation::CleanupNetworkConfig { interface } => {
@@ -89,21 +96,36 @@ pub fn execute(op: &Operation) -> OperationResult {
         Operation::CleanupWpaSupplicant { interface } => {
             network::cleanup_wpa_supplicant(interface)
         }
-        Operation::CleanupUnmount { mount_point } => disk::cleanup_unmount(mount_point),
+        Operation::CleanupUnmount { mount_point } => unmount_syscall(mount_point),
     }
 }
 
-/// Run a command and return stdout on success or stderr on failure.
-pub fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| format!("{}: {}", program, e))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        Err(if stderr.is_empty() { stdout } else { stderr })
+/// Mount a filesystem using the mount(2) syscall.
+fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str) -> OperationResult {
+    if let Err(e) = fs::create_dir_all(mount_point) {
+        return OperationResult::Error(format!(
+            "failed to create mount point {}: {}",
+            mount_point, e
+        ));
     }
+
+    match nix::mount::mount(
+        Some(device),
+        mount_point,
+        Some(fs_type),
+        nix::mount::MsFlags::empty(),
+        None::<&str>,
+    ) {
+        Ok(_) => OperationResult::Success,
+        Err(e) => OperationResult::Error(format!(
+            "mount({}, {}, {}) failed: {}",
+            device, mount_point, fs_type, e
+        )),
+    }
+}
+
+/// Unmount a filesystem using the umount2(2) syscall. Best-effort.
+fn unmount_syscall(mount_point: &str) -> OperationResult {
+    let _ = nix::mount::umount2(mount_point, nix::mount::MntFlags::MNT_DETACH);
+    OperationResult::Success
 }

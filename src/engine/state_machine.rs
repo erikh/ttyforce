@@ -508,8 +508,8 @@ impl InstallerStateMachine {
             }
         }
 
-        // Non-critical ops: run them but don't block on failure
-        let optional_ops = [
+        // Connectivity checks — fail if internet is not accessible
+        let remaining_ops = [
             Operation::CheckUpstreamRouter {
                 interface: iface_name.clone(),
             },
@@ -525,20 +525,22 @@ impl InstallerStateMachine {
             },
         ];
 
-        let optional_states = [
+        let remaining_states = [
             NetworkState::CheckingRouter,
             NetworkState::CheckingInternet,
             NetworkState::CheckingDns,
             NetworkState::Online,
         ];
 
-        for (op, state) in optional_ops.iter().zip(optional_states.iter()) {
+        for (op, state) in remaining_ops.iter().zip(remaining_states.iter()) {
             let result = executor.execute(op);
             self.action_manifest.record(op.clone(), result.to_outcome());
 
             if result.is_error() {
-                // Record the issue but keep going — we have an IP
-                self.error_message = Some(format!("Warning: {:?}", result));
+                self.network_state = NetworkState::Error(format!("{:?}", result));
+                self.error_message = Some(format!("Network error: {:?}", result));
+                self.current_screen = ScreenId::NetworkProgress;
+                return Some(ScreenId::NetworkProgress);
             }
 
             self.network_state = state.clone();
@@ -897,6 +899,17 @@ impl InstallerStateMachine {
                 InstallerFinalState::Error(format!("Install failed: {:?}", result));
             self.error_message = Some("Installation failed".to_string());
         } else {
+            // Persist network configuration to the installed system
+            if let Some(ref iface) = self.selected_interface {
+                let op = Operation::PersistNetworkConfig {
+                    mount_point: self.mount_point.clone(),
+                    interface: iface.clone(),
+                };
+                let persist_result = executor.execute(&op);
+                self.action_manifest
+                    .record(op, persist_result.to_outcome());
+            }
+
             self.action_manifest.final_state = InstallerFinalState::Installed;
         }
 

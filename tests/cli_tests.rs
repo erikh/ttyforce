@@ -160,6 +160,24 @@ fn cli_detect_fixture_missing_file() {
     assert!(stderr.contains("Failed to read"));
 }
 
+// === --initrd flag ===
+
+#[test]
+fn cli_help_shows_initrd_flag() {
+    let out = ttyforce_bin().arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--initrd"), "expected --initrd in help, got: {}", stdout);
+}
+
+#[test]
+fn cli_run_help_shows_initrd_flag() {
+    let out = ttyforce_bin().args(["run", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--initrd"), "expected --initrd in run help, got: {}", stdout);
+}
+
 // === Global flag position ===
 
 #[test]

@@ -32,6 +32,12 @@ The binary has three subcommands and two global flags.
   auto-detecting. Works with all subcommands.
 - `-o, --output <FILE>` — Write output to a file instead of stdout. Works
   with all subcommands.
+- `--initrd` — Use syscalls and sysfs directly instead of systemd dbus.
+  Uses ioctl for interface management, raw sockets for ICMP ping, UDP
+  sockets for DNS, mount(2)/reboot(2) syscalls. External deps: `dhcpcd`
+  (DHCP), `wpa_supplicant` (wifi auth), `iw` (wifi scan), `parted`,
+  `mkfs.btrfs`, `btrfs`. Network configuration is persisted to
+  `<mount_point>/etc/` after install. Only affects the `run` subcommand.
 
 ## Examples
 
@@ -42,7 +48,8 @@ ttyforce detect -o hw.toml               # auto-detect, save to file
 ttyforce detect --fixture scenario.toml  # run scenario, print operations
 ttyforce output                          # dry-run with real hardware
 ttyforce output -i hw.toml               # dry-run with manifest from file
-ttyforce run                             # real installer
+ttyforce run                             # real installer (systemd)
+ttyforce run --initrd                    # real installer (initrd mode)
 ttyforce run -i hw.toml                  # TUI with mock executor
 ```
 
@@ -137,5 +144,69 @@ Inputs should drive interactions in the TUI which may involve internal state, or
 The result would be that in a real scenario, those operations will be evaluated immediately, and their results would be fed back as error or state changes, which then might interrupt the input for prepending, such as a ssid list, to wifi access point selection, to password entry, to network negotiation and online status, including DNS resolution of e.g. example.com, but resulting in a full series of inputs and any errors states in-between, and the operations that would have been performed in the series of errors to get to a final state of "installed" or "aborted". The option to reboot the machine should also be available.
 
 Please ensure any other additional functionality is tested.
+
+# INITRD MODE:
+
+The `--initrd` flag selects the `InitrdExecutor` which avoids all systemd
+dbus calls. Two executor backends exist:
+
+- `SystemdExecutor` (default) — uses systemd-networkd, systemd-resolved,
+  and logind via dbus, with sysfs/command fallbacks
+- `InitrdExecutor` (`--initrd`) — uses syscalls and sysfs directly, with
+  minimal external tool dependencies
+
+## Syscalls used (no external tools needed):
+
+- Interface up/down — `ioctl(SIOCSIFFLAGS)` to set/clear `IFF_UP`
+- IP address check — `ioctl(SIOCGIFADDR)` to read IPv4 address
+- Link/carrier check — reads sysfs `/sys/class/net/<iface>/carrier`
+- Route/gateway check — parses `/proc/net/route`
+- Internet reachability — ICMP echo via `SOCK_DGRAM/IPPROTO_ICMP` raw
+  socket, with `SOCK_RAW` fallback, with `ping` command final fallback
+- DNS resolution — builds DNS A query, sends via `UdpSocket` to
+  nameserver from `/etc/resolv.conf`, parses response
+- Mount/unmount — `mount(2)` via `nix::mount::mount()` /
+  `umount2(2)` via `nix::mount::umount2()`
+- Reboot — `reboot(2)` via `nix::sys::reboot::reboot()` with
+  `sync()` beforehand
+
+## External tools required in the initrd:
+
+- `dhcpcd` — DHCP client (protocol too complex for inline implementation)
+- `wpa_supplicant` — WPA authentication, CLI mode only, no dbus
+  (`wpa_supplicant -B -i <iface> -c <conf>`)
+- `iw` — wifi network scanning (`iw dev <iface> scan`), fallback: `iwlist`
+- `parted` — disk partitioning (GPT + single partition)
+- `mkfs.btrfs` — btrfs filesystem creation
+- `btrfs` — subvolume management
+- `pacstrap` or `<mount>/install.sh` — base system installation
+- `pkill` — cleanup of dhcpcd/wpa_supplicant processes
+
+## Config persistence:
+
+After a successful install, the `PersistNetworkConfig` operation writes:
+- `<mount>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
+- `<mount>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
+  used, copies the wpa_supplicant config from `/tmp/`
+
+This ensures the installed system boots with working networking.
+
+## Internet accessibility:
+
+The installer ensures internet is accessible before proceeding to disk
+setup. Both ethernet and wifi flows check:
+1. Upstream router reachable (gateway exists)
+2. Internet routable (ICMP ping to 1.1.1.1)
+3. DNS works (resolve example.com)
+
+If any of these fail, the flow stops with an error on the NetworkProgress
+screen. This applies to both systemd and initrd executors.
+
+## Architecture:
+
+Both executors implement the same `OperationExecutor` trait. The `Operation`
+enum and state machine are shared — only the executor implementation differs.
+The initrd executor code lives in `src/engine/initrd_ops/` mirroring
+`src/engine/real_ops/`.
 
 - don't commit or push unless I tell you to

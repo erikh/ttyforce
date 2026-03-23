@@ -35,6 +35,7 @@ expected_operation_types = [
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",
     "InstallBaseSystem",
+    "PersistNetworkConfig",
 ]
 
 [[simulated_responses]]

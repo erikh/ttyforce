@@ -71,6 +71,7 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::Reboot => "Reboot",
         Operation::Exit => "Exit",
         Operation::Abort { .. } => "Abort",
+        Operation::PersistNetworkConfig { .. } => "PersistNetworkConfig",
         Operation::CleanupNetworkConfig { .. } => "CleanupNetworkConfig",
         Operation::CleanupWpaSupplicant { .. } => "CleanupWpaSupplicant",
         Operation::CleanupUnmount { .. } => "CleanupUnmount",
@@ -172,3 +173,40 @@ impl OperationExecutor for SystemdExecutor {
 
 /// Backward-compatible alias.
 pub type RealExecutor = SystemdExecutor;
+
+// ---------------------------------------------------------------------------
+// InitrdExecutor — executes operations using initrd-compatible tools
+// ---------------------------------------------------------------------------
+
+pub struct InitrdExecutor {
+    recorded: Vec<RecordedOperation>,
+}
+
+impl InitrdExecutor {
+    pub fn new() -> Self {
+        Self {
+            recorded: Vec::new(),
+        }
+    }
+}
+
+impl Default for InitrdExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OperationExecutor for InitrdExecutor {
+    fn execute(&mut self, op: &Operation) -> OperationResult {
+        let result = super::initrd_ops::execute(op);
+        self.recorded.push(RecordedOperation {
+            operation: op.clone(),
+            result: result.clone(),
+        });
+        result
+    }
+
+    fn recorded_operations(&self) -> &[RecordedOperation] {
+        &self.recorded
+    }
+}

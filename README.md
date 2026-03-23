@@ -30,6 +30,9 @@ ttyforce output -o operations.toml
 # Detect hardware and launch the real installer
 ttyforce run
 
+# Launch in initrd mode (dhcpcd, ip, wpa_supplicant CLI — no systemd)
+ttyforce run --initrd
+
 # Launch the real installer with hardware from a file (mock executor)
 ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 ```
@@ -48,6 +51,7 @@ ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 |---|---|
 | `-i, --input <FILE>` | Load hardware from a manifest file instead of auto-detecting. |
 | `-o, --output <FILE>` | Write output to a file instead of stdout. |
+| `--initrd` | Use initrd-compatible tools (dhcpcd, ip, wpa_supplicant CLI) instead of systemd. Persists network config to the installed system. Only affects `run`. |
 
 ## How it works
 
@@ -78,6 +82,32 @@ After installation completes (or is aborted), the final screen offers three choi
 - **Reboot** — restart the machine into the new system
 - **Exit** — return to the shell
 - **Power Off** — shut down
+
+### Executor modes
+
+Two executor backends are available:
+
+- **Systemd** (default) — Uses systemd dbus interfaces (networkd, resolved, logind) with sysfs/command fallbacks. Suitable for full systemd environments.
+- **Initrd** (`--initrd`) — Uses syscalls and sysfs directly where possible, with minimal external tool dependencies. After a successful install, network configuration (networkd units and wpa_supplicant configs) is persisted to `<mount_point>/etc/` so the installed system boots with working networking.
+
+  **Syscalls used (no external tools):**
+  - Interface up/down — `ioctl(SIOCSIFFLAGS)`
+  - IP address check — `ioctl(SIOCGIFADDR)`
+  - Link/carrier check — sysfs `/sys/class/net/<iface>/carrier`
+  - Route check — `/proc/net/route`
+  - Internet check — ICMP echo via raw socket (`SOCK_DGRAM/IPPROTO_ICMP`)
+  - DNS resolution — UDP socket to nameserver from `/etc/resolv.conf`
+  - Mount/unmount — `mount(2)` / `umount2(2)`
+  - Reboot — `reboot(2)` syscall
+
+  **Required external tools in initrd:**
+  - `dhcpcd` — DHCP client
+  - `wpa_supplicant` — WPA authentication (CLI mode, no dbus)
+  - `iw` — wifi scanning (fallback: `iwlist`)
+  - `parted` — disk partitioning
+  - `mkfs.btrfs` — btrfs filesystem creation
+  - `btrfs` — subvolume management
+  - `pacstrap` or `install.sh` — base system installation
 
 ### Hardware detection
 

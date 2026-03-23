@@ -2,7 +2,7 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
-use ttyforce::engine::executor::{RealExecutor, SimulatedResponse, TestExecutor};
+use ttyforce::engine::executor::{InitrdExecutor, RealExecutor, SimulatedResponse, TestExecutor};
 use ttyforce::engine::state_machine::InstallerStateMachine;
 use ttyforce::manifest::HardwareManifest;
 use ttyforce::tui::App;
@@ -17,6 +17,10 @@ struct Cli {
     /// Write output to a file instead of stdout
     #[arg(short, long, global = true)]
     output: Option<String>,
+
+    /// Use initrd-compatible tools (dhcpcd, ip, wpa_supplicant CLI) instead of systemd
+    #[arg(long, global = true)]
+    initrd: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -51,7 +55,7 @@ fn main() {
             run_output(cli.input.as_deref(), cli.output.as_deref());
         }
         Command::Run => {
-            run_installer(cli.input.as_deref(), cli.output.as_deref());
+            run_installer(cli.input.as_deref(), cli.output.as_deref(), cli.initrd);
         }
     }
 }
@@ -137,7 +141,7 @@ fn run_output(input: Option<&str>, output: Option<&str>) {
     write_output(&manifest, output);
 }
 
-fn run_installer(input: Option<&str>, output: Option<&str>) {
+fn run_installer(input: Option<&str>, output: Option<&str>, initrd: bool) {
     let hardware = load_hardware(input);
 
     if hardware.disks.is_empty() {
@@ -150,6 +154,12 @@ fn run_installer(input: Option<&str>, output: Option<&str>) {
 
     if input.is_some() {
         let mut executor = TestExecutor::new(vec![]);
+        if let Err(e) = app.run(&mut executor) {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        }
+    } else if initrd {
+        let mut executor = InitrdExecutor::new();
         if let Err(e) = app.run(&mut executor) {
             eprintln!("Error: {}", e);
             process::exit(1);

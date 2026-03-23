@@ -96,6 +96,12 @@ pub enum Operation {
         reason: String,
     },
 
+    // Persist network config to installed system
+    PersistNetworkConfig {
+        mount_point: String,
+        interface: String,
+    },
+
     // Cleanup operations (emitted on abort to revert artifacts)
     CleanupNetworkConfig {
         interface: String,
@@ -190,6 +196,14 @@ impl std::fmt::Display for Operation {
             Operation::Reboot => write!(f, "Reboot"),
             Operation::Exit => write!(f, "Exit"),
             Operation::Abort { reason } => write!(f, "Abort: {}", reason),
+            Operation::PersistNetworkConfig {
+                mount_point,
+                interface,
+            } => write!(
+                f,
+                "Persist network config for {} to {}",
+                interface, mount_point
+            ),
             Operation::CleanupNetworkConfig { interface } => {
                 write!(f, "Cleanup networkd config for {}", interface)
             }
