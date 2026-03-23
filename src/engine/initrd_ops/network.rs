@@ -798,6 +798,8 @@ pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &
     ));
     let network_unit = generate_persist_network_config(interface, mac_address);
     let network_path = format!("{}/20-{}.network", target_networkd_dir, interface);
+    cmd_log_append(format!("  writing {} ({} bytes)", network_path, network_unit.len()));
+    cmd_log_append(format!("  content: {}", network_unit.trim()));
     if let Err(e) = fs::write(&network_path, &network_unit) {
         return OperationResult::Error(format!(
             "failed to write {}: {}",

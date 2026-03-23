@@ -1231,3 +1231,73 @@ fn test_btrfs_device_scan_before_mount() {
         }
     }
 }
+
+#[test]
+fn test_remount_with_subvol_before_install() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+
+    let ops = &sm.action_manifest.operations;
+
+    // Find the second MountFilesystem (the remount)
+    let mount_ops: Vec<_> = ops
+        .iter()
+        .filter(|op| matches!(&op.operation, Operation::MountFilesystem { .. }))
+        .collect();
+
+    assert!(
+        mount_ops.len() >= 2,
+        "should have at least 2 MountFilesystem ops (initial + remount), got {}",
+        mount_ops.len()
+    );
+
+    // First mount: no options (raw btrfs root for subvolume creation)
+    if let Operation::MountFilesystem { options, .. } = &mount_ops[0].operation {
+        assert!(
+            options.is_none(),
+            "first mount should have no options, got {:?}",
+            options
+        );
+    }
+
+    // Second mount: subvol=@ (remount for install)
+    if let Operation::MountFilesystem { options, .. } = &mount_ops[1].operation {
+        assert_eq!(
+            options.as_deref(),
+            Some("subvol=@"),
+            "remount should use subvol=@"
+        );
+    }
+
+    // Verify order: subvolumes -> unmount -> remount(subvol=@) -> install
+    let op_types: Vec<&str> = ops
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    let last_subvol = op_types.iter().rposition(|t| *t == "CreateBtrfsSubvolume").unwrap();
+    let remount_unmount = op_types[last_subvol..].iter().position(|t| *t == "CleanupUnmount").unwrap() + last_subvol;
+    let remount = op_types[remount_unmount..].iter().position(|t| *t == "MountFilesystem").unwrap() + remount_unmount;
+    let install = op_types.iter().position(|t| *t == "InstallBaseSystem").unwrap();
+
+    assert!(
+        remount_unmount > last_subvol,
+        "unmount should come after subvolumes"
+    );
+    assert!(
+        remount > remount_unmount,
+        "remount should come after unmount"
+    );
+    assert!(
+        install > remount,
+        "install should come after remount"
+    );
+}

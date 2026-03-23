@@ -760,8 +760,12 @@ impl InstallerStateMachine {
                 InstallerFinalState::Error(format!("Install failed: {:?}", result));
             self.error_message = Some("Installation failed".to_string());
         } else {
-            // Generate mount service so the installed system mounts at boot
+            // Generate mount service and persist network config
             let etc = self.etc_target().to_string();
+            crate::engine::real_ops::cmd_log_append(format!(
+                "  etc_target={} mount_point={}",
+                etc, self.mount_point
+            ));
             let fstab_device = super::real_ops::disk::partition_path(&devices[0]);
             let fstab_op = Operation::GenerateFstab {
                 mount_point: etc.clone(),

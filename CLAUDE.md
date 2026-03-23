@@ -191,7 +191,13 @@ After a successful install, the `PersistNetworkConfig` operation writes:
   used, copies the wpa_supplicant config from `/tmp/`
 
 The `etc_target` defaults to the mount point but can be overridden with
-the `--etc-target` flag on the `initrd` subcommand.
+the `--etc-target` flag on the `initrd` subcommand. When `--etc-target`
+is specified, it is the root path for ALL `/etc` writes — the mount
+point is NOT considered. All files go under `<etc_target>/etc/`.
+
+Example: `ttyforce initrd --etc-target /` writes directly to `/etc/`.
+Example: `ttyforce initrd --etc-target /mnt/root` writes to `/mnt/root/etc/`.
+Without `--etc-target`, writes go to `<mount_point>/etc/` (e.g. `/town-os/etc/`).
 
 systemd-networkd must be enabled on the installed system to pick up
 the `.network` file. ttyforce assumes it is already enabled.
@@ -232,6 +238,24 @@ setup. Both ethernet and wifi flows check:
 
 If any of these fail, the flow stops with an error on the NetworkProgress
 screen. This applies to both systemd and initrd executors.
+
+## Install operation order:
+
+1. PartitionDisk (each device)
+2. MkfsBtrfs or BtrfsRaidSetup
+3. MountFilesystem (no options — raw btrfs root)
+4. CreateBtrfsSubvolume (@, @home, @snapshots)
+5. CleanupUnmount (unmount raw root)
+6. MountFilesystem (options: subvol=@)
+7. InstallBaseSystem
+8. GenerateFstab (mount service to <etc_target>/etc/systemd/system/)
+9. PersistNetworkConfig (networkd unit + wpa config to <etc_target>/etc/)
+10. CleanupUnmount (final unmount so systemd doesn't see stale mount)
+
+Steps 5-6 are critical: the remount with `subvol=@` ensures all
+subsequent writes (install, config) go into the @ subvolume, matching
+what the boot mount service uses. Without this, files would go to
+the btrfs root and be invisible after boot.
 
 ## Btrfs RAID mount:
 
