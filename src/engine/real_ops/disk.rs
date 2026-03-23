@@ -140,11 +140,13 @@ pub fn generate_mount_service(mount_point: &str, device: &str, fs_type: &str) ->
          After=local-fs-pre.target\n\
          Before=local-fs.target multi-user.target\n\
          \n\
+         ConditionPathIsMountPoint=!{mount_point}\n\
+         \n\
          [Service]\n\
          Type=oneshot\n\
          RemainAfterExit=yes\n\
-         ExecStartPre=/usr/bin/mkdir -p {mount_point}\n\
-         ExecStartPre=/usr/bin/btrfs device scan\n\
+         ExecStartPre=-/usr/bin/mkdir -p {mount_point}\n\
+         ExecStartPre=-/usr/bin/btrfs device scan\n\
          ExecStart=/usr/bin/mount -t {fs_type} -o defaults,subvol=@ {device} {mount_point}\n\
          ExecStop=/usr/bin/umount {mount_point}\n\
          \n\
@@ -177,6 +179,14 @@ mod tests {
         assert!(content.contains("Before=local-fs.target multi-user.target"), "missing ordering");
         assert!(content.contains("btrfs device scan"), "missing device scan");
         assert!(content.contains("mkdir -p /town-os"), "missing mkdir");
+        assert!(
+            content.contains("ConditionPathIsMountPoint=!/town-os"),
+            "missing already-mounted check"
+        );
+        assert!(
+            content.contains("ExecStartPre=-"),
+            "ExecStartPre should ignore failures with - prefix"
+        );
     }
 
     #[test]

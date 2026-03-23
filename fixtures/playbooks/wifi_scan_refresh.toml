@@ -36,6 +36,7 @@ expected_operation_types = [
     "InstallBaseSystem",
     "GenerateFstab",
     "PersistNetworkConfig",
+    "CleanupUnmount",
 ]
 
 [[simulated_responses]]

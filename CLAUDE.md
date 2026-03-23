@@ -245,9 +245,17 @@ is written to `<mount>/etc/systemd/system/` and enabled via symlink in
 - Uses a service unit (not a .mount unit) to avoid systemd's
   path-escaping issues with hyphens in mount points
 
+The service uses `ConditionPathIsMountPoint=!<mount>` to succeed
+immediately if already mounted, and `-` prefix on ExecStartPre so
+mkdir and btrfs scan failures are non-fatal.
+
 A .mount unit is NOT used because systemd interprets hyphens in unit
 names as path separators (`town-os.mount` → `/town/os`), which is wrong.
 Fstab is NOT used because `/etc` is an overlay of `/town-os/etc`.
+
+After a successful install, the volume is unmounted (`CleanupUnmount`)
+so systemd doesn't see it in `/proc/mounts` and auto-generate an
+invalid `town-os.mount` unit. The service handles remounting on boot.
 
 ## Root partition and /etc write policy:
 

@@ -32,4 +32,5 @@ expected_operation_types = [
     "InstallBaseSystem",
     "GenerateFstab",
     "PersistNetworkConfig",
+    "CleanupUnmount",
 ]

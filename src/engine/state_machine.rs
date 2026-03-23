@@ -744,6 +744,15 @@ impl InstallerStateMachine {
                     .record(op, persist_result.to_outcome());
             }
 
+            // Unmount the volume so systemd doesn't see it in /proc/mounts
+            // and try to auto-generate an invalid town-os.mount unit
+            let unmount_op = Operation::CleanupUnmount {
+                mount_point: self.mount_point.clone(),
+            };
+            let unmount_result = executor.execute(&unmount_op);
+            self.action_manifest
+                .record(unmount_op, unmount_result.to_outcome());
+
             self.action_manifest.final_state = InstallerFinalState::Installed;
         }
 
