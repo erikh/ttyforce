@@ -119,6 +119,8 @@ Detection uses systemd dbus interfaces with sysfs/command fallbacks. Negative re
 
 ## Testing
 
+Tests *do not* touch the host and do not require root. They use containers, so a VM is also a good place to test.
+
 ```bash
 # Unit + fixture + scenario + playbook + CLI tests (includes lint)
 make test
