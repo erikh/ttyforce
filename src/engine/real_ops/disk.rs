@@ -67,7 +67,7 @@ pub fn create_btrfs_subvolume(mount_point: &str, name: &str) -> OperationResult 
 
 /// Mount a filesystem at the given mount point, creating the directory if needed.
 /// For btrfs, runs `btrfs device scan` first so RAID members are discovered.
-pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str) -> OperationResult {
+pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str, options: Option<&str>) -> OperationResult {
     if let Err(e) = fs::create_dir_all(mount_point) {
         return OperationResult::Error(format!(
             "failed to create mount point {}: {}",
@@ -80,7 +80,13 @@ pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str) -> Opera
         let _ = run_cmd("btrfs", &["device", "scan"]);
     }
 
-    match run_cmd("mount", &["-t", fs_type, device, mount_point]) {
+    let result = if let Some(opts) = options {
+        run_cmd("mount", &["-t", fs_type, "-o", opts, device, mount_point])
+    } else {
+        run_cmd("mount", &["-t", fs_type, device, mount_point])
+    };
+
+    match result {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!(
             "failed to mount {} at {}: {}",

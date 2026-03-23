@@ -75,7 +75,8 @@ pub fn execute(op: &Operation) -> OperationResult {
             device,
             mount_point,
             fs_type,
-        } => mount_filesystem_syscall(device, mount_point, fs_type),
+            ref options,
+        } => mount_filesystem_syscall(device, mount_point, fs_type, options.as_deref()),
 
         // Generate fstab
         Operation::GenerateFstab {
@@ -110,7 +111,7 @@ pub fn execute(op: &Operation) -> OperationResult {
 
 /// Mount a filesystem using the mount(2) syscall.
 /// For btrfs, runs `btrfs device scan` first so RAID members are discovered.
-fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str) -> OperationResult {
+fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str, options: Option<&str>) -> OperationResult {
     if let Err(e) = fs::create_dir_all(mount_point) {
         return OperationResult::Error(format!(
             "failed to create mount point {}: {}",
@@ -128,7 +129,7 @@ fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str) -> O
         mount_point,
         Some(fs_type),
         nix::mount::MsFlags::empty(),
-        None::<&str>,
+        options,
     ) {
         Ok(_) => OperationResult::Success,
         Err(e) => OperationResult::Error(format!(

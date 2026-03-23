@@ -93,7 +93,8 @@ pub fn execute(op: &Operation) -> OperationResult {
             device,
             mount_point,
             fs_type,
-        } => disk::mount_filesystem(device, mount_point, fs_type),
+            ref options,
+        } => disk::mount_filesystem(device, mount_point, fs_type, options.as_deref()),
 
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),

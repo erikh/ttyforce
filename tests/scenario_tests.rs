@@ -1165,12 +1165,12 @@ fn test_cleanup_unmount_after_successful_install() {
         op_types
     );
 
-    // CleanupUnmount should come after InstallBaseSystem
+    // The final CleanupUnmount should come after InstallBaseSystem
     let install_pos = op_types.iter().position(|t| *t == "InstallBaseSystem").unwrap();
-    let unmount_pos = op_types.iter().position(|t| *t == "CleanupUnmount").unwrap();
+    let unmount_pos = op_types.iter().rposition(|t| *t == "CleanupUnmount").unwrap();
     assert!(
         unmount_pos > install_pos,
-        "CleanupUnmount should come after InstallBaseSystem"
+        "final CleanupUnmount should come after InstallBaseSystem"
     );
 }
 

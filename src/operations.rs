@@ -84,6 +84,8 @@ pub enum Operation {
         device: String,
         mount_point: String,
         fs_type: String,
+        #[serde(default)]
+        options: Option<String>,
     },
 
     // System operations
@@ -197,7 +199,14 @@ impl std::fmt::Display for Operation {
                 device,
                 mount_point,
                 fs_type,
-            } => write!(f, "Mount {} ({}) at {}", device, fs_type, mount_point),
+                options,
+            } => {
+                if let Some(opts) = options {
+                    write!(f, "Mount {} ({}, {}) at {}", device, fs_type, opts, mount_point)
+                } else {
+                    write!(f, "Mount {} ({}) at {}", device, fs_type, mount_point)
+                }
+            }
             Operation::InstallBaseSystem { target } => {
                 write!(f, "Install base system to {}", target)
             }

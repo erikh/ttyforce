@@ -35,6 +35,8 @@ expected_operation_types = [
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",
+    "CleanupUnmount",
+    "MountFilesystem",
     "InstallBaseSystem",
     "GenerateFstab",
     "PersistNetworkConfig",

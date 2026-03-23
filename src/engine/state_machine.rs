@@ -691,12 +691,13 @@ impl InstallerStateMachine {
             }
         }
 
-        // Mount the new filesystem
+        // Mount the new filesystem (raw btrfs root for subvolume creation)
         let mount_device = super::real_ops::disk::partition_path(&devices[0]);
         let mount_op = Operation::MountFilesystem {
             device: mount_device,
             mount_point: self.mount_point.clone(),
             fs_type: "btrfs".to_string(),
+            options: None,
         };
         let mount_result = executor.execute(&mount_op);
         self.action_manifest
@@ -717,6 +718,34 @@ impl InstallerStateMachine {
             };
             let result = executor.execute(&op);
             self.action_manifest.record(op, result.to_outcome());
+        }
+
+        // Remount with subvol=@ so all subsequent writes (install, config
+        // persistence) go into the @ subvolume, matching what the boot
+        // mount service uses.
+        let unmount_op = Operation::CleanupUnmount {
+            mount_point: self.mount_point.clone(),
+        };
+        let unmount_result = executor.execute(&unmount_op);
+        self.action_manifest
+            .record(unmount_op, unmount_result.to_outcome());
+
+        let remount_device = super::real_ops::disk::partition_path(&devices[0]);
+        let remount_op = Operation::MountFilesystem {
+            device: remount_device,
+            mount_point: self.mount_point.clone(),
+            fs_type: "btrfs".to_string(),
+            options: Some("subvol=@".to_string()),
+        };
+        let remount_result = executor.execute(&remount_op);
+        self.action_manifest
+            .record(remount_op, remount_result.to_outcome());
+        if remount_result.is_error() {
+            self.action_manifest.final_state =
+                InstallerFinalState::Error(format!("Remount with subvol=@ failed: {:?}", remount_result));
+            self.error_message = Some("Failed to remount with subvol=@".to_string());
+            self.current_screen = ScreenId::InstallProgress;
+            return Some(ScreenId::InstallProgress);
         }
 
         // Install base system
