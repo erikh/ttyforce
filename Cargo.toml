@@ -8,7 +8,6 @@ license = "MIT"
 repository = "https://github.com/erikh/ttyforce"
 homepage = "https://github.com/erikh/ttyforce"
 readme = "README.md"
-changelog = "CHANGELOG.md"
 keywords = ["tui", "installer", "linux"]
 categories = ["command-line-utilities"]
 

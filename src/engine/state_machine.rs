@@ -858,7 +858,7 @@ impl InstallerStateMachine {
         }
 
         // Mount the new filesystem
-        let mount_device = format!("{}1", devices[0]);
+        let mount_device = super::real_ops::disk::partition_path(&devices[0]);
         let mount_op = Operation::MountFilesystem {
             device: mount_device,
             mount_point: self.mount_point.clone(),
