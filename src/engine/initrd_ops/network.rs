@@ -783,7 +783,7 @@ pub fn cleanup_wpa_supplicant(interface: &str) -> OperationResult {
 
 /// Persist the network configuration established during the initrd session
 /// to the installed system's /etc so it boots with working networking.
-pub fn persist_network_config(mount_point: &str, interface: &str) -> OperationResult {
+pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &str) -> OperationResult {
     let target_networkd_dir = format!("{}/etc/systemd/network", mount_point);
     if let Err(e) = fs::create_dir_all(&target_networkd_dir) {
         return OperationResult::Error(format!(
@@ -792,7 +792,11 @@ pub fn persist_network_config(mount_point: &str, interface: &str) -> OperationRe
         ));
     }
 
-    let network_unit = generate_persist_network_config(interface);
+    cmd_log_append(format!(
+        "$ persist network config: iface={} mac={} -> {}/etc/",
+        interface, mac_address, mount_point
+    ));
+    let network_unit = generate_persist_network_config(interface, mac_address);
     let network_path = format!("{}/20-{}.network", target_networkd_dir, interface);
     if let Err(e) = fs::write(&network_path, &network_unit) {
         return OperationResult::Error(format!(
@@ -830,11 +834,21 @@ pub fn persist_network_config(mount_point: &str, interface: &str) -> OperationRe
 // ── Pure helpers ────────────────────────────────────────────────────────
 
 /// Generate a systemd-networkd .network unit for persisting to the installed system.
-pub fn generate_persist_network_config(interface: &str) -> String {
-    format!(
-        "[Match]\nName={}\n\n[Network]\nDHCP=yes\n",
-        interface
-    )
+/// Uses MACAddress matching so the config works regardless of interface naming
+/// scheme (initrd may use eth0 while booted system uses enp3s0).
+pub fn generate_persist_network_config(interface: &str, mac_address: &str) -> String {
+    if mac_address.is_empty() || mac_address == "00:00:00:00:00:00" {
+        // Fallback to name matching if MAC is unavailable
+        format!(
+            "[Match]\nName={}\n\n[Network]\nDHCP=yes\n",
+            interface
+        )
+    } else {
+        format!(
+            "[Match]\nMACAddress={}\n\n[Network]\nDHCP=yes\n",
+            mac_address
+        )
+    }
 }
 
 /// Generate a wpa_supplicant config for a wifi network.
@@ -852,18 +866,26 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_generate_persist_network_config() {
-        let config = generate_persist_network_config("eth0");
+    fn test_generate_persist_network_config_with_mac() {
+        let config = generate_persist_network_config("eth0", "aa:bb:cc:dd:ee:ff");
         assert!(config.contains("[Match]"));
-        assert!(config.contains("Name=eth0"));
+        assert!(config.contains("MACAddress=aa:bb:cc:dd:ee:ff"));
+        assert!(!config.contains("Name="), "should use MAC, not name");
         assert!(config.contains("DHCP=yes"));
     }
 
     #[test]
-    fn test_generate_persist_network_config_wifi() {
-        let config = generate_persist_network_config("wlan0");
+    fn test_generate_persist_network_config_no_mac_fallback() {
+        let config = generate_persist_network_config("eth0", "");
+        assert!(config.contains("Name=eth0"));
+        assert!(!config.contains("MACAddress"));
+    }
+
+    #[test]
+    fn test_generate_persist_network_config_zero_mac_fallback() {
+        let config = generate_persist_network_config("wlan0", "00:00:00:00:00:00");
         assert!(config.contains("Name=wlan0"));
-        assert!(config.contains("DHCP=yes"));
+        assert!(!config.contains("MACAddress"));
     }
 
     #[test]
@@ -1132,9 +1154,9 @@ subnet_mask=255.255.255.0
 
     #[test]
     fn test_generate_persist_network_config_is_valid_networkd() {
-        let config = generate_persist_network_config("enp3s0");
+        let config = generate_persist_network_config("enp3s0", "11:22:33:44:55:66");
         assert!(config.starts_with("[Match]"));
-        assert!(config.contains("Name=enp3s0"));
+        assert!(config.contains("MACAddress=11:22:33:44:55:66"));
         assert!(config.contains("[Network]"));
         assert!(config.contains("DHCP=yes"));
     }

@@ -183,11 +183,18 @@ dbus calls. Two executor backends exist:
 ## Config persistence:
 
 After a successful install, the `PersistNetworkConfig` operation writes:
-- `<mount>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
-- `<mount>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
+- `<etc_target>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
+  matched by MAC address (not interface name) so it works regardless of
+  interface naming scheme (initrd may use `eth0` while booted system uses
+  `enp3s0`). Falls back to name matching if MAC is unavailable.
+- `<etc_target>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
   used, copies the wpa_supplicant config from `/tmp/`
 
-This ensures the installed system boots with working networking.
+The `etc_target` defaults to the mount point but can be overridden with
+the `--etc-target` flag on the `initrd` subcommand.
+
+systemd-networkd must be enabled on the installed system to pick up
+the `.network` file. ttyforce assumes it is already enabled.
 
 ## DNS / nameserver setup in initrd:
 

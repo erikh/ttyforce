@@ -107,6 +107,7 @@ pub enum Operation {
     PersistNetworkConfig {
         mount_point: String,
         interface: String,
+        mac_address: String,
     },
 
     // Cleanup operations (emitted on abort to revert artifacts)
@@ -215,6 +216,7 @@ impl std::fmt::Display for Operation {
             Operation::PersistNetworkConfig {
                 mount_point,
                 interface,
+                ..
             } => write!(
                 f,
                 "Persist network config for {} to {}",

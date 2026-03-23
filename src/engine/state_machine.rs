@@ -744,10 +744,17 @@ impl InstallerStateMachine {
                 .record(fstab_op, fstab_result.to_outcome());
 
             // Persist network configuration to the installed system
-            if let Some(ref iface) = self.selected_interface {
+            if let Some(ref iface_name) = self.selected_interface {
+                let mac = self
+                    .interfaces
+                    .iter()
+                    .find(|i| &i.name == iface_name)
+                    .map(|i| i.mac.clone())
+                    .unwrap_or_default();
                 let op = Operation::PersistNetworkConfig {
                     mount_point: etc.clone(),
-                    interface: iface.clone(),
+                    interface: iface_name.clone(),
+                    mac_address: mac,
                 };
                 let persist_result = executor.execute(&op);
                 self.action_manifest

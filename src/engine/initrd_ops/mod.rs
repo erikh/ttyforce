@@ -88,7 +88,8 @@ pub fn execute(op: &Operation) -> OperationResult {
         Operation::PersistNetworkConfig {
             mount_point,
             interface,
-        } => network::persist_network_config(mount_point, interface),
+            mac_address,
+        } => network::persist_network_config(mount_point, interface, mac_address),
 
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),
