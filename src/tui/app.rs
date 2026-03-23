@@ -95,12 +95,13 @@ impl App {
     fn render(&self, f: &mut ratatui::Frame) {
         let area = f.area();
 
-        // Outer layout: title bar, content area, status bar
+        // Outer layout: title bar, content area, command log, status bar
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Min(0),
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
                 Constraint::Length(3),
             ])
             .split(area);
@@ -116,8 +117,11 @@ impl App {
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, outer[0]);
 
-        // Main content — centered proportionally
+        // Main content
         self.render_screen(f, outer[1]);
+
+        // Command log pane
+        self.render_cmd_log(f, outer[2]);
 
         // Status bar
         let status = match &self.state_machine.error_message {
@@ -131,7 +135,36 @@ impl App {
         let status = status
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
-        f.render_widget(status, outer[2]);
+        f.render_widget(status, outer[3]);
+    }
+
+    fn render_cmd_log(&self, f: &mut ratatui::Frame, area: Rect) {
+        let log = crate::engine::real_ops::cmd_log();
+        let block = Block::default()
+            .title(" Command Output ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner_height = area.height.saturating_sub(2) as usize; // border top+bottom
+        let start = log.len().saturating_sub(inner_height);
+        let visible: Vec<Line> = log[start..]
+            .iter()
+            .map(|line| {
+                let style = if line.starts_with('$') {
+                    Style::default().fg(Color::Yellow)
+                } else if line.contains("FAILED") || line.contains("error:") || line.contains("err:") {
+                    Style::default().fg(Color::Red)
+                } else if line.contains("-> ok") {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(line.as_str(), style))
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(visible).block(block);
+        f.render_widget(paragraph, area);
     }
 
     fn render_screen(&self, f: &mut ratatui::Frame, area: Rect) {

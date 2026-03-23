@@ -2,10 +2,32 @@ pub mod disk;
 pub mod network;
 pub mod system;
 
+use std::io::Write;
 use std::process::Command;
+use std::sync::Mutex;
 
 use crate::engine::feedback::OperationResult;
 use crate::operations::Operation;
+
+// ── Global command log ──────────────────────────────────────────────────
+
+static CMD_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Get a snapshot of the command log.
+pub fn cmd_log() -> Vec<String> {
+    CMD_LOG.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Append a message to the command log and write it to /dev/console.
+pub fn cmd_log_append(msg: String) {
+    if let Ok(mut log) = CMD_LOG.lock() {
+        log.push(msg.clone());
+    }
+    // Best-effort write to /dev/console for serial debugging
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/console") {
+        let _ = writeln!(f, "{}", msg);
+    }
+}
 
 /// Execute an operation using real system commands and dbus calls.
 pub fn execute(op: &Operation) -> OperationResult {
@@ -94,16 +116,48 @@ pub fn execute(op: &Operation) -> OperationResult {
 }
 
 /// Run a command and return stdout on success or stderr on failure.
+/// Logs the command and its output to the global command log and /dev/console.
 pub fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
+    let cmd_str = if args.is_empty() {
+        program.to_string()
+    } else {
+        format!("{} {}", program, args.join(" "))
+    };
+    cmd_log_append(format!("$ {}", cmd_str));
+
     let output = Command::new(program)
         .args(args)
         .output()
-        .map_err(|e| format!("{}: {}", program, e))?;
+        .map_err(|e| {
+            let msg = format!("{}: {}", program, e);
+            cmd_log_append(format!("  error: {}", msg));
+            msg
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // Log output (truncate long output)
+    for line in stdout.lines().take(5) {
+        if !line.trim().is_empty() {
+            cmd_log_append(format!("  {}", line));
+        }
+    }
+    if stdout.lines().count() > 5 {
+        cmd_log_append(format!("  ... ({} more lines)", stdout.lines().count() - 5));
+    }
+    for line in stderr.lines().take(3) {
+        if !line.trim().is_empty() {
+            cmd_log_append(format!("  err: {}", line));
+        }
+    }
+
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        cmd_log_append(format!("  -> ok (exit {})", output.status.code().unwrap_or(0)));
+        Ok(stdout)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let code = output.status.code().unwrap_or(-1);
+        cmd_log_append(format!("  -> FAILED (exit {})", code));
         Err(if stderr.is_empty() { stdout } else { stderr })
     }
 }

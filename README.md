@@ -75,6 +75,12 @@ Disks are automatically grouped by make and model. The filesystem is always Btrf
 
 The installation target mount point defaults to `/town-os`.
 
+### Command output pane
+
+The bottom half of the TUI shows a live command output log. Every shell command and syscall operation is logged with its arguments and result. Commands are color-coded: yellow for the command line, green for success, red for errors.
+
+The same log is also written to `/dev/console` for serial console debugging when the TUI is running on a different TTY.
+
 ### Final screen
 
 After installation completes (or is aborted), the final screen offers three choices:

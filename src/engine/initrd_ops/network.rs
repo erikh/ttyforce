@@ -7,7 +7,7 @@ use crate::detect::network::{parse_iw_scan, parse_iwlist_scan};
 use crate::engine::feedback::OperationResult;
 use crate::network::wifi::WifiNetwork;
 
-use crate::engine::real_ops::run_cmd;
+use crate::engine::real_ops::{cmd_log_append, run_cmd};
 
 // ── Interface management (ioctl) ────────────────────────────────────────
 
@@ -15,22 +15,26 @@ use crate::engine::real_ops::run_cmd;
 /// Waits up to 5 seconds for carrier to appear after bringing the interface up,
 /// since carrier detection is asynchronous.
 pub fn enable_interface(interface: &str) -> OperationResult {
+    cmd_log_append(format!("$ ioctl SIOCSIFFLAGS IFF_UP on {}", interface));
     if let Err(e) = set_interface_up(interface, true) {
+        cmd_log_append(format!("  -> FAILED: {}", e));
         return OperationResult::Error(format!("failed to enable {}: {}", interface, e));
     }
 
     // Wait for carrier — ioctl IFF_UP is asynchronous
+    cmd_log_append(format!("  waiting for carrier on {} ...", interface));
     let carrier_path = format!("/sys/class/net/{}/carrier", interface);
-    for _ in 0..50 {
+    for i in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if let Ok(val) = fs::read_to_string(&carrier_path) {
             if val.trim() == "1" {
+                cmd_log_append(format!("  -> carrier up after {}ms", (i + 1) * 100));
                 return OperationResult::Success;
             }
         }
     }
 
-    // Interface is up but no carrier yet — still success, let the link check handle it
+    cmd_log_append("  -> no carrier after 5s (continuing)".to_string());
     OperationResult::Success
 }
 
@@ -261,7 +265,13 @@ fn try_trigger_dhcp(interface: &str) -> OperationResult {
 fn write_resolv_conf_from_lease(interface: &str) {
     if let Ok(output) = run_cmd("dhcpcd", &["--dumplease", interface]) {
         if let Some(content) = parse_dhcpcd_lease_dns(&output) {
+            cmd_log_append("$ write /etc/resolv.conf from lease".to_string());
+            for line in content.lines() {
+                cmd_log_append(format!("  {}", line));
+            }
             let _ = fs::write("/etc/resolv.conf", content);
+        } else {
+            cmd_log_append("  no DNS servers in lease".to_string());
         }
     }
 }
@@ -307,10 +317,20 @@ pub fn select_primary_interface(_interface: &str) -> OperationResult {
 /// Check link availability via sysfs.
 pub fn check_link_availability(interface: &str) -> OperationResult {
     let carrier_path = format!("/sys/class/net/{}/carrier", interface);
+    cmd_log_append(format!("$ cat {}", carrier_path));
     match fs::read_to_string(&carrier_path) {
-        Ok(val) if val.trim() == "1" => OperationResult::LinkUp,
-        Ok(_) => OperationResult::LinkDown,
-        Err(_) => OperationResult::LinkDown,
+        Ok(val) if val.trim() == "1" => {
+            cmd_log_append("  -> carrier=1 (link up)".to_string());
+            OperationResult::LinkUp
+        }
+        Ok(val) => {
+            cmd_log_append(format!("  -> carrier={} (link down)", val.trim()));
+            OperationResult::LinkDown
+        }
+        Err(e) => {
+            cmd_log_append(format!("  -> error: {} (link down)", e));
+            OperationResult::LinkDown
+        }
     }
 }
 
@@ -322,6 +342,7 @@ pub fn check_ip_address(interface: &str) -> OperationResult {
 
 /// Read the IPv4 address for an interface from the ioctl SIOCGIFADDR.
 fn check_ip_sysfs(interface: &str) -> OperationResult {
+    cmd_log_append(format!("$ ioctl SIOCGIFADDR on {}", interface));
     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
     if sock < 0 {
         return OperationResult::NoIp;
@@ -353,8 +374,10 @@ fn check_ip_sysfs(interface: &str) -> OperationResult {
     let ip = Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr));
 
     if ip.is_unspecified() {
+        cmd_log_append("  -> no IP assigned".to_string());
         OperationResult::NoIp
     } else {
+        cmd_log_append(format!("  -> {}", ip));
         OperationResult::IpAssigned(ip.to_string())
     }
 }
@@ -392,9 +415,16 @@ pub fn check_upstream_router(interface: &str) -> OperationResult {
 /// Check internet routability by sending an ICMP echo request to 1.1.1.1.
 /// Uses a raw socket — requires CAP_NET_RAW or root.
 pub fn check_internet_routability(_interface: &str) -> OperationResult {
+    cmd_log_append("$ ping 1.1.1.1 (ICMP echo)".to_string());
     match icmp_ping(Ipv4Addr::new(1, 1, 1, 1), std::time::Duration::from_secs(3)) {
-        Ok(_) => OperationResult::InternetReachable,
-        Err(_) => OperationResult::NoInternet,
+        Ok(_) => {
+            cmd_log_append("  -> reply received".to_string());
+            OperationResult::InternetReachable
+        }
+        Err(e) => {
+            cmd_log_append(format!("  -> FAILED: {}", e));
+            OperationResult::NoInternet
+        }
     }
 }
 
@@ -558,12 +588,19 @@ fn icmp_checksum(data: &[u8]) -> u16 {
 
 /// Check DNS resolution using a direct UDP DNS query.
 pub fn check_dns_resolution(_interface: &str, hostname: &str) -> OperationResult {
+    cmd_log_append(format!("$ dns resolve {}", hostname));
     match dns_resolve(hostname) {
-        Ok(ip) => OperationResult::DnsResolved(ip),
-        Err(e) => OperationResult::DnsFailed(format!(
-            "DNS resolution failed for {}: {}",
-            hostname, e
-        )),
+        Ok(ip) => {
+            cmd_log_append(format!("  -> {}", ip));
+            OperationResult::DnsResolved(ip)
+        }
+        Err(e) => {
+            cmd_log_append(format!("  -> FAILED: {}", e));
+            OperationResult::DnsFailed(format!(
+                "DNS resolution failed for {}: {}",
+                hostname, e
+            ))
+        }
     }
 }
 
