@@ -191,6 +191,32 @@ After a successful install, the `PersistNetworkConfig` operation writes:
 
 This ensures the installed system boots with working networking.
 
+## DNS / nameserver setup in initrd:
+
+After dhcpcd obtains a DHCP lease, `/etc/resolv.conf` is written from
+the lease data using this fallback chain:
+1. `dhcpcd --dumplease <iface>` — parse `domain_name_servers=` field
+2. `dhcpcd -U <iface>` — alternative dump format
+3. Check if `/etc/resolv.conf` already has nameservers (dhcpcd hooks)
+4. Fallback: write `1.1.1.1` and `8.8.8.8` as default nameservers
+
+This is necessary because initrd environments often lack dhcpcd's
+hook scripts that normally manage resolv.conf.
+
+## Command output pane:
+
+The TUI has a persistent command log pane in the bottom half of the
+screen, visible on every screen. All shell commands and syscall
+operations are logged with arguments and results, color-coded:
+- Yellow: command invocation (`$ cmd args`)
+- Green: success (`-> ok`)
+- Red: errors (`-> FAILED`, `error:`)
+
+## Serial console logging:
+
+All command log entries are also written to `/dev/ttyS0` (serial
+console) for debugging when the TUI is running on a different TTY.
+
 ## Internet accessibility:
 
 The installer ensures internet is accessible before proceeding to disk

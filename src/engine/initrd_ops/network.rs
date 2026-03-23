@@ -263,6 +263,7 @@ fn try_trigger_dhcp(interface: &str) -> OperationResult {
 /// Read DNS servers from the dhcpcd lease and write /etc/resolv.conf.
 /// Best-effort: if the lease can't be read, resolv.conf is left unchanged.
 fn write_resolv_conf_from_lease(interface: &str) {
+    // Try dhcpcd --dumplease first
     if let Ok(output) = run_cmd("dhcpcd", &["--dumplease", interface]) {
         if let Some(content) = parse_dhcpcd_lease_dns(&output) {
             cmd_log_append("$ write /etc/resolv.conf from lease".to_string());
@@ -270,10 +271,34 @@ fn write_resolv_conf_from_lease(interface: &str) {
                 cmd_log_append(format!("  {}", line));
             }
             let _ = fs::write("/etc/resolv.conf", content);
-        } else {
-            cmd_log_append("  no DNS servers in lease".to_string());
+            return;
         }
     }
+
+    // Try dhcpcd -U (alternative dump format)
+    if let Ok(output) = run_cmd("dhcpcd", &["-U", interface]) {
+        if let Some(content) = parse_dhcpcd_lease_dns(&output) {
+            cmd_log_append("$ write /etc/resolv.conf from dhcpcd -U".to_string());
+            for line in content.lines() {
+                cmd_log_append(format!("  {}", line));
+            }
+            let _ = fs::write("/etc/resolv.conf", content);
+            return;
+        }
+    }
+
+    // Check if resolv.conf already has nameservers (dhcpcd hooks may have written it)
+    if let Ok(existing) = fs::read_to_string("/etc/resolv.conf") {
+        if existing.lines().any(|l| l.trim().starts_with("nameserver")) {
+            cmd_log_append("  /etc/resolv.conf already has nameservers".to_string());
+            return;
+        }
+    }
+
+    // Last resort: write a default resolv.conf
+    cmd_log_append("$ write /etc/resolv.conf with fallback nameservers".to_string());
+    let fallback = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n";
+    let _ = fs::write("/etc/resolv.conf", fallback);
 }
 
 /// Parse dhcpcd --dumplease output and generate resolv.conf content.
@@ -1023,5 +1048,47 @@ lease_time=86400
 
         assert!(result.is_error());
         assert_eq!(POLL_CALLED.load(Ordering::SeqCst), 0);
+    }
+
+    // Resolv.conf / nameserver tests
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_multiple_nameservers() {
+        let lease = "domain_name_servers=1.1.1.1 8.8.8.8 9.9.9.9\n";
+        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        assert!(result.contains("nameserver 1.1.1.1\n"));
+        assert!(result.contains("nameserver 8.8.8.8\n"));
+        assert!(result.contains("nameserver 9.9.9.9\n"));
+    }
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_with_other_fields() {
+        // Realistic dhcpcd --dumplease output
+        let lease = "\
+broadcast_address=192.168.1.255
+dhcp_lease_time=86400
+dhcp_message_type=5
+dhcp_server_identifier=192.168.1.1
+domain_name='home.local'
+domain_name_servers=192.168.1.1
+ip_address=192.168.1.50
+network_number=192.168.1.0
+routers=192.168.1.1
+subnet_mask=255.255.255.0
+";
+        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        assert!(result.contains("search home.local\n"));
+        assert!(result.contains("nameserver 192.168.1.1\n"));
+        // Should not contain other lease fields
+        assert!(!result.contains("broadcast"));
+        assert!(!result.contains("routers"));
+    }
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_domain_with_quotes() {
+        let lease = "domain_name='mynet.example.com'\ndomain_name_servers=10.0.0.1\n";
+        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        assert!(result.contains("search mynet.example.com\n"));
+        assert!(!result.contains("'")); // quotes should be stripped
     }
 }

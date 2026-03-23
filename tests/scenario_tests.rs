@@ -918,3 +918,167 @@ fn test_invalid_raid_selection() {
     assert!(result.is_none());
     assert!(sm.error_message.is_some());
 }
+
+// === advance_connectivity tests ===
+
+#[test]
+fn test_advance_connectivity_full_flow() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Start ethernet — goes to NetworkProgress
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+
+    // Drive through all steps
+    let mut steps = 0;
+    while sm.advance_connectivity(&mut executor) {
+        steps += 1;
+        assert!(steps < 20, "advance_connectivity looping too many times");
+    }
+    assert!(sm.network_state.is_online());
+    assert!(steps > 0, "should have taken at least one step");
+}
+
+#[test]
+fn test_advance_connectivity_retries_router() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+
+    // Router fails first 3 times, then succeeds
+    let mut executor = TestExecutor::new(vec![
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
+            result: OperationResult::NoRouter,
+            consume: true,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
+            result: OperationResult::NoRouter,
+            consume: true,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
+            result: OperationResult::NoRouter,
+            consume: true,
+        },
+    ]);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+
+    // Should eventually succeed (default Success after consumed responses)
+    assert!(sm.network_state.is_online());
+}
+
+#[test]
+fn test_advance_connectivity_router_max_retries_error() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+
+    // Router always fails
+    let mut executor = TestExecutor::new(vec![SimulatedResponse {
+        operation_match: OperationMatcher::ByType("CheckUpstreamRouter".to_string()),
+        result: OperationResult::NoRouter,
+        consume: false,
+    }]);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+
+    assert!(matches!(sm.network_state, NetworkState::Error(_)));
+    assert!(sm.error_message.is_some());
+    assert!(sm.error_message.as_ref().unwrap().contains("router"));
+}
+
+#[test]
+fn test_advance_connectivity_dns_retries_after_ping() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+
+    // DNS fails 5 times then succeeds
+    let mut responses = Vec::new();
+    for _ in 0..5 {
+        responses.push(SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckDnsResolution".to_string()),
+            result: OperationResult::DnsFailed("timeout".to_string()),
+            consume: true,
+        });
+    }
+    let mut executor = TestExecutor::new(responses);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+
+    // Should succeed — DNS retries until consumed responses are gone, then default Success
+    assert!(sm.network_state.is_online());
+}
+
+#[test]
+fn test_advance_connectivity_wifi_flow() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = TestExecutor::new(vec![
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("ScanWifiNetworks".to_string()),
+            result: OperationResult::WifiScanResults(vec![WifiNetwork {
+                ssid: "TestNet".to_string(),
+                signal_strength: -45,
+                frequency_mhz: 5180,
+                security: ttyforce::manifest::WifiSecurity::Wpa2,
+                reachable: true,
+            }]),
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("AuthenticateWifi".to_string()),
+            result: OperationResult::WifiAuthenticated,
+            consume: true,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckIpAddress".to_string()),
+            result: OperationResult::IpAssigned("10.0.0.5".to_string()),
+            consume: false,
+        },
+    ]);
+
+    // Select wifi
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+
+    // Select network and enter password
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(
+        UserInput::EnterWifiPassword("pass".to_string()),
+        &mut executor,
+    );
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+
+    // Drive connectivity — wifi starts at Connected, then DHCP, then checks
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+}
+
+#[test]
+fn test_advance_connectivity_no_interface_returns_false() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+    // Don't select any interface
+    assert!(!sm.advance_connectivity(&mut executor));
+}
+
+#[test]
+fn test_advance_connectivity_online_returns_false() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+
+    // Should return false — already online
+    assert!(!sm.advance_connectivity(&mut executor));
+}

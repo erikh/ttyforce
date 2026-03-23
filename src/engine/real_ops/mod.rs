@@ -23,8 +23,8 @@ pub fn cmd_log_append(msg: String) {
     if let Ok(mut log) = CMD_LOG.lock() {
         log.push(msg.clone());
     }
-    // Best-effort write to /dev/console for serial debugging
-    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/console") {
+    // Best-effort write to serial console for debugging
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/ttyS0") {
         let _ = writeln!(f, "{}", msg);
     }
 }
@@ -159,5 +159,45 @@ pub fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
         let code = output.status.code().unwrap_or(-1);
         cmd_log_append(format!("  -> FAILED (exit {})", code));
         Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cmd_log_append_and_read() {
+        cmd_log_append("test_marker_append".to_string());
+        let log = cmd_log();
+        assert!(log.iter().any(|l| l == "test_marker_append"));
+    }
+
+    #[test]
+    fn test_run_cmd_logs_success() {
+        // Use a unique marker so parallel tests don't interfere
+        let result = run_cmd("echo", &["unique_success_marker_42"]);
+        assert!(result.is_ok());
+        let log = cmd_log();
+        assert!(log.iter().any(|l| l.contains("$ echo unique_success_marker_42")));
+        assert!(log.iter().any(|l| l.contains("unique_success_marker_42") && !l.starts_with('$')));
+    }
+
+    #[test]
+    fn test_run_cmd_logs_failure() {
+        let result = run_cmd("false", &[]);
+        assert!(result.is_err());
+        let log = cmd_log();
+        assert!(log.iter().any(|l| l.contains("$ false")));
+        assert!(log.iter().any(|l| l.contains("FAILED")));
+    }
+
+    #[test]
+    fn test_run_cmd_logs_nonexistent_command() {
+        let result = run_cmd("nonexistent_command_xyz_99", &[]);
+        assert!(result.is_err());
+        let log = cmd_log();
+        assert!(log.iter().any(|l| l.contains("$ nonexistent_command_xyz_99")));
+        assert!(log.iter().any(|l| l.contains("error:") && l.contains("nonexistent_command_xyz_99")));
     }
 }
