@@ -198,10 +198,12 @@ fn test_ethernet_auto_detect() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    // Connected ethernet runs IP/DHCP/connectivity checks, lands on NetworkProgress
+    // Connected ethernet runs IP/DHCP checks, lands on NetworkProgress
     assert_eq!(result, Some(ScreenId::NetworkProgress));
-    assert!(sm.network_state.is_online());
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    // Drive connectivity checks forward (like the TUI loop would)
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
 }
 
 #[test]
@@ -222,9 +224,10 @@ fn test_ethernet_preferred_over_wifi() {
     let mut executor = TestExecutor::new(vec![]);
 
     let result = sm.process_input(UserInput::Confirm, &mut executor);
-    // Connected ethernet runs IP/DHCP/connectivity checks, lands on NetworkProgress
+    // Connected ethernet runs IP/DHCP checks, lands on NetworkProgress
     assert_eq!(result, Some(ScreenId::NetworkProgress));
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 }
 

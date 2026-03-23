@@ -20,9 +20,10 @@ fn run_install(
     raid_idx: usize,
     disk_group_idx: usize,
 ) {
-    // Network auto-detect (connected ethernet runs IP/DHCP/connectivity, lands on NetworkProgress)
+    // Network auto-detect (connected ethernet runs IP/DHCP, lands on NetworkProgress)
     sm.process_input(UserInput::Confirm, executor);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(executor) {}
     sm.process_input(UserInput::Confirm, executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 

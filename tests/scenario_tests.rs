@@ -23,10 +23,11 @@ fn run_ethernet_single_disk_install(
 ) -> InstallerStateMachine {
     let mut sm = InstallerStateMachine::new(hw);
 
-    // Auto-detect network (connected ethernet runs IP/DHCP/connectivity, lands on NetworkProgress)
+    // Auto-detect network (connected ethernet runs IP/DHCP, lands on NetworkProgress)
     sm.process_input(UserInput::Confirm, executor);
-    assert!(sm.network_state.is_online());
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(executor) {}
+    assert!(sm.network_state.is_online());
     sm.process_input(UserInput::Confirm, executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
@@ -72,6 +73,7 @@ fn test_wifi_select_and_connect() {
         &mut executor,
     );
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 }
 
@@ -210,6 +212,7 @@ fn test_wifi_successful_connect_with_ip() {
     );
 
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 
     // Verify IP was assigned to interface
@@ -228,6 +231,7 @@ fn test_default_device_ethernet_first() {
     // Auto-detect should pick ethernet
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 }
 
@@ -265,6 +269,7 @@ fn test_full_install_ethernet_4disk_btrfs_raid5() {
 
     // Network (connected ethernet runs IP/DHCP/connectivity, lands on NetworkProgress)
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
     sm.process_input(UserInput::Confirm, &mut executor);
@@ -328,6 +333,7 @@ fn test_full_install_wifi_1disk() {
         UserInput::EnterWifiPassword("correctpassword".to_string()),
         &mut executor,
     );
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 
     // Continue to raid config
@@ -353,6 +359,7 @@ fn test_ethernet_auto_detect_records_all_ops() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 
     let ops = executor.recorded_operations();
@@ -405,6 +412,7 @@ fn test_ethernet_already_connected_skips_dhcp() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
 
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
 
@@ -510,6 +518,7 @@ fn test_wifi_qr_code_connection() {
     // Use QR code to connect
     let result = sm.connect_wifi_qr("WIFI:T:WPA;S:HomeNetwork;P:correctpassword;;".to_string(), &mut executor);
     assert_eq!(result, Some(ScreenId::NetworkProgress));
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 }
 
@@ -554,6 +563,7 @@ fn test_abort_at_confirmation() {
 
     // Get to confirm screen
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
@@ -575,6 +585,7 @@ fn test_back_navigation() {
     // Get to raid config (connected ethernet → NetworkProgress → RaidConfig)
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
@@ -591,6 +602,7 @@ fn test_back_from_raid_to_network_progress() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
 
@@ -605,6 +617,7 @@ fn test_back_from_confirm_to_disk_group() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
@@ -641,6 +654,7 @@ fn test_wifi_ethernet_4disk_prefers_ethernet() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 }
 
@@ -731,6 +745,7 @@ fn test_non_primary_interfaces_shut_down() {
 
     // Note: shutdown only happens for enabled interfaces, and wifi wasn't enabled
     // This verifies the logic runs without error
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
 }
 
@@ -743,6 +758,7 @@ fn test_invalid_disk_group_selection() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
 
@@ -763,6 +779,7 @@ fn test_abort_after_ethernet_cleanup_ops() {
 
     // Get ethernet online
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::RaidConfig);
@@ -799,6 +816,7 @@ fn test_abort_after_wifi_cleanup_ops() {
         UserInput::EnterWifiPassword("correctpassword".to_string()),
         &mut executor,
     );
+    while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
     sm.process_input(UserInput::Confirm, &mut executor);
 
@@ -854,6 +872,7 @@ fn test_abort_after_install_unmounts() {
 
     // Full install
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
@@ -891,6 +910,7 @@ fn test_invalid_raid_selection() {
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     sm.process_input(UserInput::Confirm, &mut executor);
 
     let result = sm.process_input(UserInput::SelectRaidOption(99), &mut executor);

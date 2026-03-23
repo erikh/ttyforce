@@ -61,8 +61,29 @@ impl App {
 
         while !self.should_quit {
             terminal.draw(|f| self.render(f))?;
-            if let Event::Key(key) = event::read()? {
-                self.handle_key(key, executor);
+
+            // On NetworkProgress, use a poll timeout so we can advance
+            // connectivity checks between renders (showing progress).
+            let on_progress = matches!(
+                self.state_machine.current_screen,
+                ScreenId::NetworkProgress
+            );
+            let timeout = if on_progress {
+                std::time::Duration::from_millis(500)
+            } else {
+                std::time::Duration::from_secs(60)
+            };
+
+            if event::poll(timeout)? {
+                if let Event::Key(key) = event::read()? {
+                    self.handle_key(key, executor);
+                }
+            }
+
+            // Advance connectivity checks one step at a time so the
+            // progress screen updates between each check.
+            if on_progress {
+                self.state_machine.advance_connectivity(executor);
             }
         }
 

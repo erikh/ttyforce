@@ -69,6 +69,7 @@ pub struct InstallerStateMachine {
     pub hardware: HardwareManifest,
     pub error_message: Option<String>,
     pub mount_point: String,
+    connectivity_retries: u32,
 }
 
 impl InstallerStateMachine {
@@ -107,6 +108,7 @@ impl InstallerStateMachine {
             hardware,
             error_message: None,
             mount_point: "/town-os".to_string(),
+            connectivity_retries: 0,
         }
     }
 
@@ -508,50 +510,10 @@ impl InstallerStateMachine {
             }
         }
 
-        // Connectivity checks — fail if internet is not accessible
-        let remaining_ops = [
-            Operation::CheckUpstreamRouter {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckInternetRoutability {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckDnsResolution {
-                interface: iface_name.clone(),
-                hostname: "example.com".to_string(),
-            },
-            Operation::SelectPrimaryInterface {
-                interface: iface_name.clone(),
-            },
-        ];
-
-        let remaining_states = [
-            NetworkState::CheckingRouter,
-            NetworkState::CheckingInternet,
-            NetworkState::CheckingDns,
-            NetworkState::Online,
-        ];
-
-        for (op, state) in remaining_ops.iter().zip(remaining_states.iter()) {
-            let result = executor.execute(op);
-            self.action_manifest.record(op.clone(), result.to_outcome());
-
-            if result.is_error() {
-                self.network_state = NetworkState::Error(format!("{:?}", result));
-                self.error_message = Some(format!("Network error: {:?}", result));
-                self.current_screen = ScreenId::NetworkProgress;
-                return Some(ScreenId::NetworkProgress);
-            }
-
-            self.network_state = state.clone();
-        }
-
-        // Shutdown non-primary interfaces
-        for sop in self.shutdown_other_interfaces(&iface_name) {
-            let sr = executor.execute(&sop);
-            self.action_manifest.record(sop, sr.to_outcome());
-        }
-
+        // Connectivity checks will be driven by advance_connectivity()
+        // from the TUI loop, so the progress screen updates between each step.
+        self.connectivity_retries = 0;
+        self.network_state = NetworkState::IpAssigned;
         self.current_screen = ScreenId::NetworkProgress;
         Some(ScreenId::NetworkProgress)
     }
@@ -712,64 +674,36 @@ impl InstallerStateMachine {
 
         self.network_state = NetworkState::Connected;
 
-        // Now do DHCP and connectivity checks
-        let remaining_ops = [
-            Operation::ConfigureDhcp {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckIpAddress {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckUpstreamRouter {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckInternetRoutability {
-                interface: iface_name.clone(),
-            },
-            Operation::CheckDnsResolution {
-                interface: iface_name.clone(),
-                hostname: "example.com".to_string(),
-            },
-            Operation::SelectPrimaryInterface {
-                interface: iface_name.clone(),
-            },
-        ];
+        // DHCP and IP check before handing off to connectivity checks
+        let dhcp_op = Operation::ConfigureDhcp {
+            interface: iface_name.clone(),
+        };
+        let dhcp_result = executor.execute(&dhcp_op);
+        self.action_manifest
+            .record(dhcp_op, dhcp_result.to_outcome());
+        if dhcp_result.is_error() {
+            self.network_state = NetworkState::Error(format!("{:?}", dhcp_result));
+            self.error_message = Some(format!("DHCP failed: {:?}", dhcp_result));
+            self.current_screen = ScreenId::NetworkProgress;
+            return Some(ScreenId::NetworkProgress);
+        }
+        self.network_state = NetworkState::DhcpConfiguring;
 
-        let states = [
-            NetworkState::DhcpConfiguring,
-            NetworkState::IpAssigned,
-            NetworkState::CheckingRouter,
-            NetworkState::CheckingInternet,
-            NetworkState::CheckingDns,
-            NetworkState::Online,
-        ];
-
-        for (op, state) in remaining_ops.iter().zip(states.iter()) {
-            let result = executor.execute(op);
-            self.action_manifest.record(op.clone(), result.to_outcome());
-
-            if result.is_error() {
-                self.network_state = NetworkState::Error(format!("{:?}", result));
-                self.error_message = Some(format!("Network error: {:?}", result));
-                self.current_screen = ScreenId::NetworkProgress;
-                return Some(ScreenId::NetworkProgress);
-            }
-
-            self.network_state = state.clone();
-
-            if let OperationResult::IpAssigned(ip) = &result {
-                if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
-                    iface.ip_address = Some(ip.clone());
-                }
+        let ip_op = Operation::CheckIpAddress {
+            interface: iface_name.clone(),
+        };
+        let ip_result = executor.execute(&ip_op);
+        self.action_manifest
+            .record(ip_op, ip_result.to_outcome());
+        if let OperationResult::IpAssigned(ip) = &ip_result {
+            if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
+                iface.ip_address = Some(ip.clone());
             }
         }
 
-        // Shutdown non-primary
-        for sop in self.shutdown_other_interfaces(&iface_name) {
-            let sr = executor.execute(&sop);
-            self.action_manifest.record(sop, sr.to_outcome());
-        }
-
+        // Connectivity checks will be driven by advance_connectivity()
+        self.connectivity_retries = 0;
+        self.network_state = NetworkState::IpAssigned;
         self.current_screen = ScreenId::NetworkProgress;
         Some(ScreenId::NetworkProgress)
     }
@@ -987,6 +921,102 @@ impl InstallerStateMachine {
             };
             let result = executor.execute(&op);
             self.action_manifest.record(op, result.to_outcome());
+        }
+    }
+
+    /// Advance one step in the connectivity check sequence.
+    /// Called from the TUI loop on each tick when on NetworkProgress screen.
+    /// Returns true if a step was executed (state changed).
+    pub fn advance_connectivity(&mut self, executor: &mut dyn OperationExecutor) -> bool {
+        let iface_name = match &self.selected_interface {
+            Some(name) => name.clone(),
+            None => return false,
+        };
+
+        const MAX_RETRIES: u32 = 5;
+
+        // Only advance if we're in a non-terminal connectivity state
+        match &self.network_state {
+            NetworkState::IpAssigned => {
+                let op = Operation::CheckUpstreamRouter {
+                    interface: iface_name,
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+                if result.is_error() {
+                    self.connectivity_retries += 1;
+                    if self.connectivity_retries >= MAX_RETRIES {
+                        self.network_state =
+                            NetworkState::Error("No upstream router found".to_string());
+                        self.error_message = Some("No upstream router found".to_string());
+                    }
+                    // else stay in IpAssigned to retry on next tick
+                } else {
+                    self.network_state = NetworkState::CheckingRouter;
+                    self.connectivity_retries = 0;
+                }
+                true
+            }
+            NetworkState::CheckingRouter => {
+                let op = Operation::CheckInternetRoutability {
+                    interface: iface_name,
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+                if result.is_error() {
+                    self.connectivity_retries += 1;
+                    if self.connectivity_retries >= MAX_RETRIES {
+                        self.network_state =
+                            NetworkState::Error("Internet not reachable".to_string());
+                        self.error_message = Some("Internet not reachable".to_string());
+                    }
+                    // else stay in CheckingRouter to retry on next tick
+                } else {
+                    self.network_state = NetworkState::CheckingInternet;
+                    self.connectivity_retries = 0;
+                }
+                true
+            }
+            NetworkState::CheckingInternet => {
+                let op = Operation::CheckDnsResolution {
+                    interface: iface_name,
+                    hostname: "example.com".to_string(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+                if result.is_error() {
+                    self.connectivity_retries += 1;
+                    if self.connectivity_retries >= MAX_RETRIES {
+                        self.network_state =
+                            NetworkState::Error("DNS resolution failed".to_string());
+                        self.error_message =
+                            Some("DNS resolution failed".to_string());
+                    }
+                    // else stay in CheckingInternet to retry on next tick
+                } else {
+                    self.network_state = NetworkState::CheckingDns;
+                    self.connectivity_retries = 0;
+                }
+                true
+            }
+            NetworkState::CheckingDns => {
+                // Select primary and go online
+                let op = Operation::SelectPrimaryInterface {
+                    interface: iface_name.clone(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+
+                // Shutdown non-primary interfaces
+                for sop in self.shutdown_other_interfaces(&iface_name) {
+                    let sr = executor.execute(&sop);
+                    self.action_manifest.record(sop, sr.to_outcome());
+                }
+
+                self.network_state = NetworkState::Online;
+                true
+            }
+            _ => false, // Terminal or pre-IP states — don't advance
         }
     }
 

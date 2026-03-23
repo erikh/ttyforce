@@ -54,6 +54,10 @@ fn run_playbook(name: &str) {
     for (i, input) in playbook.inputs.iter().enumerate() {
         let before = format!("{:?}", sm.current_screen);
         sm.process_input(input.clone(), &mut executor);
+
+        // Drive connectivity checks forward (like the TUI loop would)
+        while sm.advance_connectivity(&mut executor) {}
+
         let after = format!("{:?}", sm.current_screen);
 
         // Verify screen transition if expected_screens is provided
