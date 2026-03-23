@@ -13,6 +13,9 @@ SUDO := $(shell if [ "$$(id -u)" != "0" ]; then echo sudo; fi)
 build:
 	cargo build --release
 
+build-dev:
+	cargo build --release --features dev-tools
+
 test: lint
 	cargo test --lib --tests -- --skip integration
 	$(MAKE) test-integration
