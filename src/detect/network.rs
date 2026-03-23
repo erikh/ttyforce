@@ -81,8 +81,8 @@ fn detect_interfaces_networkd() -> Option<Vec<NetworkInterfaceSpec>> {
     Some(interfaces)
 }
 
-/// Fallback: detect interfaces via sysfs.
-fn detect_interfaces_sysfs() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
+/// Detect interfaces via sysfs only (no dbus).
+pub fn detect_interfaces_sysfs() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
     let mut interfaces = Vec::new();
     let net_dir = Path::new("/sys/class/net");
 

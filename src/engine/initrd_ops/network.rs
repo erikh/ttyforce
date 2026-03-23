@@ -12,11 +12,26 @@ use crate::engine::real_ops::run_cmd;
 // ── Interface management (ioctl) ────────────────────────────────────────
 
 /// Enable a network interface by setting IFF_UP via ioctl.
+/// Waits up to 5 seconds for carrier to appear after bringing the interface up,
+/// since carrier detection is asynchronous.
 pub fn enable_interface(interface: &str) -> OperationResult {
-    match set_interface_up(interface, true) {
-        Ok(_) => OperationResult::Success,
-        Err(e) => OperationResult::Error(format!("failed to enable {}: {}", interface, e)),
+    if let Err(e) = set_interface_up(interface, true) {
+        return OperationResult::Error(format!("failed to enable {}: {}", interface, e));
     }
+
+    // Wait for carrier — ioctl IFF_UP is asynchronous
+    let carrier_path = format!("/sys/class/net/{}/carrier", interface);
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Ok(val) = fs::read_to_string(&carrier_path) {
+            if val.trim() == "1" {
+                return OperationResult::Success;
+            }
+        }
+    }
+
+    // Interface is up but no carrier yet — still success, let the link check handle it
+    OperationResult::Success
 }
 
 /// Disable a network interface by clearing IFF_UP via ioctl.

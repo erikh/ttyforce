@@ -194,7 +194,7 @@ fn get_device_path(
 }
 
 /// Fallback: detect disks via sysfs.
-fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
+pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
     let mut disks = Vec::new();
     let block_dir = Path::new("/sys/block");
 

@@ -60,7 +60,7 @@ fn main() {
     }
 }
 
-fn load_hardware(input: Option<&str>) -> HardwareManifest {
+fn load_hardware(input: Option<&str>, initrd: bool) -> HardwareManifest {
     match input {
         Some(path) => match HardwareManifest::load(path) {
             Ok(h) => h,
@@ -71,7 +71,12 @@ fn load_hardware(input: Option<&str>) -> HardwareManifest {
         },
         None => {
             eprintln!("Detecting hardware...");
-            match ttyforce::detect::detect_hardware() {
+            let detect_result = if initrd {
+                ttyforce::detect::detect_hardware_initrd()
+            } else {
+                ttyforce::detect::detect_hardware()
+            };
+            match detect_result {
                 Ok(h) => {
                     eprintln!(
                         "Found {} network interface(s), {} disk(s)",
@@ -113,13 +118,13 @@ fn write_output(content: &str, output: Option<&str>) {
 }
 
 fn run_detect(input: Option<&str>, output: Option<&str>) {
-    let hardware = load_hardware(input);
+    let hardware = load_hardware(input, false);
     let manifest = toml::to_string_pretty(&hardware).unwrap();
     write_output(&manifest, output);
 }
 
 fn run_output(input: Option<&str>, output: Option<&str>) {
-    let hardware = load_hardware(input);
+    let hardware = load_hardware(input, false);
 
     if hardware.disks.is_empty() {
         eprintln!("Error: no disks detected");
@@ -142,7 +147,7 @@ fn run_output(input: Option<&str>, output: Option<&str>) {
 }
 
 fn run_installer(input: Option<&str>, output: Option<&str>, initrd: bool) {
-    let hardware = load_hardware(input);
+    let hardware = load_hardware(input, initrd);
 
     if hardware.disks.is_empty() {
         eprintln!("Error: no disks detected");
