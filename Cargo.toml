@@ -1,6 +1,6 @@
 [package]
 name = "ttyforce"
-version = "0.2.0-alpha2"
+version = "0.2.0-alpha3"
 edition = "2021"
 default-run = "ttyforce"
 description = "Town OS installer TUI"
