@@ -210,3 +210,4 @@ The initrd executor code lives in `src/engine/initrd_ops/` mirroring
 `src/engine/real_ops/`.
 
 - don't commit or push unless I tell you to
+- do not publish github releases, publish means crates.io
