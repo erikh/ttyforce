@@ -77,6 +77,13 @@ pub fn execute(op: &Operation) -> OperationResult {
             fs_type,
         } => mount_filesystem_syscall(device, mount_point, fs_type),
 
+        // Generate fstab
+        Operation::GenerateFstab {
+            mount_point,
+            device,
+            fs_type,
+        } => disk::generate_fstab(mount_point, device, fs_type),
+
         // Persist network config to installed system
         Operation::PersistNetworkConfig {
             mount_point,
@@ -101,12 +108,18 @@ pub fn execute(op: &Operation) -> OperationResult {
 }
 
 /// Mount a filesystem using the mount(2) syscall.
+/// For btrfs, runs `btrfs device scan` first so RAID members are discovered.
 fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str) -> OperationResult {
     if let Err(e) = fs::create_dir_all(mount_point) {
         return OperationResult::Error(format!(
             "failed to create mount point {}: {}",
             mount_point, e
         ));
+    }
+
+    // For btrfs RAID arrays, scan for member devices before mounting
+    if fs_type == "btrfs" {
+        let _ = crate::engine::real_ops::run_cmd("btrfs", &["device", "scan"]);
     }
 
     match nix::mount::mount(

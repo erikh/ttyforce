@@ -96,6 +96,13 @@ pub enum Operation {
         reason: String,
     },
 
+    // Generate /etc/fstab in the installed system
+    GenerateFstab {
+        mount_point: String,
+        device: String,
+        fs_type: String,
+    },
+
     // Persist network config to installed system
     PersistNetworkConfig {
         mount_point: String,
@@ -196,6 +203,15 @@ impl std::fmt::Display for Operation {
             Operation::Reboot => write!(f, "Reboot"),
             Operation::Exit => write!(f, "Exit"),
             Operation::Abort { reason } => write!(f, "Abort: {}", reason),
+            Operation::GenerateFstab {
+                mount_point,
+                device,
+                fs_type,
+            } => write!(
+                f,
+                "Generate fstab: {} {} {}",
+                device, mount_point, fs_type
+            ),
             Operation::PersistNetworkConfig {
                 mount_point,
                 interface,

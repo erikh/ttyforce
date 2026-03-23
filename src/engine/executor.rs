@@ -71,6 +71,7 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::Reboot => "Reboot",
         Operation::Exit => "Exit",
         Operation::Abort { .. } => "Abort",
+        Operation::GenerateFstab { .. } => "GenerateFstab",
         Operation::PersistNetworkConfig { .. } => "PersistNetworkConfig",
         Operation::CleanupNetworkConfig { .. } => "CleanupNetworkConfig",
         Operation::CleanupWpaSupplicant { .. } => "CleanupWpaSupplicant",

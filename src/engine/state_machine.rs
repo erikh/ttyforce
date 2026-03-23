@@ -722,6 +722,17 @@ impl InstallerStateMachine {
                 InstallerFinalState::Error(format!("Install failed: {:?}", result));
             self.error_message = Some("Installation failed".to_string());
         } else {
+            // Generate /etc/fstab so the installed system can mount at boot
+            let fstab_device = super::real_ops::disk::partition_path(&devices[0]);
+            let fstab_op = Operation::GenerateFstab {
+                mount_point: self.mount_point.clone(),
+                device: fstab_device,
+                fs_type: "btrfs".to_string(),
+            };
+            let fstab_result = executor.execute(&fstab_op);
+            self.action_manifest
+                .record(fstab_op, fstab_result.to_outcome());
+
             // Persist network configuration to the installed system
             if let Some(ref iface) = self.selected_interface {
                 let op = Operation::PersistNetworkConfig {

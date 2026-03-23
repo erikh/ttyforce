@@ -39,5 +39,6 @@ expected_operation_types = [
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",
     "InstallBaseSystem",
+    "GenerateFstab",
     "PersistNetworkConfig",
 ]

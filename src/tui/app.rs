@@ -100,8 +100,8 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
+                Constraint::Min(12),
+                Constraint::Length(10),
                 Constraint::Length(3),
             ])
             .split(area);

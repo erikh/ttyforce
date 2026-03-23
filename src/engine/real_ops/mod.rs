@@ -101,6 +101,13 @@ pub fn execute(op: &Operation) -> OperationResult {
         Operation::Exit => OperationResult::Success,
         Operation::Abort { .. } => OperationResult::Success,
 
+        // Generate fstab
+        Operation::GenerateFstab {
+            mount_point,
+            device,
+            fs_type,
+        } => disk::generate_fstab(mount_point, device, fs_type),
+
         // Persist network config — no-op for systemd executor (config already in place)
         Operation::PersistNetworkConfig { .. } => OperationResult::Success,
 

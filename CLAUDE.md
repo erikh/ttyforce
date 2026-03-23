@@ -228,6 +228,31 @@ setup. Both ethernet and wifi flows check:
 If any of these fail, the flow stops with an error on the NetworkProgress
 screen. This applies to both systemd and initrd executors.
 
+## Btrfs RAID mount:
+
+Before mounting a btrfs filesystem, `btrfs device scan` is run so the
+kernel discovers all RAID member devices. Without this, mounting a
+single member partition may fail in initrd environments.
+
+## Fstab generation:
+
+After a successful install, `/etc/fstab` is generated in the installed
+system with the root btrfs device and `subvol=@`. This is necessary
+because systemd cannot auto-generate a valid mount unit for paths with
+hyphens (like `/town-os` → `town-os.mount` is invalid). systemd reads
+fstab and correctly escapes the path for the mount unit.
+
+## TUI layout:
+
+The TUI has three main sections:
+- Title bar (3 lines)
+- Content area (flexible, gets all remaining space)
+- Command output pane (10 lines, scrolls to bottom)
+- Status bar (3 lines)
+
+The content area has priority over the command pane to ensure disk
+groups and other selections are always visible.
+
 ## Disk detection:
 
 In initrd mode, disk detection uses generic sysfs properties instead of
