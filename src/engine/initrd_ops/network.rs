@@ -223,14 +223,62 @@ fn configure_dhcp_with(
 }
 
 /// Trigger DHCP on an interface via dhcpcd.
+/// After dhcpcd succeeds, writes /etc/resolv.conf from the lease so DNS works
+/// even when dhcpcd's hook scripts are absent in the initrd.
 fn try_trigger_dhcp(interface: &str) -> OperationResult {
     let _ = run_cmd("dhcpcd", &["--release", interface]);
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     match run_cmd("dhcpcd", &["-b", interface]) {
-        Ok(_) => OperationResult::Success,
+        Ok(_) => {
+            // Give dhcpcd a moment to obtain the lease
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            // Write /etc/resolv.conf from the lease in case hook scripts are missing
+            write_resolv_conf_from_lease(interface);
+            OperationResult::Success
+        }
         Err(e) => OperationResult::Error(format!("dhcpcd failed on {}: {}", interface, e)),
     }
+}
+
+/// Read DNS servers from the dhcpcd lease and write /etc/resolv.conf.
+/// Best-effort: if the lease can't be read, resolv.conf is left unchanged.
+fn write_resolv_conf_from_lease(interface: &str) {
+    if let Ok(output) = run_cmd("dhcpcd", &["--dumplease", interface]) {
+        if let Some(content) = parse_dhcpcd_lease_dns(&output) {
+            let _ = fs::write("/etc/resolv.conf", content);
+        }
+    }
+}
+
+/// Parse dhcpcd --dumplease output and generate resolv.conf content.
+/// Returns None if no nameservers are found.
+pub fn parse_dhcpcd_lease_dns(lease_output: &str) -> Option<String> {
+    let mut nameservers = Vec::new();
+    let mut domain = None;
+
+    for line in lease_output.lines() {
+        if let Some(val) = line.strip_prefix("domain_name_servers=") {
+            for ns in val.split_whitespace() {
+                nameservers.push(ns.to_string());
+            }
+        } else if let Some(val) = line.strip_prefix("domain_name=") {
+            domain = Some(val.trim_matches('\'').to_string());
+        }
+    }
+
+    if nameservers.is_empty() {
+        return None;
+    }
+
+    let mut content = String::new();
+    if let Some(d) = domain {
+        content.push_str(&format!("search {}\n", d));
+    }
+    for ns in &nameservers {
+        content.push_str(&format!("nameserver {}\n", ns));
+    }
+    Some(content)
 }
 
 /// Select an interface as primary. In initrd mode this is a no-op since
@@ -868,6 +916,41 @@ mod tests {
             }
             other => panic!("expected Error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_full() {
+        let lease = "\
+ip_address=192.168.1.50
+subnet_mask=255.255.255.0
+routers=192.168.1.1
+domain_name_servers=8.8.8.8 8.8.4.4
+domain_name='example.local'
+lease_time=86400
+";
+        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        assert!(result.contains("nameserver 8.8.8.8\n"));
+        assert!(result.contains("nameserver 8.8.4.4\n"));
+        assert!(result.contains("search example.local\n"));
+    }
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_no_domain() {
+        let lease = "domain_name_servers=1.1.1.1\n";
+        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        assert_eq!(result, "nameserver 1.1.1.1\n");
+        assert!(!result.contains("search"));
+    }
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_no_nameservers() {
+        let lease = "ip_address=10.0.0.5\nrouters=10.0.0.1\n";
+        assert!(parse_dhcpcd_lease_dns(lease).is_none());
+    }
+
+    #[test]
+    fn test_parse_dhcpcd_lease_dns_empty() {
+        assert!(parse_dhcpcd_lease_dns("").is_none());
     }
 
     #[test]
