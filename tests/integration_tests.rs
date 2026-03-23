@@ -392,15 +392,19 @@ fn integration_btrfs_subvolume() {
     let mut exec = SystemdExecutor::new();
     let mount_point = "/tmp/ttyforce-btrfs-test";
 
-    // Format the device
+    // Partition and format the device
+    exec.execute(&Operation::PartitionDisk {
+        device: devs[0].clone(),
+    });
     exec.execute(&Operation::MkfsBtrfs {
         devices: vec![devs[0].clone()],
     });
 
-    // Mount it, create subvolume, unmount
+    // Mount the partition, create subvolume, unmount
+    let part_dev = ttyforce::engine::real_ops::disk::partition_path(&devs[0]);
     std::fs::create_dir_all(mount_point).ok();
     let mount_res = std::process::Command::new("mount")
-        .args([&devs[0], mount_point])
+        .args([&part_dev, mount_point])
         .output();
     if mount_res.is_err() || !mount_res.unwrap().status.success() {
         eprintln!("skipping subvolume test (mount failed)");
@@ -438,6 +442,14 @@ fn integration_btrfs_raid_setup() {
         return;
     }
     let mut exec = SystemdExecutor::new();
+
+    // Partition both devices first (raid setup uses partition paths)
+    exec.execute(&Operation::PartitionDisk {
+        device: devs[0].clone(),
+    });
+    exec.execute(&Operation::PartitionDisk {
+        device: devs[1].clone(),
+    });
 
     let result = exec.execute(&Operation::BtrfsRaidSetup {
         devices: vec![devs[0].clone(), devs[1].clone()],
