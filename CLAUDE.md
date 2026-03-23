@@ -234,13 +234,37 @@ Before mounting a btrfs filesystem, `btrfs device scan` is run so the
 kernel discovers all RAID member devices. Without this, mounting a
 single member partition may fail in initrd environments.
 
-## Fstab generation:
+## Mount service generation:
 
-After a successful install, `/etc/fstab` is generated in the installed
-system with the root btrfs device and `subvol=@`. This is necessary
-because systemd cannot auto-generate a valid mount unit for paths with
-hyphens (like `/town-os` → `town-os.mount` is invalid). systemd reads
-fstab and correctly escapes the path for the mount unit.
+After a successful install, a systemd service unit `mount-town-os.service`
+is written to `<mount>/etc/systemd/system/` and enabled via symlink in
+`local-fs.target.wants/`. This service:
+- Runs `mkdir -p /town-os` and `btrfs device scan` before mounting
+- Mounts the btrfs volume with `subvol=@` at the configured mount point
+- Runs before `local-fs.target` and `multi-user.target`
+- Uses a service unit (not a .mount unit) to avoid systemd's
+  path-escaping issues with hyphens in mount points
+
+A .mount unit is NOT used because systemd interprets hyphens in unit
+names as path separators (`town-os.mount` → `/town/os`), which is wrong.
+Fstab is NOT used because `/etc` is an overlay of `/town-os/etc`.
+
+## Root partition and /etc write policy:
+
+ttyforce NEVER modifies the root partition. The btrfs volume at the
+configured mount point (`/town-os` by default) is a data/system
+partition, NOT the root partition. The root filesystem is not affected.
+
+Files written during install — all go inside `<mount_point>/etc/`
+(the Town OS /etc overlay, NOT the root /etc):
+- `<mount>/etc/systemd/system/mount-town-os.service` — mount service
+- `<mount>/etc/systemd/system/local-fs.target.wants/` — enable symlink
+- `<mount>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
+- `<mount>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — wifi config
+
+The ONLY write to the running system's /etc during initrd mode is
+`/etc/resolv.conf` — this is necessary for DNS resolution during the
+install process and is overwritten by the installed system on boot.
 
 ## TUI layout:
 
