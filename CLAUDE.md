@@ -228,6 +228,18 @@ setup. Both ethernet and wifi flows check:
 If any of these fail, the flow stops with an error on the NetworkProgress
 screen. This applies to both systemd and initrd executors.
 
+## Disk detection:
+
+In initrd mode, disk detection uses generic sysfs properties instead of
+dbus/UDisks2. A block device in `/sys/block/` is considered a real disk if:
+1. `removable` is not `1` (filters USB sticks, CD-ROMs, floppies)
+2. `size` > 0 (filters uninitialized devices)
+3. `device/` subdirectory exists (filters loop, ram, dm, zram — virtual devices)
+4. Size >= 1GB (filters USB boot media)
+
+This approach works for any disk type (sd*, nvme*, vd*, hd*, xvd*, mmcblk*)
+without maintaining name prefix lists.
+
 ## Architecture:
 
 Both executors implement the same `OperationExecutor` trait. The `Operation`

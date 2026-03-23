@@ -195,39 +195,55 @@ fn get_device_path(
 
 /// Fallback: detect disks via sysfs.
 pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
+    use crate::engine::real_ops::cmd_log_append;
+
     let mut disks = Vec::new();
     let block_dir = Path::new("/sys/block");
 
     if !block_dir.exists() {
+        cmd_log_append("  /sys/block does not exist".to_string());
         return Ok(disks);
     }
+
+    cmd_log_append("$ scan /sys/block for disks".to_string());
 
     for entry in fs::read_dir(block_dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
+        let dev_path = entry.path();
 
-        // Only real block devices: sd*, nvme*, vd*, hd*
-        if !is_real_disk(&name) {
+        // Generic disk detection: check sysfs properties instead of name prefixes
+        // Skip removable devices (USB sticks, CD-ROMs, floppies)
+        let removable = read_sysfs_trimmed(&dev_path.join("removable"))
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        if removable {
             continue;
         }
 
-        let dev_path = entry.path();
-
-        // Skip if it's a partition (has a parent device)
-        // For nvme: nvme0n1 is the disk, nvme0n1p1 is a partition
-        if name.contains('p') && name.starts_with("nvme") {
-            let base = name.split('p').next().unwrap_or("");
-            if base != name {
-                continue;
-            }
-        }
-
-        // Read size (in 512-byte sectors)
+        // Skip devices with no size
         let size_sectors = read_sysfs_u64(&dev_path.join("size")).unwrap_or(0);
         let size_bytes = size_sectors * 512;
+        if size_bytes == 0 {
+            continue;
+        }
+
+        // Skip virtual/pseudo block devices by checking for a real device backing
+        // Real disks have /sys/block/<name>/device; loop/ram/dm do not
+        if !dev_path.join("device").exists() {
+            continue;
+        }
+
+        cmd_log_append(format!(
+            "  found {} ({} bytes / {} GB)",
+            name,
+            size_bytes,
+            size_bytes / 1_000_000_000
+        ));
 
         // Skip tiny devices (< 1GB) - likely USB boot media or similar
         if size_bytes < 1_000_000_000 {
+            cmd_log_append(format!("  skipping {} (< 1GB)", name));
             continue;
         }
 
@@ -252,11 +268,38 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
 }
 
 fn is_real_disk(name: &str) -> bool {
-    // sd* (SCSI/SATA), nvme* (NVMe), vd* (virtio), hd* (IDE)
-    name.starts_with("sd")
+    // Skip known virtual/non-disk devices
+    if name.starts_with("loop")
+        || name.starts_with("ram")
+        || name.starts_with("dm-")
+        || name.starts_with("sr")
+        || name.starts_with("fd")
+        || name.starts_with("zram")
+        || name.starts_with("nbd")
+        || name.starts_with("md")
+    {
+        return false;
+    }
+
+    // Accept known disk prefixes
+    if name.starts_with("sd")
         || name.starts_with("nvme")
         || name.starts_with("vd")
         || name.starts_with("hd")
+        || name.starts_with("xvd")    // Xen virtual disks
+        || name.starts_with("mmcblk")  // eMMC/SD cards
+    {
+        return true;
+    }
+
+    // For anything else, check if it's not removable and has a size > 0
+    let dev_path = Path::new("/sys/block").join(name);
+    let removable = read_sysfs_trimmed(&dev_path.join("removable"))
+        .map(|v| v == "1")
+        .unwrap_or(true);
+    let size = read_sysfs_u64(&dev_path.join("size")).unwrap_or(0);
+
+    !removable && size > 0
 }
 
 fn read_disk_model(dev_path: &Path, name: &str) -> String {
@@ -356,15 +399,24 @@ mod tests {
 
     #[test]
     fn test_is_real_disk() {
+        // Known disk types
         assert!(is_real_disk("sda"));
         assert!(is_real_disk("sdb"));
         assert!(is_real_disk("nvme0n1"));
         assert!(is_real_disk("vda"));
         assert!(is_real_disk("hda"));
+        assert!(is_real_disk("xvda"));
+        assert!(is_real_disk("mmcblk0"));
+
+        // Known non-disk types
         assert!(!is_real_disk("loop0"));
         assert!(!is_real_disk("dm-0"));
         assert!(!is_real_disk("ram0"));
         assert!(!is_real_disk("sr0"));
+        assert!(!is_real_disk("fd0"));
+        assert!(!is_real_disk("zram0"));
+        assert!(!is_real_disk("nbd0"));
+        assert!(!is_real_disk("md0"));
     }
 
     #[test]
