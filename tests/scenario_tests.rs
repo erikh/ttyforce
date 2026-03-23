@@ -1082,3 +1082,152 @@ fn test_advance_connectivity_online_returns_false() {
     // Should return false — already online
     assert!(!sm.advance_connectivity(&mut executor));
 }
+
+// === Root partition protection tests ===
+
+#[test]
+fn test_install_never_targets_root_partition() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Drive through full install
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+
+    // Verify no operation targets "/" or the root filesystem
+    for entry in &sm.action_manifest.operations {
+        match &entry.operation {
+            Operation::PartitionDisk { device } => {
+                assert!(!device.is_empty(), "device must not be empty");
+                assert!(device.starts_with("/dev/"), "device must be a /dev/ path");
+            }
+            Operation::MountFilesystem { mount_point, .. } => {
+                assert_ne!(mount_point, "/", "mount point must never be /");
+                assert!(
+                    mount_point.starts_with("/town-os") || mount_point.starts_with("/mnt"),
+                    "mount point {} is not under /town-os",
+                    mount_point
+                );
+            }
+            Operation::InstallBaseSystem { target } => {
+                assert_ne!(target, "/", "install target must never be /");
+            }
+            Operation::GenerateFstab { mount_point, .. } => {
+                assert_ne!(mount_point, "/", "fstab must be written inside mount point, not /");
+            }
+            Operation::PersistNetworkConfig { mount_point, .. } => {
+                assert_ne!(mount_point, "/", "network config must never write to /etc");
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn test_default_mount_point_is_town_os() {
+    let hw = load_hardware("ethernet_1disk");
+    let sm = InstallerStateMachine::new(hw);
+    assert_eq!(sm.mount_point, "/town-os");
+}
+
+#[test]
+fn test_cleanup_unmount_after_successful_install() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Full install
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+
+    // Verify CleanupUnmount was emitted after install
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    assert!(
+        op_types.contains(&"CleanupUnmount"),
+        "CleanupUnmount should run after successful install, got: {:?}",
+        op_types
+    );
+
+    // CleanupUnmount should come after InstallBaseSystem
+    let install_pos = op_types.iter().position(|t| *t == "InstallBaseSystem").unwrap();
+    let unmount_pos = op_types.iter().position(|t| *t == "CleanupUnmount").unwrap();
+    assert!(
+        unmount_pos > install_pos,
+        "CleanupUnmount should come after InstallBaseSystem"
+    );
+}
+
+#[test]
+fn test_generate_fstab_in_install_flow() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+
+    assert!(
+        op_types.contains(&"GenerateFstab"),
+        "GenerateFstab should be emitted during install, got: {:?}",
+        op_types
+    );
+}
+
+#[test]
+fn test_btrfs_device_scan_before_mount() {
+    // The mount_filesystem function in real_ops runs btrfs device scan
+    // for btrfs. Verify the MountFilesystem operation is present and
+    // uses btrfs as fs_type.
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+
+    let mount_ops: Vec<_> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .filter(|op| matches!(&op.operation, Operation::MountFilesystem { .. }))
+        .collect();
+
+    assert!(!mount_ops.is_empty(), "MountFilesystem should be emitted");
+    for op in &mount_ops {
+        if let Operation::MountFilesystem { fs_type, .. } = &op.operation {
+            assert_eq!(fs_type, "btrfs", "fs_type should be btrfs");
+        }
+    }
+}

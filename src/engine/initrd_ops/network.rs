@@ -166,6 +166,22 @@ pub fn configure_wifi_ssid_auth(interface: &str, ssid: &str, password: &str) -> 
 
 /// Configure wifi from a QR code.
 pub fn configure_wifi_qr_code(interface: &str, qr_data: &str) -> OperationResult {
+    match parse_wifi_qr(qr_data) {
+        Some((ssid, password)) => {
+            let result = authenticate_wifi(interface, &ssid, &password);
+            if result.is_success() {
+                OperationResult::WifiQrConfigured
+            } else {
+                result
+            }
+        }
+        None => OperationResult::Error("failed to parse QR code data".into()),
+    }
+}
+
+/// Parse a WIFI QR code string into (ssid, password).
+/// Format: WIFI:T:WPA;S:ssid;P:password;;
+pub fn parse_wifi_qr(qr_data: &str) -> Option<(String, String)> {
     let mut ssid = None;
     let mut password = None;
 
@@ -178,25 +194,7 @@ pub fn configure_wifi_qr_code(interface: &str, qr_data: &str) -> OperationResult
         }
     }
 
-    match (ssid, password) {
-        (Some(s), Some(p)) => {
-            let result = authenticate_wifi(interface, &s, &p);
-            if result.is_success() {
-                OperationResult::WifiQrConfigured
-            } else {
-                result
-            }
-        }
-        (Some(s), None) => {
-            let result = authenticate_wifi(interface, &s, "");
-            if result.is_success() {
-                OperationResult::WifiQrConfigured
-            } else {
-                result
-            }
-        }
-        _ => OperationResult::Error("failed to parse QR code data".into()),
-    }
+    ssid.map(|s| (s, password.unwrap_or_default()))
 }
 
 // ── DHCP (external tool: dhcpcd) ────────────────────────────────────────
@@ -1090,5 +1088,54 @@ subnet_mask=255.255.255.0
         let result = parse_dhcpcd_lease_dns(lease).unwrap();
         assert!(result.contains("search mynet.example.com\n"));
         assert!(!result.contains("'")); // quotes should be stripped
+    }
+
+    // QR code parsing tests
+
+    #[test]
+    fn test_parse_wifi_qr_full() {
+        let (ssid, pass) = parse_wifi_qr("WIFI:T:WPA;S:MyNetwork;P:secret123;;").unwrap();
+        assert_eq!(ssid, "MyNetwork");
+        assert_eq!(pass, "secret123");
+    }
+
+    #[test]
+    fn test_parse_wifi_qr_no_password() {
+        let (ssid, pass) = parse_wifi_qr("WIFI:T:nopass;S:OpenNet;;").unwrap();
+        assert_eq!(ssid, "OpenNet");
+        assert_eq!(pass, ""); // no password = empty string
+    }
+
+    #[test]
+    fn test_parse_wifi_qr_no_ssid() {
+        assert!(parse_wifi_qr("WIFI:T:WPA;P:password;;").is_none());
+    }
+
+    #[test]
+    fn test_parse_wifi_qr_empty() {
+        assert!(parse_wifi_qr("").is_none());
+    }
+
+    #[test]
+    fn test_parse_wifi_qr_garbage() {
+        assert!(parse_wifi_qr("not a qr code at all").is_none());
+    }
+
+    #[test]
+    fn test_parse_wifi_qr_wpa3() {
+        let (ssid, pass) = parse_wifi_qr("WIFI:T:SAE;S:SecureNet;P:wpa3pass;;").unwrap();
+        assert_eq!(ssid, "SecureNet");
+        assert_eq!(pass, "wpa3pass");
+    }
+
+    // DNS resolve.conf generation
+
+    #[test]
+    fn test_generate_persist_network_config_is_valid_networkd() {
+        let config = generate_persist_network_config("enp3s0");
+        assert!(config.starts_with("[Match]"));
+        assert!(config.contains("Name=enp3s0"));
+        assert!(config.contains("[Network]"));
+        assert!(config.contains("DHCP=yes"));
     }
 }

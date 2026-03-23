@@ -160,22 +160,24 @@ fn cli_detect_fixture_missing_file() {
     assert!(stderr.contains("Failed to read"));
 }
 
-// === --initrd flag ===
+// === initrd subcommand ===
 
 #[test]
-fn cli_help_shows_initrd_flag() {
+fn cli_help_shows_initrd_subcommand() {
     let out = ttyforce_bin().arg("--help").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("--initrd"), "expected --initrd in help, got: {}", stdout);
+    assert!(stdout.contains("initrd"), "expected initrd subcommand in help, got: {}", stdout);
 }
 
 #[test]
-fn cli_run_help_shows_initrd_flag() {
-    let out = ttyforce_bin().args(["run", "--help"]).output().unwrap();
+fn cli_initrd_help() {
+    let out = ttyforce_bin().args(["initrd", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("--initrd"), "expected --initrd in run help, got: {}", stdout);
+    assert!(stdout.contains("--etc-target"), "expected --etc-target in initrd help, got: {}", stdout);
+    assert!(stdout.contains("--input"), "expected --input in initrd help");
+    assert!(stdout.contains("--output"), "expected --output in initrd help");
 }
 
 // === Global flag position ===

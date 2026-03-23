@@ -18,10 +18,6 @@ struct Cli {
     #[arg(short, long, global = true)]
     output: Option<String>,
 
-    /// Use initrd-compatible tools (dhcpcd, ip, wpa_supplicant CLI) instead of systemd
-    #[arg(long, global = true)]
-    initrd: bool,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -36,8 +32,14 @@ enum Command {
     },
     /// Detect real hardware, run the TUI with a mock executor, and print the operations that would be performed
     Output,
-    /// Detect hardware and launch the real installer
+    /// Detect hardware and launch the real installer (systemd mode)
     Run,
+    /// Run installer in initrd mode (syscalls, no systemd dbus)
+    Initrd {
+        /// Target directory for /etc config files (default: same as mount point)
+        #[arg(long)]
+        etc_target: Option<String>,
+    },
 }
 
 fn main() {
@@ -55,7 +57,15 @@ fn main() {
             run_output(cli.input.as_deref(), cli.output.as_deref());
         }
         Command::Run => {
-            run_installer(cli.input.as_deref(), cli.output.as_deref(), cli.initrd);
+            run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None);
+        }
+        Command::Initrd { etc_target } => {
+            run_installer(
+                cli.input.as_deref(),
+                cli.output.as_deref(),
+                true,
+                etc_target.as_deref(),
+            );
         }
     }
 }
@@ -146,7 +156,12 @@ fn run_output(input: Option<&str>, output: Option<&str>) {
     write_output(&manifest, output);
 }
 
-fn run_installer(input: Option<&str>, output: Option<&str>, initrd: bool) {
+fn run_installer(
+    input: Option<&str>,
+    output: Option<&str>,
+    initrd: bool,
+    etc_target: Option<&str>,
+) {
     let hardware = load_hardware(input, initrd);
 
     if hardware.disks.is_empty() {
@@ -154,7 +169,10 @@ fn run_installer(input: Option<&str>, output: Option<&str>, initrd: bool) {
         process::exit(1);
     }
 
-    let state_machine = InstallerStateMachine::new(hardware);
+    let mut state_machine = InstallerStateMachine::new(hardware);
+    if let Some(target) = etc_target {
+        state_machine.etc_target = Some(target.to_string());
+    }
     let mut app = App::new(state_machine);
 
     if input.is_some() {

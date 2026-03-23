@@ -30,8 +30,11 @@ ttyforce output -o operations.toml
 # Detect hardware and launch the real installer
 ttyforce run
 
-# Launch in initrd mode (dhcpcd, ip, wpa_supplicant CLI — no systemd)
-ttyforce run --initrd
+# Launch in initrd mode (syscalls, no systemd dbus)
+ttyforce initrd
+
+# Initrd mode with custom /etc target for config files
+ttyforce initrd --etc-target /mnt/root
 
 # Launch the real installer with hardware from a file (mock executor)
 ttyforce run -i fixtures/hardware/ethernet_1disk.toml
@@ -43,7 +46,8 @@ ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 |---|---|
 | `detect` | Detect hardware and print the hardware manifest. With `--fixture`, runs a scripted scenario and prints the resulting operations manifest instead. |
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
-| `run` | Detect hardware (or load via `-i`) and launch the real installer. Uses the real executor when auto-detecting, mock executor when loading from file. |
+| `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
+| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-target` for custom config file location. |
 
 ### Global flags
 
@@ -51,7 +55,6 @@ ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 |---|---|
 | `-i, --input <FILE>` | Load hardware from a manifest file instead of auto-detecting. |
 | `-o, --output <FILE>` | Write output to a file instead of stdout. |
-| `--initrd` | Use initrd-compatible tools (dhcpcd, ip, wpa_supplicant CLI) instead of systemd. Persists network config to the installed system. Only affects `run`. |
 
 ## How it works
 

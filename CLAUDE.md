@@ -12,7 +12,7 @@
 
 # CLI:
 
-The binary has three subcommands and two global flags.
+The binary has four subcommands and two global flags.
 
 ## Subcommands
 
@@ -22,9 +22,12 @@ The binary has three subcommands and two global flags.
 - `output` — Detect real hardware (or load via `-i`), run the full TUI with a
   mock executor (no real side effects), then print the operations that would
   have been performed. This is a dry-run mode.
-- `run` — Detect hardware (or load via `-i`) and launch the real installer.
-  Uses the real executor when auto-detecting hardware, mock executor when
-  loading from a file.
+- `run` — Detect hardware (or load via `-i`) and launch the real installer
+  using systemd (dbus, networkd, resolved, logind).
+- `initrd` — Run installer in initrd mode using syscalls and sysfs directly
+  (no systemd dbus). Has its own flags:
+  - `--etc-target <DIR>` — Target directory for /etc config files. Defaults
+    to the mount point. Use when /etc is an overlay from a different path.
 
 ## Global flags
 
@@ -32,12 +35,6 @@ The binary has three subcommands and two global flags.
   auto-detecting. Works with all subcommands.
 - `-o, --output <FILE>` — Write output to a file instead of stdout. Works
   with all subcommands.
-- `--initrd` — Use syscalls and sysfs directly instead of systemd dbus.
-  Uses ioctl for interface management, raw sockets for ICMP ping, UDP
-  sockets for DNS, mount(2)/reboot(2) syscalls. External deps: `dhcpcd`
-  (DHCP), `wpa_supplicant` (wifi auth), `iw` (wifi scan), `parted`,
-  `mkfs.btrfs`, `btrfs`. Network configuration is persisted to
-  `<mount_point>/etc/` after install. Only affects the `run` subcommand.
 
 ## Examples
 
@@ -49,7 +46,8 @@ ttyforce detect --fixture scenario.toml  # run scenario, print operations
 ttyforce output                          # dry-run with real hardware
 ttyforce output -i hw.toml               # dry-run with manifest from file
 ttyforce run                             # real installer (systemd)
-ttyforce run --initrd                    # real installer (initrd mode)
+ttyforce initrd                          # real installer (initrd mode)
+ttyforce initrd --etc-target /mnt/root   # initrd, write configs to /mnt/root/etc
 ttyforce run -i hw.toml                  # TUI with mock executor
 ```
 

@@ -69,6 +69,8 @@ pub struct InstallerStateMachine {
     pub hardware: HardwareManifest,
     pub error_message: Option<String>,
     pub mount_point: String,
+    /// Target directory for /etc config files. If None, uses mount_point.
+    pub etc_target: Option<String>,
     connectivity_retries: u32,
 }
 
@@ -108,6 +110,7 @@ impl InstallerStateMachine {
             hardware,
             error_message: None,
             mount_point: "/town-os".to_string(),
+            etc_target: None,
             connectivity_retries: 0,
         }
     }
@@ -115,6 +118,12 @@ impl InstallerStateMachine {
     pub fn with_mount_point(mut self, mp: String) -> Self {
         self.mount_point = mp;
         self
+    }
+
+    /// The target directory for /etc config files.
+    /// Defaults to mount_point if not explicitly set.
+    pub fn etc_target(&self) -> &str {
+        self.etc_target.as_deref().unwrap_or(&self.mount_point)
     }
 
     pub fn process_input(
@@ -722,10 +731,11 @@ impl InstallerStateMachine {
                 InstallerFinalState::Error(format!("Install failed: {:?}", result));
             self.error_message = Some("Installation failed".to_string());
         } else {
-            // Generate /etc/fstab so the installed system can mount at boot
+            // Generate mount service so the installed system mounts at boot
+            let etc = self.etc_target().to_string();
             let fstab_device = super::real_ops::disk::partition_path(&devices[0]);
             let fstab_op = Operation::GenerateFstab {
-                mount_point: self.mount_point.clone(),
+                mount_point: etc.clone(),
                 device: fstab_device,
                 fs_type: "btrfs".to_string(),
             };
@@ -736,7 +746,7 @@ impl InstallerStateMachine {
             // Persist network configuration to the installed system
             if let Some(ref iface) = self.selected_interface {
                 let op = Operation::PersistNetworkConfig {
-                    mount_point: self.mount_point.clone(),
+                    mount_point: etc.clone(),
                     interface: iface.clone(),
                 };
                 let persist_result = executor.execute(&op);
