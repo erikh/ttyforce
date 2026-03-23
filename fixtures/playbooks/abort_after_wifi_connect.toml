@@ -25,7 +25,6 @@ expected_operation_types = [
     "ReceiveWifiScanResults",
     "ConfigureWifiSsidAuth",
     "AuthenticateWifi",
-    "ConfigureDhcp",
     "CheckIpAddress",
     "CheckUpstreamRouter",
     "CheckInternetRoutability",

@@ -368,10 +368,10 @@ fn test_ethernet_auto_detect_records_all_ops() {
         .map(|r| ttyforce::engine::executor::operation_type_name(&r.operation))
         .collect();
 
-    // EnableInterface and CheckLinkAvailability should be skipped for already-connected
+    // EnableInterface should be skipped for already-connected (starts at DeviceEnabled)
     assert!(!op_types.contains(&"EnableInterface"));
-    assert!(!op_types.contains(&"CheckLinkAvailability"));
-    // IP check and connectivity ops should be present
+    // Link check, IP check and connectivity ops should be present
+    assert!(op_types.contains(&"CheckLinkAvailability"));
     assert!(op_types.contains(&"CheckIpAddress"));
     assert!(op_types.contains(&"SelectPrimaryInterface"));
 }
@@ -468,8 +468,8 @@ fn test_ethernet_no_ip_runs_dhcp() {
     ]);
 
     sm.process_input(UserInput::Confirm, &mut executor);
-
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    while sm.advance_connectivity(&mut executor) {}
 
     let ops = executor.recorded_operations();
     let op_types: Vec<&str> = ops
@@ -495,6 +495,7 @@ fn test_ethernet_link_failure() {
     }]);
 
     sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
     assert!(matches!(sm.network_state, NetworkState::Error(_)));
     assert!(sm.error_message.is_some());
 }

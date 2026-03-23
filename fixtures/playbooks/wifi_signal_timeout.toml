@@ -24,7 +24,6 @@ expected_operation_types = [
     "WifiConnectionTimeout",
     "ConfigureWifiSsidAuth",
     "AuthenticateWifi",
-    "ConfigureDhcp",
     "CheckIpAddress",
     "CheckUpstreamRouter",
     "CheckInternetRoutability",

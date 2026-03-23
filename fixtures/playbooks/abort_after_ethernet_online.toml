@@ -16,6 +16,7 @@ expected_screens = [
 ]
 
 expected_operation_types = [
+    "CheckLinkAvailability",
     "CheckIpAddress",
     "ConfigureDhcp",
     "CheckIpAddress",

@@ -432,106 +432,23 @@ impl InstallerStateMachine {
     fn bring_ethernet_online(
         &mut self,
         iface_name: String,
-        executor: &mut dyn OperationExecutor,
+        _executor: &mut dyn OperationExecutor,
     ) -> Option<ScreenId> {
-        // If the interface already has link+carrier, skip enable/link-check.
-        // Otherwise bring it up step by step.
+        // Immediately show the progress screen. All steps (enable, link check,
+        // DHCP, connectivity) are driven by advance_connectivity() from the
+        // TUI loop so the user sees real-time progress.
         let already_connected = self
             .interfaces
             .iter()
             .any(|i| i.name == iface_name && i.has_link && i.has_carrier);
 
-        if !already_connected {
-            // Step 1: Enable the interface
-            let enable_op = Operation::EnableInterface {
-                interface: iface_name.clone(),
-            };
-            let enable_result = executor.execute(&enable_op);
-            self.action_manifest
-                .record(enable_op, enable_result.to_outcome());
-            if enable_result.is_error() {
-                return self.ethernet_error(&iface_name, &enable_result, executor);
-            }
-            self.network_state = NetworkState::DeviceEnabled;
-
-            // Step 2: Check link
-            let link_op = Operation::CheckLinkAvailability {
-                interface: iface_name.clone(),
-            };
-            let link_result = executor.execute(&link_op);
-            self.action_manifest
-                .record(link_op, link_result.to_outcome());
-            if link_result.is_error() {
-                return self.ethernet_error(&iface_name, &link_result, executor);
-            }
-        }
-
-        // Step 3: Check if we already have an IP (skip DHCP if so)
-        let ip_op = Operation::CheckIpAddress {
-            interface: iface_name.clone(),
-        };
-        let ip_result = executor.execute(&ip_op);
-        self.action_manifest
-            .record(ip_op.clone(), ip_result.to_outcome());
-
-        let already_has_ip = matches!(&ip_result, OperationResult::IpAssigned(_));
-        if let OperationResult::IpAssigned(ip) = &ip_result {
-            if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
-                iface.ip_address = Some(ip.clone());
-            }
-            self.network_state = NetworkState::IpAssigned;
-        }
-
-        if !already_has_ip {
-            // Step 4: No IP yet — configure DHCP and re-check
-            let dhcp_op = Operation::ConfigureDhcp {
-                interface: iface_name.clone(),
-            };
-            let dhcp_result = executor.execute(&dhcp_op);
-            self.action_manifest
-                .record(dhcp_op, dhcp_result.to_outcome());
-            if dhcp_result.is_error() {
-                return self.ethernet_error(&iface_name, &dhcp_result, executor);
-            }
-            self.network_state = NetworkState::DhcpConfiguring;
-
-            let ip_result2 = executor.execute(&ip_op);
-            self.action_manifest
-                .record(ip_op, ip_result2.to_outcome());
-            if ip_result2.is_error() {
-                return self.ethernet_error(&iface_name, &ip_result2, executor);
-            }
-            self.network_state = NetworkState::IpAssigned;
-
-            if let OperationResult::IpAssigned(ip) = &ip_result2 {
-                if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
-                    iface.ip_address = Some(ip.clone());
-                }
-            }
-        }
-
-        // Connectivity checks will be driven by advance_connectivity()
-        // from the TUI loop, so the progress screen updates between each step.
         self.connectivity_retries = 0;
-        self.network_state = NetworkState::IpAssigned;
-        self.current_screen = ScreenId::NetworkProgress;
-        Some(ScreenId::NetworkProgress)
-    }
-
-    fn ethernet_error(
-        &mut self,
-        iface_name: &str,
-        result: &OperationResult,
-        executor: &mut dyn OperationExecutor,
-    ) -> Option<ScreenId> {
-        self.network_state = NetworkState::Error(format!("{:?}", result));
-        self.error_message = Some(format!("Network error: {:?}", result));
-
-        for sop in self.shutdown_other_interfaces(iface_name) {
-            let sr = executor.execute(&sop);
-            self.action_manifest.record(sop, sr.to_outcome());
+        if already_connected {
+            // Skip enable/link — go straight to checking IP
+            self.network_state = NetworkState::DeviceEnabled;
+        } else {
+            self.network_state = NetworkState::Offline;
         }
-
         self.current_screen = ScreenId::NetworkProgress;
         Some(ScreenId::NetworkProgress)
     }
@@ -672,38 +589,10 @@ impl InstallerStateMachine {
             _ => {}
         }
 
-        self.network_state = NetworkState::Connected;
-
-        // DHCP and IP check before handing off to connectivity checks
-        let dhcp_op = Operation::ConfigureDhcp {
-            interface: iface_name.clone(),
-        };
-        let dhcp_result = executor.execute(&dhcp_op);
-        self.action_manifest
-            .record(dhcp_op, dhcp_result.to_outcome());
-        if dhcp_result.is_error() {
-            self.network_state = NetworkState::Error(format!("{:?}", dhcp_result));
-            self.error_message = Some(format!("DHCP failed: {:?}", dhcp_result));
-            self.current_screen = ScreenId::NetworkProgress;
-            return Some(ScreenId::NetworkProgress);
-        }
-        self.network_state = NetworkState::DhcpConfiguring;
-
-        let ip_op = Operation::CheckIpAddress {
-            interface: iface_name.clone(),
-        };
-        let ip_result = executor.execute(&ip_op);
-        self.action_manifest
-            .record(ip_op, ip_result.to_outcome());
-        if let OperationResult::IpAssigned(ip) = &ip_result {
-            if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
-                iface.ip_address = Some(ip.clone());
-            }
-        }
-
-        // Connectivity checks will be driven by advance_connectivity()
+        // All remaining steps (DHCP, IP, connectivity) are driven by
+        // advance_connectivity() from the TUI loop.
         self.connectivity_retries = 0;
-        self.network_state = NetworkState::IpAssigned;
+        self.network_state = NetworkState::Connected;
         self.current_screen = ScreenId::NetworkProgress;
         Some(ScreenId::NetworkProgress)
     }
@@ -924,7 +813,7 @@ impl InstallerStateMachine {
         }
     }
 
-    /// Advance one step in the connectivity check sequence.
+    /// Advance one step in the network bring-up / connectivity sequence.
     /// Called from the TUI loop on each tick when on NetworkProgress screen.
     /// Returns true if a step was executed (state changed).
     pub fn advance_connectivity(&mut self, executor: &mut dyn OperationExecutor) -> bool {
@@ -933,10 +822,108 @@ impl InstallerStateMachine {
             None => return false,
         };
 
-        const MAX_RETRIES: u32 = 5;
+        const MAX_RETRIES: u32 = 10;
+        const DNS_MAX_RETRIES: u32 = 120; // ~60 seconds at 500ms per tick
 
-        // Only advance if we're in a non-terminal connectivity state
         match &self.network_state {
+            // Step 1: Enable the interface
+            NetworkState::Offline => {
+                let op = Operation::EnableInterface {
+                    interface: iface_name.clone(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+                if result.is_error() {
+                    self.network_state =
+                        NetworkState::Error(format!("Failed to enable {}", iface_name));
+                    self.error_message = Some(format!("Failed to enable {}", iface_name));
+                } else {
+                    self.network_state = NetworkState::DeviceEnabled;
+                    self.connectivity_retries = 0;
+                }
+                true
+            }
+
+            // Step 2: Check link availability
+            NetworkState::DeviceEnabled => {
+                let op = Operation::CheckLinkAvailability {
+                    interface: iface_name.clone(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+                if result.is_error() {
+                    self.connectivity_retries += 1;
+                    if self.connectivity_retries >= MAX_RETRIES {
+                        self.network_state =
+                            NetworkState::Error(format!("No link on {}", iface_name));
+                        self.error_message = Some(format!("No link on {}", iface_name));
+                    }
+                } else {
+                    self.network_state = NetworkState::DhcpConfiguring;
+                    self.connectivity_retries = 0;
+                }
+                true
+            }
+
+            // Step 2b: Wifi connected — proceed to DHCP
+            NetworkState::Connected => {
+                self.network_state = NetworkState::DhcpConfiguring;
+                self.connectivity_retries = 0;
+                true
+            }
+
+            // Step 3: Configure DHCP
+            NetworkState::DhcpConfiguring => {
+                // Check if we already have an IP
+                let ip_op = Operation::CheckIpAddress {
+                    interface: iface_name.clone(),
+                };
+                let ip_result = executor.execute(&ip_op);
+                self.action_manifest.record(ip_op, ip_result.to_outcome());
+
+                if let OperationResult::IpAssigned(ip) = &ip_result {
+                    if let Some(iface) =
+                        self.interfaces.iter_mut().find(|i| i.name == iface_name)
+                    {
+                        iface.ip_address = Some(ip.clone());
+                    }
+                    self.network_state = NetworkState::IpAssigned;
+                    self.connectivity_retries = 0;
+                } else {
+                    // No IP — run DHCP
+                    let dhcp_op = Operation::ConfigureDhcp {
+                        interface: iface_name.clone(),
+                    };
+                    let dhcp_result = executor.execute(&dhcp_op);
+                    self.action_manifest
+                        .record(dhcp_op, dhcp_result.to_outcome());
+                    if dhcp_result.is_error() {
+                        self.network_state =
+                            NetworkState::Error(format!("DHCP failed on {}", iface_name));
+                        self.error_message = Some("DHCP configuration failed".to_string());
+                    } else {
+                        // Re-check IP after DHCP
+                        let ip_op2 = Operation::CheckIpAddress {
+                            interface: iface_name.clone(),
+                        };
+                        let ip_result2 = executor.execute(&ip_op2);
+                        self.action_manifest
+                            .record(ip_op2, ip_result2.to_outcome());
+                        if let OperationResult::IpAssigned(ip) = &ip_result2 {
+                            if let Some(iface) =
+                                self.interfaces.iter_mut().find(|i| i.name == iface_name)
+                            {
+                                iface.ip_address = Some(ip.clone());
+                            }
+                        }
+                        self.network_state = NetworkState::IpAssigned;
+                        self.connectivity_retries = 0;
+                    }
+                }
+                true
+            }
+
+            // Step 4: Check upstream router
             NetworkState::IpAssigned => {
                 let op = Operation::CheckUpstreamRouter {
                     interface: iface_name,
@@ -950,13 +937,14 @@ impl InstallerStateMachine {
                             NetworkState::Error("No upstream router found".to_string());
                         self.error_message = Some("No upstream router found".to_string());
                     }
-                    // else stay in IpAssigned to retry on next tick
                 } else {
                     self.network_state = NetworkState::CheckingRouter;
                     self.connectivity_retries = 0;
                 }
                 true
             }
+
+            // Step 5: Check internet routability
             NetworkState::CheckingRouter => {
                 let op = Operation::CheckInternetRoutability {
                     interface: iface_name,
@@ -970,13 +958,14 @@ impl InstallerStateMachine {
                             NetworkState::Error("Internet not reachable".to_string());
                         self.error_message = Some("Internet not reachable".to_string());
                     }
-                    // else stay in CheckingRouter to retry on next tick
                 } else {
                     self.network_state = NetworkState::CheckingInternet;
                     self.connectivity_retries = 0;
                 }
                 true
             }
+
+            // Step 6: Check DNS — retries for up to 60 seconds
             NetworkState::CheckingInternet => {
                 let op = Operation::CheckDnsResolution {
                     interface: iface_name,
@@ -986,19 +975,20 @@ impl InstallerStateMachine {
                 self.action_manifest.record(op, result.to_outcome());
                 if result.is_error() {
                     self.connectivity_retries += 1;
-                    if self.connectivity_retries >= MAX_RETRIES {
+                    if self.connectivity_retries >= DNS_MAX_RETRIES {
                         self.network_state =
                             NetworkState::Error("DNS resolution failed".to_string());
                         self.error_message =
                             Some("DNS resolution failed".to_string());
                     }
-                    // else stay in CheckingInternet to retry on next tick
                 } else {
                     self.network_state = NetworkState::CheckingDns;
                     self.connectivity_retries = 0;
                 }
                 true
             }
+
+            // Step 7: Select primary interface and go online
             NetworkState::CheckingDns => {
                 // Select primary and go online
                 let op = Operation::SelectPrimaryInterface {
