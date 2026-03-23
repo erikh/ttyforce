@@ -33,6 +33,7 @@ expected_operation_types = [
     "SelectPrimaryInterface",
     "PartitionDisk",
     "MkfsBtrfs",
+    "MountFilesystem",
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",

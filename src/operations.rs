@@ -80,6 +80,11 @@ pub enum Operation {
         devices: Vec<String>,
         raid_level: String,
     },
+    MountFilesystem {
+        device: String,
+        mount_point: String,
+        fs_type: String,
+    },
 
     // System operations
     InstallBaseSystem {
@@ -174,6 +179,11 @@ impl std::fmt::Display for Operation {
                 raid_level,
                 devices.join(", ")
             ),
+            Operation::MountFilesystem {
+                device,
+                mount_point,
+                fs_type,
+            } => write!(f, "Mount {} ({}) at {}", device, fs_type, mount_point),
             Operation::InstallBaseSystem { target } => {
                 write!(f, "Install base system to {}", target)
             }

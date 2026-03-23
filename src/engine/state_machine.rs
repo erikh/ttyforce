@@ -857,6 +857,24 @@ impl InstallerStateMachine {
             }
         }
 
+        // Mount the new filesystem
+        let mount_device = format!("{}1", devices[0]);
+        let mount_op = Operation::MountFilesystem {
+            device: mount_device,
+            mount_point: self.mount_point.clone(),
+            fs_type: "btrfs".to_string(),
+        };
+        let mount_result = executor.execute(&mount_op);
+        self.action_manifest
+            .record(mount_op, mount_result.to_outcome());
+        if mount_result.is_error() {
+            self.action_manifest.final_state =
+                InstallerFinalState::Error(format!("Mount failed: {:?}", mount_result));
+            self.error_message = Some("Failed to mount filesystem".to_string());
+            self.current_screen = ScreenId::InstallProgress;
+            return Some(ScreenId::InstallProgress);
+        }
+
         // Create subvolumes
         for name in &["@", "@home", "@snapshots"] {
             let op = Operation::CreateBtrfsSubvolume {

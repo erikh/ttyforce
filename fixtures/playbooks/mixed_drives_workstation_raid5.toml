@@ -24,6 +24,7 @@ expected_operation_types = [
     "PartitionDisk",
     "PartitionDisk",
     "BtrfsRaidSetup",
+    "MountFilesystem",
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",
     "CreateBtrfsSubvolume",

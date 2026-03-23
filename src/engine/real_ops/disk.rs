@@ -1,3 +1,5 @@
+use std::fs;
+
 use crate::engine::feedback::OperationResult;
 
 use super::run_cmd;
@@ -37,6 +39,24 @@ pub fn create_btrfs_subvolume(mount_point: &str, name: &str) -> OperationResult 
         Err(e) => OperationResult::Error(format!(
             "failed to create btrfs subvolume {}: {}",
             subvol_path, e
+        )),
+    }
+}
+
+/// Mount a filesystem at the given mount point, creating the directory if needed.
+pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str) -> OperationResult {
+    if let Err(e) = fs::create_dir_all(mount_point) {
+        return OperationResult::Error(format!(
+            "failed to create mount point {}: {}",
+            mount_point, e
+        ));
+    }
+
+    match run_cmd("mount", &["-t", fs_type, device, mount_point]) {
+        Ok(_) => OperationResult::Success,
+        Err(e) => OperationResult::Error(format!(
+            "failed to mount {} at {}: {}",
+            device, mount_point, e
         )),
     }
 }

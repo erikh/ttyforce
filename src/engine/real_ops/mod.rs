@@ -67,6 +67,11 @@ pub fn execute(op: &Operation) -> OperationResult {
             devices,
             raid_level,
         } => disk::btrfs_raid_setup(devices, raid_level),
+        Operation::MountFilesystem {
+            device,
+            mount_point,
+            fs_type,
+        } => disk::mount_filesystem(device, mount_point, fs_type),
 
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),
