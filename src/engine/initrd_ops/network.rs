@@ -14,7 +14,15 @@ use crate::engine::real_ops::{cmd_log_append, run_cmd};
 /// Enable a network interface by setting IFF_UP via ioctl.
 /// Waits up to 5 seconds for carrier to appear after bringing the interface up,
 /// since carrier detection is asynchronous.
+///
+/// For wifi interfaces, attempts rfkill unblock first in case the radio is
+/// soft-blocked (common in initrd environments).
 pub fn enable_interface(interface: &str) -> OperationResult {
+    // Best-effort rfkill unblock for wifi interfaces
+    if interface.starts_with("wl") || interface.starts_with("wlan") {
+        let _ = run_cmd("rfkill", &["unblock", "wifi"]);
+    }
+
     cmd_log_append(format!("$ ioctl SIOCSIFFLAGS IFF_UP on {}", interface));
     if let Err(e) = set_interface_up(interface, true) {
         cmd_log_append(format!("  -> FAILED: {}", e));
