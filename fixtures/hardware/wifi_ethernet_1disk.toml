@@ -27,3 +27,4 @@ device = "/dev/nvme0n1"
 make = "Samsung"
 model = "970 EVO Plus"
 size_bytes = 500107862016
+transport = "nvme"

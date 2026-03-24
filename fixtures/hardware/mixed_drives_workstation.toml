@@ -14,6 +14,7 @@ device = "/dev/nvme0n1"
 make = "Samsung"
 model = "990 PRO"
 size_bytes = 1000204886016
+transport = "nvme"
 serial = "S6Z2NF0TA00001"
 
 [[disks]]
@@ -21,6 +22,7 @@ device = "/dev/nvme1n1"
 make = "Samsung"
 model = "990 PRO"
 size_bytes = 1000204886016
+transport = "nvme"
 serial = "S6Z2NF0TA00002"
 
 # Crucial MX500 SATA SSD (4x 500GB)
@@ -29,6 +31,7 @@ device = "/dev/sda"
 make = "Crucial"
 model = "MX500"
 size_bytes = 500107862016
+transport = "sata"
 serial = "2143E5A3D901"
 
 [[disks]]
@@ -36,6 +39,7 @@ device = "/dev/sdb"
 make = "Crucial"
 model = "MX500"
 size_bytes = 500107862016
+transport = "sata"
 serial = "2143E5A3D902"
 
 [[disks]]
@@ -43,6 +47,7 @@ device = "/dev/sdc"
 make = "Crucial"
 model = "MX500"
 size_bytes = 500107862016
+transport = "sata"
 serial = "2143E5A3D903"
 
 [[disks]]
@@ -50,6 +55,7 @@ device = "/dev/sdd"
 make = "Crucial"
 model = "MX500"
 size_bytes = 500107862016
+transport = "sata"
 serial = "2143E5A3D904"
 
 # WD Red Plus spinning (2x 4TB)
@@ -58,6 +64,7 @@ device = "/dev/sde"
 make = "Western Digital"
 model = "Red Plus"
 size_bytes = 4000787030016
+transport = "sata"
 serial = "WD-WMC4N0E00001"
 
 [[disks]]
@@ -65,4 +72,5 @@ device = "/dev/sdf"
 make = "Western Digital"
 model = "Red Plus"
 size_bytes = 4000787030016
+transport = "sata"
 serial = "WD-WMC4N0E00002"

@@ -11,21 +11,25 @@ device = "/dev/sda"
 make = "Samsung"
 model = "870 EVO"
 size_bytes = 1000204886016
+transport = "sata"
 
 [[disks]]
 device = "/dev/sdb"
 make = "Samsung"
 model = "870 EVO"
 size_bytes = 1000204886016
+transport = "sata"
 
 [[disks]]
 device = "/dev/sdc"
 make = "Samsung"
 model = "870 EVO"
 size_bytes = 1000204886016
+transport = "sata"
 
 [[disks]]
 device = "/dev/sdd"
 make = "Samsung"
 model = "870 EVO"
 size_bytes = 1000204886016
+transport = "sata"

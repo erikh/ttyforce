@@ -11,3 +11,4 @@ device = "/dev/sda"
 make = "Western Digital"
 model = "Blue SN570"
 size_bytes = 500107862016
+transport = "sata"

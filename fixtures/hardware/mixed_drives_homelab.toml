@@ -30,6 +30,7 @@ device = "/dev/nvme0n1"
 make = "Samsung"
 model = "970 EVO Plus"
 size_bytes = 250059350016
+transport = "nvme"
 serial = "S4EWNX0M800001"
 
 # WD Black SN770 NVMe (1x 1TB) - newer addition
@@ -38,6 +39,7 @@ device = "/dev/nvme1n1"
 make = "Western Digital"
 model = "Black SN770"
 size_bytes = 1000204886016
+transport = "nvme"
 serial = "2235G7100001"
 
 # Toshiba N300 NAS (2x 8TB) - bulk storage pair
@@ -46,6 +48,7 @@ device = "/dev/sda"
 make = "Toshiba"
 model = "N300"
 size_bytes = 8001563222016
+transport = "sata"
 serial = "59S0A0E7FVGG"
 
 [[disks]]
@@ -53,6 +56,7 @@ device = "/dev/sdb"
 make = "Toshiba"
 model = "N300"
 size_bytes = 8001563222016
+transport = "sata"
 serial = "59S0A0E7FVGH"
 
 # Seagate Barracuda (1x 2TB) - leftover
@@ -61,4 +65,5 @@ device = "/dev/sdc"
 make = "Seagate"
 model = "Barracuda"
 size_bytes = 2000398934016
+transport = "sata"
 serial = "ZA10ESKV0001"

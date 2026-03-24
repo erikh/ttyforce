@@ -83,3 +83,4 @@ device = "/dev/sda"
 make = "Crucial"
 model = "MX500"
 size_bytes = 500107862016
+transport = "sata"

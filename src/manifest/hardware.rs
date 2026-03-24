@@ -69,6 +69,14 @@ pub struct DiskSpec {
     pub size_bytes: u64,
     #[serde(default)]
     pub serial: Option<String>,
+    /// How the disk is attached: "sata", "nvme", "usb", "virtio", "mmc", "ide", "xen", "unknown".
+    /// Used for grouping disks by attachment type for RAID.
+    #[serde(default = "default_transport")]
+    pub transport: String,
+}
+
+fn default_transport() -> String {
+    "unknown".to_string()
 }
 
 impl DiskSpec {

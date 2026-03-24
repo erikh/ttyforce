@@ -27,21 +27,25 @@ device = "/dev/sda"
 make = "Seagate"
 model = "IronWolf"
 size_bytes = 2000398934016
+transport = "sata"
 
 [[disks]]
 device = "/dev/sdb"
 make = "Seagate"
 model = "IronWolf"
 size_bytes = 2000398934016
+transport = "sata"
 
 [[disks]]
 device = "/dev/sdc"
 make = "Seagate"
 model = "IronWolf"
 size_bytes = 2000398934016
+transport = "sata"
 
 [[disks]]
 device = "/dev/sdd"
 make = "Seagate"
 model = "IronWolf"
 size_bytes = 2000398934016
+transport = "sata"

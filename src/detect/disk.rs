@@ -50,6 +50,8 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
             let serial = get_string_prop(drive_props, "Serial");
             let removable = get_bool_prop(drive_props, "Removable").unwrap_or(false);
             let size = get_u64_prop(drive_props, "Size").unwrap_or(0);
+            let connection_bus =
+                get_string_prop(drive_props, "ConnectionBus").unwrap_or_default();
 
             drive_info.insert(
                 path_str.to_string(),
@@ -59,6 +61,7 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
                     serial,
                     removable,
                     size,
+                    connection_bus,
                 },
             );
         }
@@ -101,27 +104,35 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
         // Get drive reference and metadata
         let drive_path = get_string_prop(block_props, "Drive").unwrap_or_default();
 
-        let (make, model, serial) = if let Some(drive) = drive_info.get(&drive_path) {
-            // Skip removable drives (USB sticks, etc.)
-            if drive.removable {
-                continue;
-            }
+        let (make, model, serial, transport) =
+            if let Some(drive) = drive_info.get(&drive_path) {
+                // Skip removable drives (USB sticks, etc.)
+                if drive.removable {
+                    continue;
+                }
 
-            let make = if drive.vendor.is_empty() {
-                extract_vendor_from_model(&drive.model)
-                    .unwrap_or_else(|| "Unknown".to_string())
+                let make = if drive.vendor.is_empty() {
+                    extract_vendor_from_model(&drive.model)
+                        .unwrap_or_else(|| "Unknown".to_string())
+                } else {
+                    drive.vendor.clone()
+                };
+                let model = if drive.model.is_empty() {
+                    "Unknown Model".to_string()
+                } else {
+                    drive.model.clone()
+                };
+                let transport = udisks2_bus_to_transport(&drive.connection_bus, dev_name);
+                (make, model, drive.serial.clone(), transport)
             } else {
-                drive.vendor.clone()
+                let transport = transport_from_device_name(dev_name);
+                (
+                    "Unknown".to_string(),
+                    "Unknown Model".to_string(),
+                    None,
+                    transport,
+                )
             };
-            let model = if drive.model.is_empty() {
-                "Unknown Model".to_string()
-            } else {
-                drive.model.clone()
-            };
-            (make, model, drive.serial.clone())
-        } else {
-            ("Unknown".to_string(), "Unknown Model".to_string(), None)
-        };
 
         disks.push(DiskSpec {
             device,
@@ -129,6 +140,7 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
             model,
             size_bytes: size,
             serial,
+            transport,
         });
     }
 
@@ -143,6 +155,7 @@ struct DriveMetadata {
     removable: bool,
     #[allow(dead_code)]
     size: u64,
+    connection_bus: String,
 }
 
 /// Extract a string property from a dbus properties map.
@@ -253,6 +266,7 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
         let model = read_disk_model(&dev_path, &name);
         let make = read_disk_vendor(&dev_path, &name);
         let serial = read_disk_serial(&dev_path, &name);
+        let transport = detect_transport_sysfs(&dev_path, &name);
 
         disks.push(DiskSpec {
             device,
@@ -260,6 +274,7 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
             model,
             size_bytes,
             serial,
+            transport,
         });
     }
 
@@ -391,6 +406,74 @@ fn read_sysfs_trimmed(path: &Path) -> Option<String> {
 
 fn read_sysfs_u64(path: &Path) -> Option<u64> {
     read_sysfs_trimmed(path)?.parse::<u64>().ok()
+}
+
+/// Detect the transport/attachment type from sysfs.
+///
+/// Resolves the device symlink to determine the bus hierarchy:
+/// - USB devices have "usb" in the resolved sysfs path
+/// - NVMe, virtio, mmc, ide, xen are identified by device name prefix
+/// - SCSI/SATA devices that aren't USB are classified as "sata"
+fn detect_transport_sysfs(dev_path: &Path, name: &str) -> String {
+    // NVMe, virtio, mmc, ide, xen are unambiguous from device name
+    if name.starts_with("nvme") {
+        return "nvme".to_string();
+    }
+    if name.starts_with("vd") {
+        return "virtio".to_string();
+    }
+    if name.starts_with("mmcblk") {
+        return "mmc".to_string();
+    }
+    if name.starts_with("hd") {
+        return "ide".to_string();
+    }
+    if name.starts_with("xvd") {
+        return "xen".to_string();
+    }
+
+    // For sd* devices, check if attached via USB by resolving the sysfs device symlink.
+    // USB-attached disks have "usb" somewhere in their sysfs device path.
+    if name.starts_with("sd") {
+        let device_link = dev_path.join("device");
+        if let Ok(resolved) = fs::canonicalize(&device_link) {
+            let resolved_str = resolved.to_string_lossy();
+            if resolved_str.contains("/usb") {
+                return "usb".to_string();
+            }
+        }
+        return "sata".to_string();
+    }
+
+    "unknown".to_string()
+}
+
+/// Convert UDisks2 ConnectionBus string to our transport name.
+fn udisks2_bus_to_transport(connection_bus: &str, dev_name: &str) -> String {
+    match connection_bus {
+        "usb" => "usb".to_string(),
+        "sdio" => "mmc".to_string(),
+        _ => transport_from_device_name(dev_name),
+    }
+}
+
+/// Fallback: infer transport from device name alone.
+pub fn transport_from_device_name(dev_name: &str) -> String {
+    if dev_name.starts_with("nvme") {
+        "nvme".to_string()
+    } else if dev_name.starts_with("vd") {
+        "virtio".to_string()
+    } else if dev_name.starts_with("mmcblk") {
+        "mmc".to_string()
+    } else if dev_name.starts_with("hd") {
+        "ide".to_string()
+    } else if dev_name.starts_with("xvd") {
+        "xen".to_string()
+    } else if dev_name.starts_with("sd") {
+        "sata".to_string()
+    } else {
+        "unknown".to_string()
+    }
 }
 
 #[cfg(test)]

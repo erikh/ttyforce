@@ -27,3 +27,4 @@ device = "/dev/nvme0n1"
 make = "Samsung"
 model = "980 PRO"
 size_bytes = 1000204886016
+transport = "nvme"
