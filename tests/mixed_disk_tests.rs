@@ -182,7 +182,7 @@ fn test_workstation_select_crucial_single() {
         .iter()
         .filter(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }))
         .count();
-    assert_eq!(has_subvol, 3); // @, @home, @snapshots
+    assert_eq!(has_subvol, 2); // @etc, @var
 }
 
 // =====================================================
@@ -244,7 +244,7 @@ fn test_server_select_seagate_btrfs_raid5() {
         .iter()
         .filter(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }))
         .count();
-    assert_eq!(subvol_count, 3); // @, @home, @snapshots
+    assert_eq!(subvol_count, 2); // @etc, @var
 }
 
 #[test]

@@ -34,7 +34,7 @@ ttyforce run
 ttyforce initrd
 
 # Initrd mode with custom /etc target for config files
-ttyforce initrd --etc-target /mnt/root
+ttyforce initrd --etc-prefix /mnt/root
 
 # Launch the real installer with hardware from a file (mock executor)
 ttyforce run -i fixtures/hardware/ethernet_1disk.toml
@@ -47,7 +47,7 @@ ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 | `detect` | Detect hardware and print the hardware manifest. With `--fixture`, runs a scripted scenario and prints the resulting operations manifest instead. |
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
-| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-target` for custom config file location. |
+| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location. |
 
 ### Global flags
 
@@ -168,6 +168,10 @@ ttyforce detect --fixture fixtures/scenarios/full_install_ethernet_4disk.toml
 ### Playbooks
 
 Playbooks in `fixtures/playbooks/` extend scenarios with assertions — expected screen transitions, operation sequences, and final state. These are verified by `cargo test --test playbook_tests`.
+
+## Town OS integration
+
+ttyforce is designed as part of the [Town OS install system](https://gitea.com/town-os/install). It replaces the storage provisioning scripts (`make-btrfs.sh`) with an interactive TUI.
 
 ## License
 

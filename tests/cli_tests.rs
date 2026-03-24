@@ -175,7 +175,7 @@ fn cli_initrd_help() {
     let out = ttyforce_bin().args(["initrd", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("--etc-target"), "expected --etc-target in initrd help, got: {}", stdout);
+    assert!(stdout.contains("--etc-prefix"), "expected --etc-prefix in initrd help, got: {}", stdout);
     assert!(stdout.contains("--input"), "expected --input in initrd help");
     assert!(stdout.contains("--output"), "expected --output in initrd help");
 }

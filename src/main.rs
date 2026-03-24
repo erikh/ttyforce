@@ -36,9 +36,9 @@ enum Command {
     Run,
     /// Run installer in initrd mode (syscalls, no systemd dbus)
     Initrd {
-        /// Target directory for /etc config files (default: same as mount point)
+        /// Root prefix for /etc config file writes (default: same as mount point)
         #[arg(long)]
-        etc_target: Option<String>,
+        etc_prefix: Option<String>,
     },
 }
 
@@ -59,12 +59,12 @@ fn main() {
         Command::Run => {
             run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None);
         }
-        Command::Initrd { etc_target } => {
+        Command::Initrd { etc_prefix } => {
             run_installer(
                 cli.input.as_deref(),
                 cli.output.as_deref(),
                 true,
-                etc_target.as_deref(),
+                etc_prefix.as_deref(),
             );
         }
     }
@@ -160,7 +160,7 @@ fn run_installer(
     input: Option<&str>,
     output: Option<&str>,
     initrd: bool,
-    etc_target: Option<&str>,
+    etc_prefix: Option<&str>,
 ) {
     let hardware = load_hardware(input, initrd);
 
@@ -170,8 +170,8 @@ fn run_installer(
     }
 
     let mut state_machine = InstallerStateMachine::new(hardware);
-    if let Some(target) = etc_target {
-        state_machine.etc_target = Some(target.to_string());
+    if let Some(target) = etc_prefix {
+        state_machine.etc_prefix = Some(target.to_string());
     }
     let mut app = App::new(state_machine);
 

@@ -26,7 +26,7 @@ The binary has four subcommands and two global flags.
   using systemd (dbus, networkd, resolved, logind).
 - `initrd` — Run installer in initrd mode using syscalls and sysfs directly
   (no systemd dbus). Has its own flags:
-  - `--etc-target <DIR>` — Target directory for /etc config files. Defaults
+  - `--etc-prefix <DIR>` — Target directory for /etc config files. Defaults
     to the mount point. Use when /etc is an overlay from a different path.
 
 ## Global flags
@@ -47,7 +47,7 @@ ttyforce output                          # dry-run with real hardware
 ttyforce output -i hw.toml               # dry-run with manifest from file
 ttyforce run                             # real installer (systemd)
 ttyforce initrd                          # real installer (initrd mode)
-ttyforce initrd --etc-target /mnt/root   # initrd, write configs to /mnt/root/etc
+ttyforce initrd --etc-prefix /mnt/root   # initrd, write configs to /mnt/root/etc
 ttyforce run -i hw.toml                  # TUI with mock executor
 ```
 
@@ -183,21 +183,21 @@ dbus calls. Two executor backends exist:
 ## Config persistence:
 
 After a successful install, the `PersistNetworkConfig` operation writes:
-- `<etc_target>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
+- `<etc_prefix>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
   matched by MAC address (not interface name) so it works regardless of
   interface naming scheme (initrd may use `eth0` while booted system uses
   `enp3s0`). Falls back to name matching if MAC is unavailable.
-- `<etc_target>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
+- `<etc_prefix>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
   used, copies the wpa_supplicant config from `/tmp/`
 
-The `etc_target` defaults to the mount point but can be overridden with
-the `--etc-target` flag on the `initrd` subcommand. When `--etc-target`
+The `etc_prefix` defaults to the mount point but can be overridden with
+the `--etc-prefix` flag on the `initrd` subcommand. When `--etc-prefix`
 is specified, it is the root path for ALL `/etc` writes — the mount
-point is NOT considered. All files go under `<etc_target>/etc/`.
+point is NOT considered. All files go under `<etc_prefix>/etc/`.
 
-Example: `ttyforce initrd --etc-target /` writes directly to `/etc/`.
-Example: `ttyforce initrd --etc-target /mnt/root` writes to `/mnt/root/etc/`.
-Without `--etc-target`, writes go to `<mount_point>/etc/` (e.g. `/town-os/etc/`).
+Example: `ttyforce initrd --etc-prefix /` writes directly to `/etc/`.
+Example: `ttyforce initrd --etc-prefix /mnt/root` writes to `/mnt/root/etc/`.
+Without `--etc-prefix`, writes go to `<mount_point>/etc/` (e.g. `/town-os/etc/`).
 
 systemd-networkd must be enabled on the installed system to pick up
 the `.network` file. ttyforce assumes it is already enabled.
@@ -243,19 +243,21 @@ screen. This applies to both systemd and initrd executors.
 
 1. PartitionDisk (each device)
 2. MkfsBtrfs or BtrfsRaidSetup
-3. MountFilesystem (no options — raw btrfs root)
-4. CreateBtrfsSubvolume (@, @home, @snapshots)
-5. CleanupUnmount (unmount raw root)
-6. MountFilesystem (options: subvol=@)
-7. InstallBaseSystem
-8. GenerateFstab (mount service to <etc_target>/etc/systemd/system/)
-9. PersistNetworkConfig (networkd unit + wpa config to <etc_target>/etc/)
-10. CleanupUnmount (final unmount so systemd doesn't see stale mount)
+3. MountFilesystem (btrfs at /town-os)
+4. CreateBtrfsSubvolume (@etc, @var — Town OS overlay subvolumes)
+5. GenerateFstab (mount service to <etc_prefix>/etc/systemd/system/)
+6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/etc/)
+7. InstallBaseSystem (runs install.sh or pacstrap — may be a no-op)
+8. CleanupUnmount (final unmount so systemd doesn't see stale mount)
 
-Steps 5-6 are critical: the remount with `subvol=@` ensures all
-subsequent writes (install, config) go into the @ subvolume, matching
-what the boot mount service uses. Without this, files would go to
-the btrfs root and be invisible after boot.
+ttyforce does NOT create @, @home, @snapshots subvolumes. It creates
+@etc and @var which Town OS's make-btrfs.sh expects. The actual overlay
+setup (mounting @etc to /overlays/etc, adding fstab entries) is done
+by Town OS's make-storage.sh service at boot, not by ttyforce.
+
+Config files are written to `--etc-prefix` (defaults to mount point).
+This should be set to wherever the overlay upperdir is accessible
+during the initrd phase.
 
 ## Btrfs RAID mount:
 
@@ -325,6 +327,42 @@ dbus/UDisks2. A block device in `/sys/block/` is considered a real disk if:
 
 This approach works for any disk type (sd*, nvme*, vd*, hd*, xvd*, mmcblk*)
 without maintaining name prefix lists.
+
+## Town OS install system:
+
+Reference: https://gitea.com/town-os/install
+
+Town OS boots from a squashfs image (`root.sfs`) on an ext4 data
+partition, with a tmpfs overlay for writability. The boot process:
+
+1. initcpio `town-squashfs` hook mounts ext4 data partition read-only
+2. Mounts `root.sfs` as squashfs via loop device
+3. Creates overlay: squashfs (lower) + tmpfs (upper) = new root
+4. Moves mounts to `/.town/` subdirectories
+
+After boot, `town-os-make-storage.service` runs `make-storage.sh` →
+`make-btrfs.sh` which:
+1. Detects disks and creates btrfs (single/raid1/raid5)
+2. Mounts at `/town-os`
+3. Creates subvolumes `@var` and `@etc`
+4. Mounts `@var` → `/overlays/var`, `@etc` → `/overlays/etc`
+5. Adds overlay entries to `/etc/fstab`:
+   - overlay for `/etc` (lower=squashfs, upper=`/overlays/etc`)
+   - overlay for `/var` (lower=squashfs, upper=`/overlays/var`)
+6. Reloads systemd and mounts all
+
+ttyforce replaces step 1-3 of the `make-btrfs.sh` flow (disk detection,
+btrfs creation, mounting). The subvolumes it creates must match what
+Town OS expects (`@var`, `@etc`), and network config must be written
+to the `@etc` subvolume so it appears in `/etc` via the overlay.
+
+The `--etc-prefix` flag should point to wherever the `@etc` subvolume
+is mounted (e.g., `/overlays/etc` or the mount point if writing before
+the overlay is set up).
+
+NOTE: ttyforce does NOT run pacstrap/InstallBaseSystem — the system is
+already installed via squashfs. InstallBaseSystem is a no-op or runs a
+custom `install.sh` script if present.
 
 ## Architecture:
 

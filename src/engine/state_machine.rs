@@ -70,7 +70,7 @@ pub struct InstallerStateMachine {
     pub error_message: Option<String>,
     pub mount_point: String,
     /// Target directory for /etc config files. If None, uses mount_point.
-    pub etc_target: Option<String>,
+    pub etc_prefix: Option<String>,
     connectivity_retries: u32,
 }
 
@@ -110,7 +110,7 @@ impl InstallerStateMachine {
             hardware,
             error_message: None,
             mount_point: "/town-os".to_string(),
-            etc_target: None,
+            etc_prefix: None,
             connectivity_retries: 0,
         }
     }
@@ -122,8 +122,8 @@ impl InstallerStateMachine {
 
     /// The target directory for /etc config files.
     /// Defaults to mount_point if not explicitly set.
-    pub fn etc_target(&self) -> &str {
-        self.etc_target.as_deref().unwrap_or(&self.mount_point)
+    pub fn etc_prefix(&self) -> &str {
+        self.etc_prefix.as_deref().unwrap_or(&self.mount_point)
     }
 
     pub fn process_input(
@@ -691,7 +691,7 @@ impl InstallerStateMachine {
             }
         }
 
-        // Mount the new filesystem (raw btrfs root for subvolume creation)
+        // Mount the new filesystem
         let mount_device = super::real_ops::disk::partition_path(&devices[0]);
         let mount_op = Operation::MountFilesystem {
             device: mount_device,
@@ -710,8 +710,8 @@ impl InstallerStateMachine {
             return Some(ScreenId::InstallProgress);
         }
 
-        // Create subvolumes
-        for name in &["@", "@home", "@snapshots"] {
+        // Create subvolumes that Town OS expects
+        for name in &["@etc", "@var"] {
             let op = Operation::CreateBtrfsSubvolume {
                 mount_point: self.mount_point.clone(),
                 name: name.to_string(),
@@ -720,32 +720,39 @@ impl InstallerStateMachine {
             self.action_manifest.record(op, result.to_outcome());
         }
 
-        // Remount with subvol=@ so all subsequent writes (install, config
-        // persistence) go into the @ subvolume, matching what the boot
-        // mount service uses.
-        let unmount_op = Operation::CleanupUnmount {
-            mount_point: self.mount_point.clone(),
-        };
-        let unmount_result = executor.execute(&unmount_op);
-        self.action_manifest
-            .record(unmount_op, unmount_result.to_outcome());
-
-        let remount_device = super::real_ops::disk::partition_path(&devices[0]);
-        let remount_op = Operation::MountFilesystem {
-            device: remount_device,
-            mount_point: self.mount_point.clone(),
+        // Generate mount service and persist network config BEFORE install
+        // so they are written even if InstallBaseSystem fails (e.g. no pacstrap)
+        let etc = self.etc_prefix().to_string();
+        crate::engine::real_ops::cmd_log_append(format!(
+            "  etc_prefix={} mount_point={}",
+            etc, self.mount_point
+        ));
+        let fstab_device = super::real_ops::disk::partition_path(&devices[0]);
+        let fstab_op = Operation::GenerateFstab {
+            mount_point: etc.clone(),
+            device: fstab_device,
             fs_type: "btrfs".to_string(),
-            options: Some("subvol=@".to_string()),
         };
-        let remount_result = executor.execute(&remount_op);
+        let fstab_result = executor.execute(&fstab_op);
         self.action_manifest
-            .record(remount_op, remount_result.to_outcome());
-        if remount_result.is_error() {
-            self.action_manifest.final_state =
-                InstallerFinalState::Error(format!("Remount with subvol=@ failed: {:?}", remount_result));
-            self.error_message = Some("Failed to remount with subvol=@".to_string());
-            self.current_screen = ScreenId::InstallProgress;
-            return Some(ScreenId::InstallProgress);
+            .record(fstab_op, fstab_result.to_outcome());
+
+        // Persist network configuration
+        if let Some(ref iface_name) = self.selected_interface {
+            let mac = self
+                .interfaces
+                .iter()
+                .find(|i| &i.name == iface_name)
+                .map(|i| i.mac.clone())
+                .unwrap_or_default();
+            let op = Operation::PersistNetworkConfig {
+                mount_point: etc.clone(),
+                interface: iface_name.clone(),
+                mac_address: mac,
+            };
+            let persist_result = executor.execute(&op);
+            self.action_manifest
+                .record(op, persist_result.to_outcome());
         }
 
         // Install base system
@@ -760,40 +767,6 @@ impl InstallerStateMachine {
                 InstallerFinalState::Error(format!("Install failed: {:?}", result));
             self.error_message = Some("Installation failed".to_string());
         } else {
-            // Generate mount service and persist network config
-            let etc = self.etc_target().to_string();
-            crate::engine::real_ops::cmd_log_append(format!(
-                "  etc_target={} mount_point={}",
-                etc, self.mount_point
-            ));
-            let fstab_device = super::real_ops::disk::partition_path(&devices[0]);
-            let fstab_op = Operation::GenerateFstab {
-                mount_point: etc.clone(),
-                device: fstab_device,
-                fs_type: "btrfs".to_string(),
-            };
-            let fstab_result = executor.execute(&fstab_op);
-            self.action_manifest
-                .record(fstab_op, fstab_result.to_outcome());
-
-            // Persist network configuration to the installed system
-            if let Some(ref iface_name) = self.selected_interface {
-                let mac = self
-                    .interfaces
-                    .iter()
-                    .find(|i| &i.name == iface_name)
-                    .map(|i| i.mac.clone())
-                    .unwrap_or_default();
-                let op = Operation::PersistNetworkConfig {
-                    mount_point: etc.clone(),
-                    interface: iface_name.clone(),
-                    mac_address: mac,
-                };
-                let persist_result = executor.execute(&op);
-                self.action_manifest
-                    .record(op, persist_result.to_outcome());
-            }
-
             // Unmount the volume so systemd doesn't see it in /proc/mounts
             // and try to auto-generate an invalid town-os.mount unit
             let unmount_op = Operation::CleanupUnmount {
