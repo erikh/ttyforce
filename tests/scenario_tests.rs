@@ -64,6 +64,8 @@ fn test_wifi_select_and_connect() {
 
     // Select first network
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WpsPrompt);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::WifiPassword);
     assert_eq!(sm.selected_ssid, Some("HomeNetwork".to_string()));
 
@@ -134,6 +136,7 @@ fn test_wifi_wrong_password() {
     // Go to wifi select
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
 
     // Enter wrong password
     sm.process_input(
@@ -165,6 +168,7 @@ fn test_wifi_signal_timeout() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     sm.process_input(
         UserInput::EnterWifiPassword("somepassword".to_string()),
         &mut executor,
@@ -206,6 +210,7 @@ fn test_wifi_successful_connect_with_ip() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     sm.process_input(
         UserInput::EnterWifiPassword("correctpassword".to_string()),
         &mut executor,
@@ -329,6 +334,7 @@ fn test_full_install_wifi_1disk() {
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
 
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     sm.process_input(
         UserInput::EnterWifiPassword("correctpassword".to_string()),
         &mut executor,
@@ -640,9 +646,10 @@ fn test_crowded_wifi_select() {
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
     assert_eq!(sm.wifi_networks.len(), 10);
 
-    // Select the home network (index 0)
+    // Select the home network (index 0) — goes to WPS prompt for secured networks
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
     assert_eq!(sm.selected_ssid, Some("HomeNetwork".to_string()));
+    assert_eq!(sm.current_screen, ScreenId::WpsPrompt);
 }
 
 // === Mixed Hardware Configs ===
@@ -706,6 +713,7 @@ fn test_action_manifest_records_errors() {
 
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     sm.process_input(
         UserInput::EnterWifiPassword("wrong".to_string()),
         &mut executor,
@@ -813,6 +821,7 @@ fn test_abort_after_wifi_cleanup_ops() {
     // Connect wifi
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     sm.process_input(
         UserInput::EnterWifiPassword("correctpassword".to_string()),
         &mut executor,
@@ -1049,6 +1058,7 @@ fn test_advance_connectivity_wifi_flow() {
 
     // Select network and enter password
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
     sm.process_input(
         UserInput::EnterWifiPassword("pass".to_string()),
         &mut executor,
@@ -1323,4 +1333,141 @@ fn test_subvolumes_are_etc_and_var() {
         .collect();
 
     assert_eq!(subvol_names, vec!["@etc", "@var"]);
+}
+
+// === WPS Push Button Tests ===
+
+fn wps_executor() -> TestExecutor {
+    TestExecutor::new(vec![
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("WpsPbcStart".to_string()),
+            result: OperationResult::Success,
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("WpsPbcStatus".to_string()),
+            result: OperationResult::WpsCompleted,
+            consume: false,
+        },
+    ])
+}
+
+#[test]
+fn test_wps_start_from_wifi_select() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = wps_executor();
+
+    // Auto-detect goes to WifiSelect
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+
+    // Initiate WPS
+    sm.process_input(UserInput::InitiateWps, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WpsWaiting);
+    assert_eq!(sm.network_state, NetworkState::WpsWaiting);
+    assert!(sm.wps_start_time.is_some());
+}
+
+#[test]
+fn test_wps_completed_advances_to_network_progress() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = wps_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::InitiateWps, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WpsWaiting);
+
+    // Poll — executor returns WpsCompleted
+    sm.advance_connectivity(&mut executor);
+    assert_eq!(sm.network_state, NetworkState::Connected);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+}
+
+#[test]
+fn test_wps_cancel_returns_to_wifi_select() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = wps_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::InitiateWps, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WpsWaiting);
+
+    // Cancel WPS
+    sm.process_input(UserInput::Back, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+    assert!(sm.wps_start_time.is_none());
+
+    // CleanupWpaSupplicant should have been executed
+    let has_cleanup = executor
+        .recorded_operations()
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::CleanupWpaSupplicant { .. }));
+    assert!(has_cleanup, "WPS cancel should clean up wpa_supplicant");
+}
+
+#[test]
+fn test_wps_pending_keeps_polling() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = TestExecutor::new(vec![
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("WpsPbcStart".to_string()),
+            result: OperationResult::Success,
+            consume: false,
+        },
+        SimulatedResponse {
+            operation_match: OperationMatcher::ByType("WpsPbcStatus".to_string()),
+            result: OperationResult::WpsPending,
+            consume: false,
+        },
+    ]);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::InitiateWps, &mut executor);
+
+    // Poll — should stay on WpsWaiting
+    let should_continue = sm.advance_connectivity(&mut executor);
+    assert!(should_continue);
+    assert_eq!(sm.network_state, NetworkState::WpsWaiting);
+    assert_eq!(sm.current_screen, ScreenId::WpsWaiting);
+}
+
+#[test]
+fn test_wps_full_install_flow() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = wps_executor();
+
+    // Network setup via WPS
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::InitiateWps, &mut executor);
+    sm.advance_connectivity(&mut executor); // WpsCompleted -> Connected
+
+    // Drive connectivity checks to completion
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+
+    // Disk setup
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Installed
+    );
+
+    // Verify WPS operations in manifest
+    let op_types: Vec<&str> = sm
+        .action_manifest
+        .operations
+        .iter()
+        .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
+        .collect();
+    assert!(op_types.contains(&"WpsPbcStart"), "manifest should contain WpsPbcStart");
+    assert!(op_types.contains(&"WpsPbcStatus"), "manifest should contain WpsPbcStatus");
 }

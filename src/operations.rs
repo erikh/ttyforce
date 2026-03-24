@@ -63,6 +63,14 @@ pub enum Operation {
         interface: String,
     },
 
+    // WPS push-button connection
+    WpsPbcStart {
+        interface: String,
+    },
+    WpsPbcStatus {
+        interface: String,
+    },
+
     // Disk operations (common)
     PartitionDisk {
         device: String,
@@ -178,6 +186,12 @@ impl std::fmt::Display for Operation {
             } => write!(f, "Configure wifi auth {} on {}", ssid, interface),
             Operation::ReceiveWifiScanResults { interface } => {
                 write!(f, "Receive wifi scan results on {}", interface)
+            }
+            Operation::WpsPbcStart { interface } => {
+                write!(f, "WPS push-button start on {}", interface)
+            }
+            Operation::WpsPbcStatus { interface } => {
+                write!(f, "WPS push-button status on {}", interface)
             }
             Operation::PartitionDisk { device } => write!(f, "Partition {}", device),
             Operation::MkfsBtrfs { devices } => {

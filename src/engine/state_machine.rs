@@ -14,6 +14,8 @@ pub enum ScreenId {
     NetworkConfig,
     WifiSelect,
     WifiPassword,
+    WpsPrompt,
+    WpsWaiting,
     NetworkProgress,
     DiskGroupSelect,
     RaidConfig,
@@ -40,6 +42,9 @@ pub enum UserInput {
     RefreshWifiScan,
     SelectWifiNetwork(usize),
     EnterWifiPassword(String),
+    InitiateWps,
+    WpsAccept,
+    WpsDecline,
 
     // Disk
     SelectDiskGroup(usize),
@@ -72,6 +77,7 @@ pub struct InstallerStateMachine {
     /// Target directory for /etc config files. If None, uses mount_point.
     pub etc_prefix: Option<String>,
     connectivity_retries: u32,
+    pub wps_start_time: Option<std::time::Instant>,
 }
 
 impl InstallerStateMachine {
@@ -112,6 +118,7 @@ impl InstallerStateMachine {
             mount_point: "/town-os".to_string(),
             etc_prefix: None,
             connectivity_retries: 0,
+            wps_start_time: None,
         }
     }
 
@@ -157,12 +164,31 @@ impl InstallerStateMachine {
             (ScreenId::WifiSelect, UserInput::RefreshWifiScan) => {
                 self.refresh_wifi_scan(executor)
             }
+            (ScreenId::WifiSelect, UserInput::InitiateWps) => {
+                self.start_wps(executor)
+            }
             (ScreenId::WifiSelect, UserInput::Back) => {
                 self.current_screen = ScreenId::NetworkConfig;
                 Some(ScreenId::NetworkConfig)
             }
             (ScreenId::WifiSelect, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at wifi select".to_string())
+            }
+
+            // === WPS Prompt Screen ===
+            (ScreenId::WpsPrompt, UserInput::WpsAccept) => {
+                self.start_wps(executor)
+            }
+            (ScreenId::WpsPrompt, UserInput::WpsDecline) => {
+                self.current_screen = ScreenId::WifiPassword;
+                Some(ScreenId::WifiPassword)
+            }
+            (ScreenId::WpsPrompt, UserInput::Back) => {
+                self.current_screen = ScreenId::WifiSelect;
+                Some(ScreenId::WifiSelect)
+            }
+            (ScreenId::WpsPrompt, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at WPS prompt".to_string())
             }
 
             // === Wifi Password Screen ===
@@ -175,6 +201,25 @@ impl InstallerStateMachine {
             }
             (ScreenId::WifiPassword, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at wifi password".to_string())
+            }
+
+            // === WPS Waiting Screen ===
+            (ScreenId::WpsWaiting, UserInput::Back) => {
+                // Cancel WPS — clean up wpa_supplicant
+                if let Some(ref iface) = self.selected_interface {
+                    let op = Operation::CleanupWpaSupplicant {
+                        interface: iface.clone(),
+                    };
+                    let result = executor.execute(&op);
+                    self.action_manifest.record(op, result.to_outcome());
+                }
+                self.wps_start_time = None;
+                self.network_state = NetworkState::Scanning;
+                self.current_screen = ScreenId::WifiSelect;
+                Some(ScreenId::WifiSelect)
+            }
+            (ScreenId::WpsWaiting, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted during WPS".to_string())
             }
 
             // === Network Progress Screen ===
@@ -268,16 +313,14 @@ impl InstallerStateMachine {
                 self.action_manifest
                     .record(Operation::Reboot, OperationOutcome::Success);
                 self.action_manifest.final_state = InstallerFinalState::Rebooted;
-                let result = executor.execute(&Operation::Reboot);
-                let _ = result;
+                executor.execute(&Operation::Reboot);
                 None
             }
             (ScreenId::Reboot, UserInput::ExitInstaller) => {
                 self.action_manifest
                     .record(Operation::Exit, OperationOutcome::Success);
                 self.action_manifest.final_state = InstallerFinalState::Exited;
-                let result = executor.execute(&Operation::Exit);
-                let _ = result;
+                executor.execute(&Operation::Exit);
                 None
             }
             (ScreenId::Reboot, UserInput::AbortInstall) => {
@@ -488,12 +531,14 @@ impl InstallerStateMachine {
         self.network_state = NetworkState::NetworkSelected;
 
         if network.security == crate::manifest::WifiSecurity::Open {
-            // No password needed for open networks
+            // No password needed for open networks — skip WPS prompt too
             self.current_screen = ScreenId::WifiPassword;
+            Some(ScreenId::WifiPassword)
         } else {
-            self.current_screen = ScreenId::WifiPassword;
+            // Ask if user wants to use WPS before password entry
+            self.current_screen = ScreenId::WpsPrompt;
+            Some(ScreenId::WpsPrompt)
         }
-        Some(ScreenId::WifiPassword)
     }
 
     fn refresh_wifi_scan(&mut self, executor: &mut dyn OperationExecutor) -> Option<ScreenId> {
@@ -609,6 +654,32 @@ impl InstallerStateMachine {
         self.network_state = NetworkState::Connected;
         self.current_screen = ScreenId::NetworkProgress;
         Some(ScreenId::NetworkProgress)
+    }
+
+    fn start_wps(&mut self, executor: &mut dyn OperationExecutor) -> Option<ScreenId> {
+        let iface_name = match &self.selected_interface {
+            Some(name) => name.clone(),
+            None => {
+                self.error_message = Some("No wifi interface selected".to_string());
+                return None;
+            }
+        };
+
+        let op = Operation::WpsPbcStart {
+            interface: iface_name.clone(),
+        };
+        let result = executor.execute(&op);
+        self.action_manifest.record(op, result.to_outcome());
+
+        if result.is_error() {
+            self.error_message = Some(format!("Failed to start WPS: {:?}", result));
+            return None;
+        }
+
+        self.wps_start_time = Some(std::time::Instant::now());
+        self.network_state = NetworkState::WpsWaiting;
+        self.current_screen = ScreenId::WpsWaiting;
+        Some(ScreenId::WpsWaiting)
     }
 
     fn select_raid_option(&mut self, idx: usize) -> Option<ScreenId> {
@@ -913,7 +984,43 @@ impl InstallerStateMachine {
                 true
             }
 
-            // Step 2b: Wifi connected — proceed to DHCP
+            // Step 2b: WPS waiting — poll for completion
+            NetworkState::WpsWaiting => {
+                // Check for WPS timeout (120 seconds)
+                if let Some(start) = self.wps_start_time {
+                    if start.elapsed() > std::time::Duration::from_secs(120) {
+                        self.wps_start_time = None;
+                        self.error_message = Some("WPS timed out — no router responded".to_string());
+                        self.network_state = NetworkState::Scanning;
+                        self.current_screen = ScreenId::WifiSelect;
+                        return true;
+                    }
+                }
+
+                let op = Operation::WpsPbcStatus {
+                    interface: iface_name.clone(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+
+                match result {
+                    OperationResult::WpsCompleted => {
+                        self.wps_start_time = None;
+                        self.connectivity_retries = 0;
+                        self.network_state = NetworkState::Connected;
+                        self.current_screen = ScreenId::NetworkProgress;
+                    }
+                    OperationResult::WpsPending => {
+                        // Still waiting — keep polling
+                    }
+                    _ => {
+                        // Error or unexpected result — keep polling until timeout
+                    }
+                }
+                true
+            }
+
+            // Step 2c: Wifi connected — proceed to DHCP
             NetworkState::Connected => {
                 self.network_state = NetworkState::DhcpConfiguring;
                 self.connectivity_retries = 0;

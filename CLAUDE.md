@@ -9,6 +9,8 @@
 - running tests: use the make tasks every time.
 - tests should always include the linting checks
 - lint checks should be a rust community standard of linters, run as the `lint` make tasks
+- never use `let _ = expr;` to suppress unused variable warnings or work around the borrow checker. Fix the actual problem: use the variable, remove the parameter, or restructure the code.
+- `#![deny(dead_code)]` and `#![deny(unsafe_code)]` are set at the crate level in both lib.rs and main.rs. Never add `#[allow(dead_code)]` or `#[allow(unsafe_code)]` to bypass them — remove dead code, and use safe abstractions (e.g., nix crate) instead of unsafe.
 
 # CLI:
 
@@ -176,7 +178,11 @@ dbus calls. Two executor backends exist:
 - `dhcpcd` — DHCP client (protocol too complex for inline implementation)
 - `wpa_supplicant` — WPA authentication, CLI mode only, no dbus
   (`wpa_supplicant -B -i <iface> -c <conf>`)
+- `wpa_cli` — WPS push-button connection (`wpa_cli -i <iface> wps_pbc`)
+  and status polling (`wpa_cli -i <iface> status`)
 - `iw` — wifi network scanning (`iw dev <iface> scan`), fallback: `iwlist`
+- `rfkill` — unblock wifi radio before detection (best-effort)
+- `modprobe` — load wifi kernel modules in initrd (best-effort)
 - `parted` — disk partitioning (GPT + single partition)
 - `mkfs.btrfs` — btrfs filesystem creation
 - `btrfs` — subvolume management

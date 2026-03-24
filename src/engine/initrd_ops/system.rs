@@ -1,5 +1,3 @@
-use nix::libc;
-
 use crate::engine::feedback::OperationResult;
 
 use crate::engine::real_ops::run_cmd;
@@ -25,9 +23,7 @@ pub fn install_base_system(target: &str) -> OperationResult {
 
 /// Reboot the system using the reboot(2) syscall.
 pub fn reboot() -> OperationResult {
-    unsafe {
-        libc::sync();
-    }
+    nix::unistd::sync();
     match nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT) {
         // reboot() doesn't return on success, but the type system requires this
         Ok(_) => OperationResult::Success,

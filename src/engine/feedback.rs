@@ -27,6 +27,8 @@ pub enum OperationResult {
     WifiTimeout,
     WifiConnected,
     WifiQrConfigured,
+    WpsCompleted,
+    WpsPending,
 }
 
 impl OperationResult {
@@ -42,6 +44,7 @@ impl OperationResult {
                 | OperationResult::WifiAuthenticated
                 | OperationResult::WifiConnected
                 | OperationResult::WifiQrConfigured
+                | OperationResult::WpsCompleted
                 | OperationResult::WifiScanResults(_)
         )
     }

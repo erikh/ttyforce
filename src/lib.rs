@@ -1,3 +1,6 @@
+#![deny(dead_code)]
+#![deny(unsafe_code)]
+
 pub mod detect;
 pub mod disk;
 pub mod engine;

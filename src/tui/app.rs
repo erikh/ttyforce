@@ -128,7 +128,7 @@ impl App {
             // connectivity checks between renders (showing progress).
             let on_progress = matches!(
                 self.state_machine.current_screen,
-                ScreenId::NetworkProgress
+                ScreenId::NetworkProgress | ScreenId::WpsWaiting
             );
             let timeout = if on_progress {
                 std::time::Duration::from_millis(500)
@@ -234,6 +234,8 @@ impl App {
             ScreenId::NetworkConfig => self.render_network_config(f, area),
             ScreenId::WifiSelect => self.render_wifi_select(f, area),
             ScreenId::WifiPassword => self.render_wifi_password(f, area),
+            ScreenId::WpsPrompt => self.render_wps_prompt(f, area),
+            ScreenId::WpsWaiting => self.render_wps_waiting(f, area),
             ScreenId::NetworkProgress => self.render_network_progress(f, area),
             ScreenId::DiskGroupSelect => self.render_disk_select(f, area),
             ScreenId::RaidConfig => self.render_raid_config(f, area),
@@ -343,6 +345,61 @@ impl App {
         let paragraph = Paragraph::new(display).block(
             Block::default()
                 .title(" Enter WiFi Password ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+        f.render_widget(paragraph, center);
+    }
+
+    fn render_wps_prompt(&self, f: &mut ratatui::Frame, area: Rect) {
+        let ssid = self
+            .state_machine
+            .selected_ssid
+            .as_deref()
+            .unwrap_or("Unknown");
+
+        let text = format!(
+            "  Network: {}\n\n\
+             \x20 Does your router have a WPS button?\n\n\
+             \x20 WPS lets you connect by pressing a button on\n\
+             \x20 your router instead of typing a password.\n\n\
+             \x20 Press y for WPS, n to enter password",
+            ssid
+        );
+
+        let center = centered_rect(55, 40, area);
+        let paragraph = Paragraph::new(text).block(
+            Block::default()
+                .title(" Connection Method ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+        f.render_widget(paragraph, center);
+    }
+
+    fn render_wps_waiting(&self, f: &mut ratatui::Frame, area: Rect) {
+        let elapsed = self
+            .state_machine
+            .wps_start_time
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        let remaining = 120u64.saturating_sub(elapsed);
+        let dots = ".".repeat(((elapsed % 4) + 1) as usize);
+
+        let text = format!(
+            "  Press the WPS button on your router now\n\n\
+             \x20 Waiting for connection{}\n\n\
+             \x20 Time remaining: {}s\n\n\
+             \x20 Press Esc to cancel",
+            dots, remaining
+        );
+
+        let center = centered_rect(55, 35, area);
+        let paragraph = Paragraph::new(text).block(
+            Block::default()
+                .title(" WPS Push Button ")
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),

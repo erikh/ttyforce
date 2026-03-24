@@ -6,6 +6,7 @@ expected_final_state = "Aborted"
 inputs = [
     "Confirm",
     { SelectWifiNetwork = 0 },
+    "WpsDecline",
     { EnterWifiPassword = "correctpassword" },
     "Confirm",
     "AbortInstall",
@@ -13,6 +14,7 @@ inputs = [
 
 expected_screens = [
     "WifiSelect",
+    "WpsPrompt",
     "WifiPassword",
     "NetworkProgress",
     "RaidConfig",

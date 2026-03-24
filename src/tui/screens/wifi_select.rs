@@ -126,7 +126,7 @@ impl Screen for WifiSelectScreen {
             f.render_widget(err_widget, chunks[2]);
         } else {
             let hint = Paragraph::new(
-                "Enter/Space: connect  ↑/↓: move  r: refresh scan  Esc: back  q: quit",
+                "Enter: connect  ↑/↓: move  r: refresh  Esc: back  q: quit",
             )
             .style(Style::default().fg(Color::DarkGray));
             f.render_widget(hint, chunks[2]);

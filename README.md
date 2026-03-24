@@ -1,6 +1,6 @@
 # ttyforce
 
-Text user interface for installing Town OS. Presented during disk provisioning, it handles network configuration and disk setup through an nmtui-style interface.
+Text user interface for installing [Town OS](https://town-os.github.io). Presented during disk provisioning, it handles network configuration and disk setup through an nmtui-style interface.
 
 ## Usage
 

@@ -1,4 +1,5 @@
 pub mod network;
+pub mod syscall;
 pub mod system;
 
 use std::fs;
@@ -56,6 +57,10 @@ pub fn execute(op: &Operation) -> OperationResult {
             interface,
             hostname,
         } => network::check_dns_resolution(interface, hostname),
+
+        // WPS push-button
+        Operation::WpsPbcStart { interface } => network::wps_pbc_start(interface),
+        Operation::WpsPbcStatus { interface } => network::wps_pbc_status(interface),
 
         // Network — state records (no system action)
         Operation::WifiConnectionTimeout { .. } => OperationResult::WifiTimeout,

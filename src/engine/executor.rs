@@ -62,6 +62,8 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::WifiAuthError { .. } => "WifiAuthError",
         Operation::ConfigureWifiSsidAuth { .. } => "ConfigureWifiSsidAuth",
         Operation::ReceiveWifiScanResults { .. } => "ReceiveWifiScanResults",
+        Operation::WpsPbcStart { .. } => "WpsPbcStart",
+        Operation::WpsPbcStatus { .. } => "WpsPbcStatus",
         Operation::PartitionDisk { .. } => "PartitionDisk",
         Operation::MkfsBtrfs { .. } => "MkfsBtrfs",
         Operation::CreateBtrfsSubvolume { .. } => "CreateBtrfsSubvolume",

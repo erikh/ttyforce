@@ -1,3 +1,6 @@
+#![deny(dead_code)]
+#![deny(unsafe_code)]
+
 use std::process;
 
 use clap::{Parser, Subcommand};

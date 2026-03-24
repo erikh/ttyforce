@@ -6,6 +6,7 @@ expected_final_state = "Installed"
 inputs = [
     "Confirm",
     { SelectWifiNetwork = 0 },
+    "WpsDecline",
     { EnterWifiPassword = "correctpassword" },
     "Confirm",
     { SelectRaidOption = 0 },
@@ -15,6 +16,7 @@ inputs = [
 
 expected_screens = [
     "WifiSelect",
+    "WpsPrompt",
     "WifiPassword",
     "NetworkProgress",
     "RaidConfig",

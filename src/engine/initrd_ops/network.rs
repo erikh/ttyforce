@@ -1,8 +1,6 @@
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 
-use nix::libc;
-
 use crate::detect::network::{parse_iw_scan, parse_iwlist_scan};
 use crate::engine::feedback::OperationResult;
 use crate::network::wifi::WifiNetwork;
@@ -61,46 +59,7 @@ pub fn shutdown_interface(interface: &str) -> OperationResult {
 
 /// Set or clear IFF_UP on an interface using SIOCSIFFLAGS ioctl.
 fn set_interface_up(interface: &str, up: bool) -> Result<(), String> {
-    let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
-    if sock < 0 {
-        return Err("failed to create socket".into());
-    }
-
-    let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-    let name_bytes = interface.as_bytes();
-    if name_bytes.len() >= libc::IFNAMSIZ {
-        unsafe { libc::close(sock) };
-        return Err("interface name too long".into());
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            name_bytes.as_ptr(),
-            ifr.ifr_name.as_mut_ptr() as *mut u8,
-            name_bytes.len(),
-        );
-    }
-
-    // Get current flags
-    if unsafe { libc::ioctl(sock, libc::SIOCGIFFLAGS as _, &mut ifr) } < 0 {
-        unsafe { libc::close(sock) };
-        return Err(format!("SIOCGIFFLAGS failed: {}", std::io::Error::last_os_error()));
-    }
-
-    let flags = unsafe { ifr.ifr_ifru.ifru_flags };
-    let new_flags = if up {
-        flags | libc::IFF_UP as i16
-    } else {
-        flags & !(libc::IFF_UP as i16)
-    };
-    ifr.ifr_ifru.ifru_flags = new_flags;
-
-    if unsafe { libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr) } < 0 {
-        unsafe { libc::close(sock) };
-        return Err(format!("SIOCSIFFLAGS failed: {}", std::io::Error::last_os_error()));
-    }
-
-    unsafe { libc::close(sock) };
-    Ok(())
+    super::syscall::set_interface_up(interface, up)
 }
 
 // ── Wifi (external tools: iw, wpa_supplicant) ──────────────────────────
@@ -203,6 +162,73 @@ pub fn parse_wifi_qr(qr_data: &str) -> Option<(String, String)> {
     }
 
     ssid.map(|s| (s, password.unwrap_or_default()))
+}
+
+// ── WPS push-button connection ──────────────────────────────────────────
+
+/// Start WPS PBC mode: write a minimal wpa_supplicant config, start
+/// wpa_supplicant, and trigger `wpa_cli wps_pbc`.
+pub fn wps_pbc_start(interface: &str) -> OperationResult {
+    let conf_path = format!("/tmp/wpa_supplicant_{}.conf", interface);
+    let conf_content = "ctrl_interface=/var/run/wpa_supplicant\nupdate_config=1\n";
+
+    cmd_log_append(format!("$ WPS PBC start on {}", interface));
+
+    if fs::write(&conf_path, conf_content).is_err() {
+        return OperationResult::Error("failed to write WPS wpa_supplicant config".into());
+    }
+
+    // Kill any existing wpa_supplicant for this interface
+    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Start wpa_supplicant
+    if let Err(e) = run_cmd(
+        "wpa_supplicant",
+        &["-B", "-i", interface, "-c", &conf_path],
+    ) {
+        return OperationResult::Error(format!("wpa_supplicant failed: {}", e));
+    }
+
+    // Wait for wpa_supplicant to initialize
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Trigger WPS PBC
+    match run_cmd("wpa_cli", &["-i", interface, "wps_pbc"]) {
+        Ok(_) => {
+            cmd_log_append("  -> WPS PBC initiated, waiting for router...".to_string());
+            OperationResult::Success
+        }
+        Err(e) => OperationResult::Error(format!("wpa_cli wps_pbc failed: {}", e)),
+    }
+}
+
+/// Poll WPS status by checking `wpa_cli status` for wpa_state=COMPLETED.
+pub fn wps_pbc_status(interface: &str) -> OperationResult {
+    match run_cmd("wpa_cli", &["-i", interface, "status"]) {
+        Ok(output) => {
+            for line in output.lines() {
+                if let Some(state) = line.strip_prefix("wpa_state=") {
+                    match state {
+                        "COMPLETED" => {
+                            cmd_log_append("  -> WPS connection completed".to_string());
+                            return OperationResult::WpsCompleted;
+                        }
+                        "INACTIVE" | "INTERFACE_DISABLED" => {
+                            return OperationResult::WifiTimeout;
+                        }
+                        _ => {
+                            // SCANNING, ASSOCIATING, etc. — still in progress
+                            return OperationResult::WpsPending;
+                        }
+                    }
+                }
+            }
+            // No wpa_state line found — still initializing
+            OperationResult::WpsPending
+        }
+        Err(_) => OperationResult::WpsPending,
+    }
 }
 
 // ── DHCP (external tool: dhcpcd) ────────────────────────────────────────
@@ -374,42 +400,15 @@ pub fn check_ip_address(interface: &str) -> OperationResult {
 /// Read the IPv4 address for an interface from the ioctl SIOCGIFADDR.
 fn check_ip_sysfs(interface: &str) -> OperationResult {
     cmd_log_append(format!("$ ioctl SIOCGIFADDR on {}", interface));
-    let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
-    if sock < 0 {
-        return OperationResult::NoIp;
-    }
-
-    let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-    let name_bytes = interface.as_bytes();
-    if name_bytes.len() >= libc::IFNAMSIZ {
-        unsafe { libc::close(sock) };
-        return OperationResult::NoIp;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            name_bytes.as_ptr(),
-            ifr.ifr_name.as_mut_ptr() as *mut u8,
-            name_bytes.len(),
-        );
-    }
-
-    if unsafe { libc::ioctl(sock, libc::SIOCGIFADDR as _, &mut ifr) } < 0 {
-        unsafe { libc::close(sock) };
-        return OperationResult::NoIp;
-    }
-
-    unsafe { libc::close(sock) };
-
-    // Extract IPv4 address from sockaddr_in
-    let addr = unsafe { &*(&ifr.ifr_ifru.ifru_addr as *const _ as *const libc::sockaddr_in) };
-    let ip = Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr));
-
-    if ip.is_unspecified() {
-        cmd_log_append("  -> no IP assigned".to_string());
-        OperationResult::NoIp
-    } else {
-        cmd_log_append(format!("  -> {}", ip));
-        OperationResult::IpAssigned(ip.to_string())
+    match super::syscall::get_interface_ipv4(interface) {
+        Some(ip) => {
+            cmd_log_append(format!("  -> {}", ip));
+            OperationResult::IpAssigned(ip.to_string())
+        }
+        None => {
+            cmd_log_append("  -> no IP assigned".to_string());
+            OperationResult::NoIp
+        }
     }
 }
 
@@ -447,7 +446,7 @@ pub fn check_upstream_router(interface: &str) -> OperationResult {
 /// Uses a raw socket — requires CAP_NET_RAW or root.
 pub fn check_internet_routability(_interface: &str) -> OperationResult {
     cmd_log_append("$ ping 1.1.1.1 (ICMP echo)".to_string());
-    match icmp_ping(Ipv4Addr::new(1, 1, 1, 1), std::time::Duration::from_secs(3)) {
+    match super::syscall::icmp_ping(Ipv4Addr::new(1, 1, 1, 1), std::time::Duration::from_secs(3)) {
         Ok(_) => {
             cmd_log_append("  -> reply received".to_string());
             OperationResult::InternetReachable
@@ -457,164 +456,6 @@ pub fn check_internet_routability(_interface: &str) -> OperationResult {
             OperationResult::NoInternet
         }
     }
-}
-
-/// Send an ICMP echo request and wait for a reply.
-fn icmp_ping(addr: Ipv4Addr, timeout: std::time::Duration) -> Result<(), String> {
-    let sock = unsafe {
-        libc::socket(
-            libc::AF_INET,
-            libc::SOCK_DGRAM,
-            libc::IPPROTO_ICMP,
-        )
-    };
-    if sock < 0 {
-        // SOCK_DGRAM ICMP not available, try raw
-        return icmp_ping_raw(addr, timeout);
-    }
-
-    // Set receive timeout
-    let tv = libc::timeval {
-        tv_sec: timeout.as_secs() as _,
-        tv_usec: 0,
-    };
-    unsafe {
-        libc::setsockopt(
-            sock,
-            libc::SOL_SOCKET,
-            libc::SO_RCVTIMEO,
-            &tv as *const _ as *const _,
-            std::mem::size_of::<libc::timeval>() as u32,
-        );
-    }
-
-    // Build ICMP echo request (type=8, code=0)
-    let mut packet = [0u8; 8];
-    packet[0] = 8; // type: echo request
-    packet[4] = 0x42; // identifier
-    packet[5] = 0x42;
-    let checksum = icmp_checksum(&packet);
-    packet[2] = (checksum >> 8) as u8;
-    packet[3] = (checksum & 0xff) as u8;
-
-    let dest = libc::sockaddr_in {
-        sin_family: libc::AF_INET as u16,
-        sin_port: 0,
-        sin_addr: libc::in_addr {
-            s_addr: u32::from(addr).to_be(),
-        },
-        sin_zero: [0; 8],
-    };
-
-    let sent = unsafe {
-        libc::sendto(
-            sock,
-            packet.as_ptr() as *const _,
-            packet.len(),
-            0,
-            &dest as *const _ as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_in>() as u32,
-        )
-    };
-    if sent < 0 {
-        unsafe { libc::close(sock) };
-        return Err("sendto failed".into());
-    }
-
-    let mut buf = [0u8; 256];
-    let received = unsafe { libc::recv(sock, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
-    unsafe { libc::close(sock) };
-
-    if received > 0 {
-        Ok(())
-    } else {
-        Err("no reply".into())
-    }
-}
-
-/// Fallback raw socket ICMP ping.
-fn icmp_ping_raw(addr: Ipv4Addr, timeout: std::time::Duration) -> Result<(), String> {
-    let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP) };
-    if sock < 0 {
-        // Neither DGRAM nor RAW ICMP available — fall back to ping command
-        return match run_cmd("ping", &["-c1", "-W3", &addr.to_string()]) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        };
-    }
-
-    let tv = libc::timeval {
-        tv_sec: timeout.as_secs() as _,
-        tv_usec: 0,
-    };
-    unsafe {
-        libc::setsockopt(
-            sock,
-            libc::SOL_SOCKET,
-            libc::SO_RCVTIMEO,
-            &tv as *const _ as *const _,
-            std::mem::size_of::<libc::timeval>() as u32,
-        );
-    }
-
-    let mut packet = [0u8; 8];
-    packet[0] = 8;
-    packet[4] = 0x42;
-    packet[5] = 0x42;
-    let checksum = icmp_checksum(&packet);
-    packet[2] = (checksum >> 8) as u8;
-    packet[3] = (checksum & 0xff) as u8;
-
-    let dest = libc::sockaddr_in {
-        sin_family: libc::AF_INET as u16,
-        sin_port: 0,
-        sin_addr: libc::in_addr {
-            s_addr: u32::from(addr).to_be(),
-        },
-        sin_zero: [0; 8],
-    };
-
-    let sent = unsafe {
-        libc::sendto(
-            sock,
-            packet.as_ptr() as *const _,
-            packet.len(),
-            0,
-            &dest as *const _ as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_in>() as u32,
-        )
-    };
-    if sent < 0 {
-        unsafe { libc::close(sock) };
-        return Err("sendto failed".into());
-    }
-
-    let mut buf = [0u8; 256];
-    let received = unsafe { libc::recv(sock, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
-    unsafe { libc::close(sock) };
-
-    if received > 0 {
-        Ok(())
-    } else {
-        Err("no reply".into())
-    }
-}
-
-/// Compute ICMP checksum (RFC 1071).
-fn icmp_checksum(data: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    let mut i = 0;
-    while i + 1 < data.len() {
-        sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
-        i += 2;
-    }
-    if i < data.len() {
-        sum += (data[i] as u32) << 8;
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    !(sum as u16)
 }
 
 /// Check DNS resolution using a direct UDP DNS query.
@@ -910,12 +751,12 @@ mod tests {
     fn test_icmp_checksum() {
         // Echo request with type=8, code=0, id=0x4242, seq=0
         let packet = [8, 0, 0, 0, 0x42, 0x42, 0, 0];
-        let cksum = icmp_checksum(&packet);
+        let cksum = crate::engine::initrd_ops::syscall::icmp_checksum(&packet);
         // Verify: checksum of packet with checksum inserted should be 0
         let mut verified = packet;
         verified[2] = (cksum >> 8) as u8;
         verified[3] = (cksum & 0xff) as u8;
-        assert_eq!(icmp_checksum(&verified), 0);
+        assert_eq!(crate::engine::initrd_ops::syscall::icmp_checksum(&verified), 0);
     }
 
     #[test]

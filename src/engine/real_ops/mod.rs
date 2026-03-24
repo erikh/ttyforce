@@ -83,6 +83,14 @@ pub fn execute(op: &Operation) -> OperationResult {
             hostname,
         } => network::check_dns_resolution(interface, hostname),
 
+        // WPS push-button (reuse initrd implementation — same wpa_cli approach)
+        Operation::WpsPbcStart { interface } => {
+            crate::engine::initrd_ops::network::wps_pbc_start(interface)
+        }
+        Operation::WpsPbcStatus { interface } => {
+            crate::engine::initrd_ops::network::wps_pbc_status(interface)
+        }
+
         // Network — state records (no system action)
         Operation::WifiConnectionTimeout { .. } => OperationResult::WifiTimeout,
         Operation::WifiAuthError { .. } => OperationResult::WifiAuthFailed("auth error".into()),

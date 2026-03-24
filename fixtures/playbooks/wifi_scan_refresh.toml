@@ -7,6 +7,7 @@ inputs = [
     "Confirm",
     "RefreshWifiScan",
     { SelectWifiNetwork = 0 },
+    "WpsDecline",
     { EnterWifiPassword = "password123" },
     "Confirm",
     { SelectRaidOption = 0 },
