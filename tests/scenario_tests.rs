@@ -1136,6 +1136,70 @@ fn test_default_mount_point_is_town_os() {
 }
 
 #[test]
+fn test_default_etc_prefix_is_at_etc_subvolume() {
+    let hw = load_hardware("ethernet_1disk");
+    let sm = InstallerStateMachine::new(hw);
+    assert_eq!(sm.etc_prefix(), "/town-os/@etc");
+}
+
+#[test]
+fn test_custom_etc_prefix_overrides_default() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    sm.etc_prefix = Some("/overlays/etc".to_string());
+    assert_eq!(sm.etc_prefix(), "/overlays/etc");
+}
+
+#[test]
+fn test_persist_network_config_targets_etc_subvolume() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut executor = success_executor();
+    let sm = run_ethernet_single_disk_install(hw, &mut executor);
+
+    // PersistNetworkConfig should target the @etc subvolume, not mount_point/etc/
+    let persist_op = sm
+        .action_manifest
+        .operations
+        .iter()
+        .find(|op| matches!(&op.operation, Operation::PersistNetworkConfig { .. }));
+    assert!(persist_op.is_some(), "PersistNetworkConfig operation missing from manifest");
+
+    if let Some(op) = persist_op {
+        match &op.operation {
+            Operation::PersistNetworkConfig { mount_point, .. } => {
+                assert_eq!(mount_point, "/town-os/@etc",
+                    "PersistNetworkConfig should write to @etc subvolume, got: {}", mount_point);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn test_generate_fstab_targets_etc_subvolume() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut executor = success_executor();
+    let sm = run_ethernet_single_disk_install(hw, &mut executor);
+
+    let fstab_op = sm
+        .action_manifest
+        .operations
+        .iter()
+        .find(|op| matches!(&op.operation, Operation::GenerateFstab { .. }));
+    assert!(fstab_op.is_some(), "GenerateFstab operation missing from manifest");
+
+    if let Some(op) = fstab_op {
+        match &op.operation {
+            Operation::GenerateFstab { mount_point, .. } => {
+                assert_eq!(mount_point, "/town-os/@etc",
+                    "GenerateFstab should write to @etc subvolume, got: {}", mount_point);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn test_cleanup_unmount_after_successful_install() {
     let hw = load_hardware("ethernet_1disk");
     let mut sm = InstallerStateMachine::new(hw);

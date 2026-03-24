@@ -120,10 +120,15 @@ impl InstallerStateMachine {
         self
     }
 
-    /// The target directory for /etc config files.
-    /// Defaults to mount_point if not explicitly set.
-    pub fn etc_prefix(&self) -> &str {
-        self.etc_prefix.as_deref().unwrap_or(&self.mount_point)
+    /// The target directory that corresponds to /etc on the installed system.
+    /// Defaults to `<mount_point>/@etc` (the Town OS @etc subvolume).
+    /// When set via `--etc-prefix`, uses that path directly.
+    /// Files are written directly under this path (e.g., `<etc_prefix>/systemd/network/`).
+    pub fn etc_prefix(&self) -> String {
+        match &self.etc_prefix {
+            Some(prefix) => prefix.clone(),
+            None => format!("{}/@etc", self.mount_point),
+        }
     }
 
     pub fn process_input(

@@ -96,14 +96,14 @@ pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str, options:
 }
 
 /// Generate a systemd service unit to mount the btrfs volume at boot.
-/// Written to <mount_point>/etc/systemd/system/ so the installed system
+/// Written to `<etc_prefix>/systemd/system/` so the installed system
 /// mounts the volume automatically. Uses a service (not a .mount unit)
 /// to avoid systemd's path-escaping issues with hyphens.
 ///
-/// ttyforce never modifies the root partition — all writes go inside
-/// the btrfs volume at <mount_point>.
+/// The `mount_point` parameter here is actually the etc_prefix path
+/// (the directory that maps to /etc on the installed system).
 pub fn generate_fstab(mount_point: &str, device: &str, fs_type: &str) -> OperationResult {
-    let unit_dir = format!("{}/etc/systemd/system", mount_point);
+    let unit_dir = format!("{}/systemd/system", mount_point);
     if let Err(e) = fs::create_dir_all(&unit_dir) {
         return OperationResult::Error(format!("failed to create {}: {}", unit_dir, e));
     }
@@ -205,7 +205,7 @@ mod tests {
         assert!(result.is_success(), "generate_fstab failed: {:?}", result);
 
         let svc = std::fs::read_to_string(
-            tmp.join("etc/systemd/system/mount-town-os.service"),
+            tmp.join("systemd/system/mount-town-os.service"),
         )
         .unwrap();
         assert!(svc.contains("/dev/sda1"));
@@ -213,7 +213,7 @@ mod tests {
 
         // Check symlink exists for enabling (use symlink_metadata since target is absolute
         // and won't exist in the test environment — exists() follows symlinks)
-        let link = tmp.join("etc/systemd/system/local-fs.target.wants/mount-town-os.service");
+        let link = tmp.join("systemd/system/local-fs.target.wants/mount-town-os.service");
         assert!(link.symlink_metadata().is_ok(), "enable symlink missing");
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -230,7 +230,7 @@ mod tests {
 
         // Should still work (overwrites cleanly)
         let svc = std::fs::read_to_string(
-            tmp.join("etc/systemd/system/mount-town-os.service"),
+            tmp.join("systemd/system/mount-town-os.service"),
         )
         .unwrap();
         assert!(svc.contains("/dev/sda1"));

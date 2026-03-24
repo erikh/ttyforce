@@ -784,7 +784,7 @@ pub fn cleanup_wpa_supplicant(interface: &str) -> OperationResult {
 /// Persist the network configuration established during the initrd session
 /// to the installed system's /etc so it boots with working networking.
 pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &str) -> OperationResult {
-    let target_networkd_dir = format!("{}/etc/systemd/network", mount_point);
+    let target_networkd_dir = format!("{}/systemd/network", mount_point);
     if let Err(e) = fs::create_dir_all(&target_networkd_dir) {
         return OperationResult::Error(format!(
             "failed to create {}: {}",
@@ -793,7 +793,7 @@ pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &
     }
 
     cmd_log_append(format!(
-        "$ persist network config: iface={} mac={} -> {}/etc/",
+        "$ persist network config: iface={} mac={} -> {}",
         interface, mac_address, mount_point
     ));
     let network_unit = generate_persist_network_config(interface, mac_address);
@@ -810,7 +810,7 @@ pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &
     // If we have a wpa_supplicant config, copy it to the installed system
     let wpa_src = format!("/tmp/wpa_supplicant_{}.conf", interface);
     if std::path::Path::new(&wpa_src).exists() {
-        let wpa_target_dir = format!("{}/etc/wpa_supplicant", mount_point);
+        let wpa_target_dir = format!("{}/wpa_supplicant", mount_point);
         if let Err(e) = fs::create_dir_all(&wpa_target_dir) {
             return OperationResult::Error(format!(
                 "failed to create {}: {}",

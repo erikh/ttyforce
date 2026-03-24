@@ -26,8 +26,11 @@ The binary has four subcommands and two global flags.
   using systemd (dbus, networkd, resolved, logind).
 - `initrd` — Run installer in initrd mode using syscalls and sysfs directly
   (no systemd dbus). Has its own flags:
-  - `--etc-prefix <DIR>` — Target directory for /etc config files. Defaults
-    to the mount point. Use when /etc is an overlay from a different path.
+  - `--etc-prefix <DIR>` — Directory that maps to /etc on the installed
+    system. Defaults to `<mount_point>/@etc`. Files are written directly
+    under this path (e.g., `<DIR>/systemd/network/`).
+  - `--tty <DEVICE>` — TTY device to use for the TUI (e.g., `/dev/tty1`,
+    `/dev/ttyS0`). Redirects stdin/stdout to the specified device.
 
 ## Global flags
 
@@ -47,7 +50,7 @@ ttyforce output                          # dry-run with real hardware
 ttyforce output -i hw.toml               # dry-run with manifest from file
 ttyforce run                             # real installer (systemd)
 ttyforce initrd                          # real installer (initrd mode)
-ttyforce initrd --etc-prefix /mnt/root   # initrd, write configs to /mnt/root/etc
+ttyforce initrd --etc-prefix /mnt/root   # initrd, write configs to /mnt/root/systemd/network/
 ttyforce run -i hw.toml                  # TUI with mock executor
 ```
 
@@ -183,21 +186,24 @@ dbus calls. Two executor backends exist:
 ## Config persistence:
 
 After a successful install, the `PersistNetworkConfig` operation writes:
-- `<etc_prefix>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
+- `<etc_prefix>/systemd/network/20-<iface>.network` — networkd DHCP unit
   matched by MAC address (not interface name) so it works regardless of
   interface naming scheme (initrd may use `eth0` while booted system uses
   `enp3s0`). Falls back to name matching if MAC is unavailable.
-- `<etc_prefix>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
+- `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
   used, copies the wpa_supplicant config from `/tmp/`
 
-The `etc_prefix` defaults to the mount point but can be overridden with
-the `--etc-prefix` flag on the `initrd` subcommand. When `--etc-prefix`
-is specified, it is the root path for ALL `/etc` writes — the mount
-point is NOT considered. All files go under `<etc_prefix>/etc/`.
+The `etc_prefix` is the directory that corresponds to `/etc` on the
+installed system. It defaults to `<mount_point>/@etc` (the Town OS
+`@etc` btrfs subvolume). Files are written directly under this path
+(no extra `/etc/` prefix is added).
 
-Example: `ttyforce initrd --etc-prefix /` writes directly to `/etc/`.
-Example: `ttyforce initrd --etc-prefix /mnt/root` writes to `/mnt/root/etc/`.
-Without `--etc-prefix`, writes go to `<mount_point>/etc/` (e.g. `/town-os/etc/`).
+When `--etc-prefix` is specified, it overrides the default and is used
+as-is for all config writes.
+
+Example: `ttyforce initrd --etc-prefix /overlays/etc` writes to `/overlays/etc/systemd/network/`.
+Example: `ttyforce initrd --etc-prefix /mnt/root/etc` writes to `/mnt/root/etc/systemd/network/`.
+Without `--etc-prefix`, writes go to `<mount_point>/@etc/` (e.g. `/town-os/@etc/systemd/network/`).
 
 systemd-networkd must be enabled on the installed system to pick up
 the `.network` file. ttyforce assumes it is already enabled.
@@ -245,8 +251,8 @@ screen. This applies to both systemd and initrd executors.
 2. MkfsBtrfs or BtrfsRaidSetup
 3. MountFilesystem (btrfs at /town-os)
 4. CreateBtrfsSubvolume (@etc, @var — Town OS overlay subvolumes)
-5. GenerateFstab (mount service to <etc_prefix>/etc/systemd/system/)
-6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/etc/)
+5. GenerateFstab (mount service to <etc_prefix>/systemd/system/)
+6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/)
 7. InstallBaseSystem (runs install.sh or pacstrap — may be a no-op)
 8. CleanupUnmount (final unmount so systemd doesn't see stale mount)
 
@@ -255,7 +261,7 @@ ttyforce does NOT create @, @home, @snapshots subvolumes. It creates
 setup (mounting @etc to /overlays/etc, adding fstab entries) is done
 by Town OS's make-storage.sh service at boot, not by ttyforce.
 
-Config files are written to `--etc-prefix` (defaults to mount point).
+Config files are written to `--etc-prefix` (defaults to `<mount_point>/@etc`).
 This should be set to wherever the overlay upperdir is accessible
 during the initrd phase.
 
@@ -268,7 +274,7 @@ single member partition may fail in initrd environments.
 ## Mount service generation:
 
 After a successful install, a systemd service unit `mount-town-os.service`
-is written to `<mount>/etc/systemd/system/` and enabled via symlink in
+is written to `<etc_prefix>/systemd/system/` and enabled via symlink in
 `local-fs.target.wants/`. This service:
 - Runs `mkdir -p /town-os` and `btrfs device scan` before mounting
 - Mounts the btrfs volume with `subvol=@` at the configured mount point
@@ -294,12 +300,12 @@ ttyforce NEVER modifies the root partition. The btrfs volume at the
 configured mount point (`/town-os` by default) is a data/system
 partition, NOT the root partition. The root filesystem is not affected.
 
-Files written during install — all go inside `<mount_point>/etc/`
-(the Town OS /etc overlay, NOT the root /etc):
-- `<mount>/etc/systemd/system/mount-town-os.service` — mount service
-- `<mount>/etc/systemd/system/local-fs.target.wants/` — enable symlink
-- `<mount>/etc/systemd/network/20-<iface>.network` — networkd DHCP unit
-- `<mount>/etc/wpa_supplicant/wpa_supplicant-<iface>.conf` — wifi config
+Files written during install — all go inside the `@etc` btrfs subvolume
+(`<mount_point>/@etc/` by default, overridable via `--etc-prefix`):
+- `<etc_prefix>/systemd/system/mount-town-os.service` — mount service
+- `<etc_prefix>/systemd/system/local-fs.target.wants/` — enable symlink
+- `<etc_prefix>/systemd/network/20-<iface>.network` — networkd DHCP unit
+- `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — wifi config
 
 The ONLY write to the running system's /etc during initrd mode is
 `/etc/resolv.conf` — this is necessary for DNS resolution during the
@@ -357,8 +363,8 @@ Town OS expects (`@var`, `@etc`), and network config must be written
 to the `@etc` subvolume so it appears in `/etc` via the overlay.
 
 The `--etc-prefix` flag should point to wherever the `@etc` subvolume
-is mounted (e.g., `/overlays/etc` or the mount point if writing before
-the overlay is set up).
+is accessible (defaults to `<mount_point>/@etc`). The path is used
+directly — no `/etc/` prefix is added.
 
 NOTE: ttyforce does NOT run pacstrap/InstallBaseSystem — the system is
 already installed via squashfs. InstallBaseSystem is a no-op or runs a
