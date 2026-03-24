@@ -200,6 +200,9 @@ impl Default for InitrdExecutor {
 impl OperationExecutor for InitrdExecutor {
     fn execute(&mut self, op: &Operation) -> OperationResult {
         let result = super::initrd_ops::execute(op);
+        if let OperationResult::Error(ref msg) = result {
+            super::real_ops::kmsg_log(&format!("operation {:?} failed: {}", op, msg));
+        }
         self.recorded.push(RecordedOperation {
             operation: op.clone(),
             result: result.clone(),

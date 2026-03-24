@@ -29,6 +29,14 @@ pub fn cmd_log_append(msg: String) {
     }
 }
 
+/// Best-effort write to /dev/kmsg (kernel log) for initrd debugging.
+/// Messages are prefixed with "ttyforce: " so they can be identified in dmesg.
+pub fn kmsg_log(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
+        let _ = writeln!(f, "ttyforce: {}", msg);
+    }
+}
+
 /// Execute an operation using real system commands and dbus calls.
 pub fn execute(op: &Operation) -> OperationResult {
     match op {
@@ -207,5 +215,12 @@ mod tests {
         let log = cmd_log();
         assert!(log.iter().any(|l| l.contains("$ nonexistent_command_xyz_99")));
         assert!(log.iter().any(|l| l.contains("error:") && l.contains("nonexistent_command_xyz_99")));
+    }
+
+    #[test]
+    fn test_kmsg_log_does_not_panic() {
+        // kmsg_log is best-effort — it should not panic even if /dev/kmsg
+        // is unavailable (e.g., in CI or non-root environments).
+        kmsg_log("test message from ttyforce unit test");
     }
 }

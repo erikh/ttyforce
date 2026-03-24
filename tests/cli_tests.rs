@@ -176,8 +176,29 @@ fn cli_initrd_help() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--etc-prefix"), "expected --etc-prefix in initrd help, got: {}", stdout);
+    assert!(stdout.contains("--tty"), "expected --tty in initrd help, got: {}", stdout);
     assert!(stdout.contains("--input"), "expected --input in initrd help");
     assert!(stdout.contains("--output"), "expected --output in initrd help");
+}
+
+#[test]
+fn cli_initrd_tty_nonexistent_device() {
+    // --tty with a nonexistent device should fail with an error
+    let out = ttyforce_bin()
+        .args([
+            "initrd",
+            "-i", "fixtures/hardware/ethernet_1disk.toml",
+            "--tty", "/dev/nonexistent_tty_device",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Error") || stderr.contains("error") || stderr.contains("No such file"),
+        "expected error about nonexistent TTY, got: {}",
+        stderr
+    );
 }
 
 // === Global flag position ===

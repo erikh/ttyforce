@@ -39,6 +39,9 @@ enum Command {
         /// Root prefix for /etc config file writes (default: same as mount point)
         #[arg(long)]
         etc_prefix: Option<String>,
+        /// TTY device to use for the TUI (e.g. /dev/tty1, /dev/ttyS0)
+        #[arg(long)]
+        tty: Option<String>,
     },
 }
 
@@ -57,14 +60,15 @@ fn main() {
             run_output(cli.input.as_deref(), cli.output.as_deref());
         }
         Command::Run => {
-            run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None);
+            run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None, None);
         }
-        Command::Initrd { etc_prefix } => {
+        Command::Initrd { etc_prefix, tty } => {
             run_installer(
                 cli.input.as_deref(),
                 cli.output.as_deref(),
                 true,
                 etc_prefix.as_deref(),
+                tty.as_deref(),
             );
         }
     }
@@ -145,7 +149,7 @@ fn run_output(input: Option<&str>, output: Option<&str>) {
     let mut app = App::new(state_machine);
     let mut executor = TestExecutor::new(vec![]);
 
-    if let Err(e) = app.run(&mut executor) {
+    if let Err(e) = app.run(&mut executor, None) {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
@@ -161,6 +165,7 @@ fn run_installer(
     output: Option<&str>,
     initrd: bool,
     etc_prefix: Option<&str>,
+    tty: Option<&str>,
 ) {
     let hardware = load_hardware(input, initrd);
 
@@ -177,19 +182,19 @@ fn run_installer(
 
     if input.is_some() {
         let mut executor = TestExecutor::new(vec![]);
-        if let Err(e) = app.run(&mut executor) {
+        if let Err(e) = app.run(&mut executor, tty) {
             eprintln!("Error: {}", e);
             process::exit(1);
         }
     } else if initrd {
         let mut executor = InitrdExecutor::new();
-        if let Err(e) = app.run(&mut executor) {
+        if let Err(e) = app.run(&mut executor, tty) {
             eprintln!("Error: {}", e);
             process::exit(1);
         }
     } else {
         let mut executor = RealExecutor::new();
-        if let Err(e) = app.run(&mut executor) {
+        if let Err(e) = app.run(&mut executor, tty) {
             eprintln!("Error: {}", e);
             process::exit(1);
         }

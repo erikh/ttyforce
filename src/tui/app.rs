@@ -1,4 +1,6 @@
+use std::fs::File;
 use std::io;
+use std::os::unix::io::AsRawFd;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::execute;
@@ -10,7 +12,40 @@ use ratatui::widgets::*;
 
 use crate::engine::executor::OperationExecutor;
 use crate::engine::state_machine::{InstallerStateMachine, ScreenId, UserInput};
+use crate::engine::real_ops::kmsg_log;
 use crate::tui::input::map_key_event;
+
+/// Redirect stdin and stdout to the given TTY device.
+/// Returns the saved file descriptors for stdin and stdout so they can be restored.
+fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
+    let tty_file = File::options().read(true).write(true).open(tty_path)?;
+    let tty_fd = tty_file.as_raw_fd();
+
+    // Save current stdin/stdout fds
+    let saved_stdin = nix::unistd::dup(0)
+        .map_err(io::Error::other)?;
+    let saved_stdout = nix::unistd::dup(1)
+        .map_err(io::Error::other)?;
+
+    // Redirect stdin and stdout to the TTY
+    nix::unistd::dup2(tty_fd, 0)
+        .map_err(io::Error::other)?;
+    nix::unistd::dup2(tty_fd, 1)
+        .map_err(io::Error::other)?;
+
+    // tty_file is consumed here but the fd remains via dup2
+    std::mem::forget(tty_file);
+
+    Ok((saved_stdin, saved_stdout))
+}
+
+/// Restore stdin and stdout from saved file descriptors.
+fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
+    let _ = nix::unistd::dup2(saved_stdin, 0);
+    let _ = nix::unistd::dup2(saved_stdout, 1);
+    let _ = nix::unistd::close(saved_stdin);
+    let _ = nix::unistd::close(saved_stdout);
+}
 
 pub struct App {
     pub state_machine: InstallerStateMachine,
@@ -52,7 +87,34 @@ impl App {
         }
     }
 
-    pub fn run(&mut self, executor: &mut dyn OperationExecutor) -> io::Result<()> {
+    pub fn run(&mut self, executor: &mut dyn OperationExecutor, tty: Option<&str>) -> io::Result<()> {
+        let saved_fds = if let Some(tty_path) = tty {
+            kmsg_log(&format!("redirecting TUI to {}", tty_path));
+            match redirect_to_tty(tty_path) {
+                Ok(fds) => Some(fds),
+                Err(e) => {
+                    kmsg_log(&format!("failed to open TTY {}: {}", tty_path, e));
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+
+        let result = self.run_tui_loop(executor);
+
+        if let Some((saved_stdin, saved_stdout)) = saved_fds {
+            restore_fds(saved_stdin, saved_stdout);
+        }
+
+        if let Err(ref e) = result {
+            kmsg_log(&format!("TUI error: {}", e));
+        }
+
+        result
+    }
+
+    fn run_tui_loop(&mut self, executor: &mut dyn OperationExecutor) -> io::Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
@@ -655,5 +717,39 @@ impl App {
                 self.should_quit = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redirect_to_tty_nonexistent_device() {
+        let result = redirect_to_tty("/dev/nonexistent_tty_device_xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_redirect_and_restore_with_devnull() {
+        // Use /dev/null as a stand-in — it's always available and read+write.
+        // This tests the dup/dup2/restore mechanics without needing a real TTY.
+        let saved_stdin = nix::unistd::dup(0).unwrap();
+        let saved_stdout = nix::unistd::dup(1).unwrap();
+
+        let result = redirect_to_tty("/dev/null");
+        assert!(result.is_ok(), "redirect_to_tty(/dev/null) failed: {:?}", result);
+
+        let (inner_stdin, inner_stdout) = result.unwrap();
+        // After redirect, fd 0 and 1 should point to /dev/null.
+        // Restore original fds.
+        restore_fds(inner_stdin, inner_stdout);
+
+        // Verify stdout still works after restore by writing to it
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), "stdout still works after restore");
+
+        let _ = nix::unistd::close(saved_stdin);
+        let _ = nix::unistd::close(saved_stdout);
     }
 }
