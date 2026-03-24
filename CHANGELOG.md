@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 (2026-03-24)
+
+### Features
+
+- WPS push-button support for wifi connection (`wpa_cli wps_pbc`)
+- `deny(dead_code)` and `deny(unsafe_code)` enforced at the crate level
+
+### Improvements
+
+- Group disks for RAID by transport type and similar size (10 GB threshold), not just make/model
+- Prepare wifi hardware (rfkill unblock, modprobe) in initrd before interface detection
+- Sync README with current codebase (serial logging, config paths, external tools, `--tty` flag)
+
 ## 0.2.0-alpha2 (2026-03-19)
 
 ### Breaking changes

@@ -36,6 +36,9 @@ ttyforce initrd
 # Initrd mode with custom /etc target for config files
 ttyforce initrd --etc-prefix /mnt/root
 
+# Initrd mode on a specific TTY device
+ttyforce initrd --tty /dev/tty1
+
 # Launch the real installer with hardware from a file (mock executor)
 ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 ```
@@ -47,7 +50,7 @@ ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 | `detect` | Detect hardware and print the hardware manifest. With `--fixture`, runs a scripted scenario and prints the resulting operations manifest instead. |
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
-| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location. |
+| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location and `--tty` for TTY device selection. |
 
 ### Global flags
 
@@ -66,11 +69,11 @@ The installer prioritizes getting online with minimal user interaction:
 2. If ethernet has link but no carrier, it brings the interface up step by step (enable, check link, DHCP, IP check, connectivity checks)
 3. If ethernet is dead or absent, it falls back to wifi
 4. Wifi presents a scannable network list with signal strength and security info
-5. Supports WPA2/WPA3 password entry and QR code configuration
+5. Supports WPA2/WPA3 password entry, QR code configuration, and WPS push-button connection
 
 ### Disks
 
-Disks are automatically grouped by make and model. The filesystem is always Btrfs. RAID options are presented based on disk count:
+Disks are automatically grouped by transport type (SATA, NVMe, etc.) and similar size (within 10 GB). Drives with identical make and model are always grouped together; groups on the same transport with similar capacity are merged as "Mixed &lt;transport&gt; drives". The filesystem is always Btrfs. RAID options are presented based on disk count:
 
 - **1 disk** — single drive
 - **2 disks** — RAID1 (Btrfs mirror)
@@ -82,7 +85,7 @@ The installation target mount point defaults to `/town-os`.
 
 The bottom half of the TUI shows a live command output log. Every shell command and syscall operation is logged with its arguments and result. Commands are color-coded: yellow for the command line, green for success, red for errors.
 
-The same log is also written to `/dev/console` for serial console debugging when the TUI is running on a different TTY.
+The same log is also written to `/dev/ttyS0` (serial console) for debugging when the TUI is running on a different TTY.
 
 ### Final screen
 
@@ -97,7 +100,7 @@ After installation completes (or is aborted), the final screen offers three choi
 Two executor backends are available:
 
 - **Systemd** (default) — Uses systemd dbus interfaces (networkd, resolved, logind) with sysfs/command fallbacks. Suitable for full systemd environments.
-- **Initrd** (`--initrd`) — Uses syscalls and sysfs directly where possible, with minimal external tool dependencies. After a successful install, network configuration (networkd units and wpa_supplicant configs) is persisted to `<mount_point>/etc/` so the installed system boots with working networking.
+- **Initrd** (`--initrd`) — Uses syscalls and sysfs directly where possible, with minimal external tool dependencies. After a successful install, network configuration (networkd units and wpa_supplicant configs) is persisted to `<mount_point>/@etc/` (overridable via `--etc-prefix`) so the installed system boots with working networking.
 
   **Syscalls used (no external tools):**
   - Interface up/down — `ioctl(SIOCSIFFLAGS)`
@@ -112,11 +115,15 @@ Two executor backends are available:
   **Required external tools in initrd:**
   - `dhcpcd` — DHCP client
   - `wpa_supplicant` — WPA authentication (CLI mode, no dbus)
+  - `wpa_cli` — WPS push-button connection and status polling
   - `iw` — wifi scanning (fallback: `iwlist`)
+  - `rfkill` — unblock wifi radio before detection (best-effort)
+  - `modprobe` — load wifi kernel modules in initrd (best-effort)
   - `parted` — disk partitioning
   - `mkfs.btrfs` — btrfs filesystem creation
   - `btrfs` — subvolume management
   - `pacstrap` or `install.sh` — base system installation
+  - `pkill` — cleanup of dhcpcd/wpa_supplicant processes
 
 ### Hardware detection
 
