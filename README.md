@@ -60,7 +60,7 @@ ttyforce getty --etc-prefix /mnt/root
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
 | `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location and `--tty` for TTY device selection. |
-| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. Pressing `l` execs into `/bin/login`; agetty respawns ttyforce after the shell exits. Supports `--etc-prefix` and `--tty`. |
+| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. Pressing `.` execs into `/bin/login`; agetty respawns ttyforce after the shell exits. `l`/`s` toggle between log and status panels. Supports `--etc-prefix` and `--tty`. |
 
 ### Global flags
 

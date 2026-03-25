@@ -43,7 +43,7 @@ impl TownApiClient {
 
     /// Fetch service/unit status from the Town OS API.
     pub fn fetch_services(&self) -> Result<Vec<ServiceInfo>, String> {
-        let body = self.http_get("/units")?;
+        let body = self.http_get("/systemd/units?limit=100")?;
         parse_units_json(&body)
     }
 
@@ -98,16 +98,18 @@ impl TownApiClient {
     }
 }
 
-/// Parse the JSON response from the /units endpoint into ServiceInfo structs.
-/// Expects a JSON array of objects with at least "Name" and "ActiveState" fields.
+/// Parse the JSON response from the /systemd/units endpoint into ServiceInfo structs.
+/// Handles both paginated format `{ "entries": [...] }` and bare array `[...]`.
 pub fn parse_units_json(body: &str) -> Result<Vec<ServiceInfo>, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("JSON parse error: {}", e))?;
 
-    let arr = match value.as_array() {
-        Some(a) => a,
-        None => return Err("expected JSON array".to_string()),
-    };
+    // Try paginated format first: { "entries": [...] }
+    let arr = value
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .or_else(|| value.as_array())
+        .ok_or_else(|| "expected entries array or JSON array".to_string())?;
 
     let mut services = Vec::new();
     for item in arr {
@@ -177,7 +179,32 @@ mod tests {
     fn test_parse_units_json_not_array() {
         let result = parse_units_json(r#"{"key": "value"}"#);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("expected JSON array"));
+        assert!(result.unwrap_err().contains("expected entries array"));
+    }
+
+    #[test]
+    fn test_parse_units_json_paginated() {
+        let json = r#"{
+            "entries": [
+                {"Name": "caddy.service", "ActiveState": "active", "Description": "Caddy"},
+                {"Name": "forgejo.service", "ActiveState": "activating", "Description": "Forgejo"}
+            ],
+            "has_more": false,
+            "total_pages": 1,
+            "total_count": 2
+        }"#;
+        let services = parse_units_json(json).unwrap();
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].name, "caddy.service");
+        assert_eq!(services[0].active_state, "active");
+        assert_eq!(services[1].active_state, "activating");
+    }
+
+    #[test]
+    fn test_parse_units_json_paginated_empty_entries() {
+        let json = r#"{"entries": [], "has_more": false, "total_count": 0}"#;
+        let services = parse_units_json(json).unwrap();
+        assert!(services.is_empty());
     }
 
     #[test]

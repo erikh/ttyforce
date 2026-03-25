@@ -44,8 +44,10 @@ The binary has five subcommands and two global flags.
   - `--tty <DEVICE>` — TTY device to use for the TUI.
 
   Actions (key-triggered):
-  - `[l]` Login — `exec` into `/bin/login`, replacing the ttyforce
+  - `[.]` Login — `exec` into `/bin/login`, replacing the ttyforce
     process. agetty respawns ttyforce after the shell exits.
+  - `[l]` Log — show live journalctl output panel.
+  - `[s]` Status — show service status panel.
   - `[r]` Reconfigure — spawns `ttyforce run` as a child process with
     the same `--etc-prefix`/`--tty` flags, resumes getty when done.
   - `[R]` Reboot — reboots the machine.
@@ -53,6 +55,16 @@ The binary has five subcommands and two global flags.
   - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
     Stops all podman containers, unmounts /town-os, wipes all btrfs
     member disks, reboots.
+
+  During startup, the log panel is shown automatically with a
+  "Services starting" header. When all services become active, it
+  auto-switches to the status panel. After that, `l` and `s` toggle
+  between the two panels freely.
+
+  Service status is fetched from the Town OS API at
+  `GET /systemd/units?limit=100` on `localhost:5309`.
+  Authentication uses a bearer token from `TTYFORCE_API_TOKEN` env
+  var or `<etc_prefix>/ttyforce/api-token` file.
 
 ## Global flags
 

@@ -17,6 +17,17 @@ use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
 use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds};
 
+/// Which panel is shown in the services area.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PanelView {
+    /// Startup: show log, auto-switch to status when all services are green.
+    Auto,
+    /// User explicitly selected the log panel.
+    Log,
+    /// User explicitly selected the status panel (or auto-switched).
+    Status,
+}
+
 /// Actions that can be triggered from the getty screen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GettyAction {
@@ -39,6 +50,7 @@ pub struct GettyApp {
     /// When Some, the user is in sledgehammer confirmation mode.
     pub sledgehammer_input: Option<String>,
     pub should_quit: bool,
+    pub panel_view: PanelView,
     last_fast_refresh: Instant,
     last_slow_refresh: Instant,
     /// Live journalctl -f output shown while services are starting.
@@ -67,6 +79,7 @@ impl GettyApp {
             mount_point,
             sledgehammer_input: None,
             should_quit: false,
+            panel_view: PanelView::Auto,
             last_fast_refresh: Instant::now(),
             last_slow_refresh: Instant::now(),
             journal_lines: Vec::new(),
@@ -216,7 +229,21 @@ impl GettyApp {
 
         // Normal mode
         match key.code {
-            KeyCode::Char('l') => GettyAction::Login,
+            KeyCode::Char('.') => GettyAction::Login,
+            KeyCode::Char('l') => {
+                if self.panel_view != PanelView::Log {
+                    self.panel_view = PanelView::Log;
+                    // Restart journal if not running
+                    if self.journal_child.is_none() {
+                        self.start_journal();
+                    }
+                }
+                GettyAction::None
+            }
+            KeyCode::Char('s') => {
+                self.panel_view = PanelView::Status;
+                GettyAction::None
+            }
             KeyCode::Char('r') => GettyAction::Reconfigure,
             KeyCode::Char('R') => GettyAction::Reboot,
             KeyCode::Char('p') => GettyAction::PowerOff,
@@ -239,21 +266,36 @@ impl GettyApp {
         }
     }
 
-    /// Ensure journalctl -f is running if services are still starting.
-    /// Kill it when all services are active.
+    /// Manage journal process and panel view transitions.
     fn manage_journal(&mut self) {
-        if self.all_services_active() {
-            self.stop_journal();
-            return;
+        let all_active = self.all_services_active();
+
+        // Auto mode: switch to Status when all services are green
+        if self.panel_view == PanelView::Auto && all_active {
+            self.panel_view = PanelView::Status;
         }
 
-        // Start journal if not already running
-        if self.journal_child.is_none() {
-            self.start_journal();
-        }
+        // Journal should run when in Auto (starting) or Log mode
+        let need_journal = matches!(self.panel_view, PanelView::Auto | PanelView::Log);
 
-        // Drain available lines from the child's stdout (non-blocking)
-        self.drain_journal_lines();
+        if need_journal {
+            if self.journal_child.is_none() {
+                self.start_journal();
+            }
+            self.drain_journal_lines();
+        } else {
+            // Status mode with all services active — stop journal
+            if all_active {
+                self.stop_journal();
+            } else {
+                // Status mode but services not all active — keep draining
+                // so we have data if user switches to log
+                if self.journal_child.is_none() {
+                    self.start_journal();
+                }
+                self.drain_journal_lines();
+            }
+        }
     }
 
     fn start_journal(&mut self) {
@@ -519,14 +561,23 @@ impl GettyApp {
     }
 
     fn render_services(&self, f: &mut ratatui::Frame, area: Rect) {
-        // If services are still starting, show live journal output
-        if !self.all_services_active() && !self.journal_lines.is_empty() {
-            self.render_journal(f, area);
-            return;
+        match self.panel_view {
+            PanelView::Auto => {
+                // Startup: show journal with "services starting" header
+                self.render_journal(f, area);
+                return;
+            }
+            PanelView::Log => {
+                self.render_journal(f, area);
+                return;
+            }
+            PanelView::Status => {
+                // Fall through to render service list
+            }
         }
 
         let block = Block::default()
-            .title(" Services ")
+            .title(" Services [l: log] ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
@@ -590,11 +641,16 @@ impl GettyApp {
     }
 
     fn render_journal(&self, f: &mut ratatui::Frame, area: Rect) {
+        let (title, border_color) = if self.panel_view == PanelView::Auto {
+            (" Services starting — live journal [s: status] ", Color::Yellow)
+        } else {
+            (" Journal [s: status] ", Color::DarkGray)
+        };
         let block = Block::default()
-            .title(" Services starting — live journal ")
+            .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(border_color));
 
         let inner_height = area.height.saturating_sub(2) as usize;
         let start = self.journal_lines.len().saturating_sub(inner_height);
@@ -622,7 +678,7 @@ impl GettyApp {
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let actions = Paragraph::new(
-            "  [l] Login   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Sledgehammer",
+            "  [.] Login   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe",
         )
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::White))
@@ -726,8 +782,47 @@ mod tests {
     #[test]
     fn test_key_login() {
         let mut app = test_app();
-        let key = KeyEvent::from(KeyCode::Char('l'));
+        let key = KeyEvent::from(KeyCode::Char('.'));
         assert_eq!(app.map_key(key), GettyAction::Login);
+    }
+
+    #[test]
+    fn test_key_log_panel() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('l'));
+        assert_eq!(app.map_key(key), GettyAction::None);
+        assert_eq!(app.panel_view, PanelView::Log);
+    }
+
+    #[test]
+    fn test_key_status_panel() {
+        let mut app = test_app();
+        app.panel_view = PanelView::Log;
+        let key = KeyEvent::from(KeyCode::Char('s'));
+        assert_eq!(app.map_key(key), GettyAction::None);
+        assert_eq!(app.panel_view, PanelView::Status);
+    }
+
+    #[test]
+    fn test_panel_auto_to_status_when_all_active() {
+        let mut app = test_app();
+        app.panel_view = PanelView::Auto;
+        app.services = Ok(vec![
+            ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
+        ]);
+        app.manage_journal();
+        assert_eq!(app.panel_view, PanelView::Status);
+    }
+
+    #[test]
+    fn test_panel_auto_stays_when_not_all_active() {
+        let mut app = test_app();
+        app.panel_view = PanelView::Auto;
+        app.services = Ok(vec![
+            ServiceInfo { name: "a.service".into(), active_state: "activating".into(), description: String::new() },
+        ]);
+        app.manage_journal();
+        assert_eq!(app.panel_view, PanelView::Auto);
     }
 
     #[test]
@@ -908,6 +1003,7 @@ mod tests {
             mount_point: "/town-os".to_string(),
             sledgehammer_input: None,
             should_quit: false,
+            panel_view: PanelView::Auto,
             last_fast_refresh: Instant::now(),
             last_slow_refresh: Instant::now(),
             journal_lines: Vec::new(),
