@@ -42,7 +42,10 @@ pub enum GettyAction {
 /// The getty TUI application — replaces login on a TTY.
 pub struct GettyApp {
     pub system_info: SystemInfo,
-    pub services: Result<Vec<ServiceInfo>, String>,
+    /// System services only — used for startup readiness checks.
+    pub system_services: Result<Vec<ServiceInfo>, String>,
+    /// All services (system + packages) — shown on the status panel.
+    pub all_services: Result<Vec<ServiceInfo>, String>,
     pub api_client: TownApiClient,
     pub etc_prefix: Option<String>,
     pub tty: Option<String>,
@@ -68,11 +71,13 @@ impl GettyApp {
     ) -> Self {
         let api_client = TownApiClient::from_env(etc_prefix.as_deref());
         let system_info = SystemInfo::probe(&mount_point);
-        let services = api_client.fetch_services();
+        let system_services = api_client.fetch_system_services();
+        let all_services = api_client.fetch_all_services();
 
         Self {
             system_info,
-            services,
+            system_services,
+            all_services,
             api_client,
             etc_prefix,
             tty,
@@ -137,7 +142,8 @@ impl GettyApp {
             // Slow refresh: network check + API (can block briefly, every 15s)
             if self.last_slow_refresh.elapsed() >= Duration::from_secs(15) {
                 self.system_info.refresh_network();
-                self.services = self.api_client.fetch_services();
+                self.system_services = self.api_client.fetch_system_services();
+                self.all_services = self.api_client.fetch_all_services();
                 self.last_slow_refresh = Instant::now();
             }
 
@@ -255,11 +261,11 @@ impl GettyApp {
         }
     }
 
-    /// Check whether all services are active (no activating/failed/inactive).
+    /// Check whether all system services are active (no activating/failed/inactive).
     /// An empty service list is considered "all active" (nothing to wait for).
     /// An API error is not — we can't confirm services are ready.
     pub fn all_services_active(&self) -> bool {
-        match &self.services {
+        match &self.system_services {
             Ok(services) => services.iter().all(|s| s.active_state == "active"),
             Err(_) => false,
         }
@@ -581,7 +587,7 @@ impl GettyApp {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        match &self.services {
+        match &self.all_services {
             Ok(services) if services.is_empty() => {
                 let paragraph = Paragraph::new("  No services found")
                     .style(Style::default().fg(Color::DarkGray))
@@ -806,7 +812,7 @@ mod tests {
     fn test_panel_auto_to_status_when_all_active() {
         let mut app = test_app();
         app.panel_view = PanelView::Auto;
-        app.services = Ok(vec![
+        app.system_services = Ok(vec![
             ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
         ]);
         app.manage_journal();
@@ -817,7 +823,7 @@ mod tests {
     fn test_panel_auto_stays_when_not_all_active() {
         let mut app = test_app();
         app.panel_view = PanelView::Auto;
-        app.services = Ok(vec![
+        app.system_services = Ok(vec![
             ServiceInfo { name: "a.service".into(), active_state: "activating".into(), description: String::new() },
         ]);
         app.manage_journal();
@@ -995,7 +1001,8 @@ mod tests {
                 mdns_url: "testbox.local".to_string(),
                 town_os_version: Some("1.0".to_string()),
             },
-            services: Ok(vec![]),
+            system_services: Ok(vec![]),
+            all_services: Ok(vec![]),
             api_client: TownApiClient::new(None),
             etc_prefix: None,
             tty: None,
@@ -1021,7 +1028,7 @@ mod tests {
     #[test]
     fn test_all_services_active_all_active() {
         let mut app = test_app();
-        app.services = Ok(vec![
+        app.system_services = Ok(vec![
             ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
             ServiceInfo { name: "b.service".into(), active_state: "active".into(), description: String::new() },
         ]);
@@ -1031,7 +1038,7 @@ mod tests {
     #[test]
     fn test_all_services_active_some_activating() {
         let mut app = test_app();
-        app.services = Ok(vec![
+        app.system_services = Ok(vec![
             ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
             ServiceInfo { name: "b.service".into(), active_state: "activating".into(), description: String::new() },
         ]);
@@ -1041,7 +1048,7 @@ mod tests {
     #[test]
     fn test_all_services_active_api_error() {
         let mut app = test_app();
-        app.services = Err("API unavailable".into());
+        app.system_services = Err("API unavailable".into());
         assert!(!app.all_services_active());
     }
 }
