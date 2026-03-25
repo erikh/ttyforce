@@ -14,7 +14,7 @@
 
 # CLI:
 
-The binary has four subcommands and two global flags.
+The binary has five subcommands and two global flags.
 
 ## Subcommands
 
@@ -33,6 +33,26 @@ The binary has four subcommands and two global flags.
     under this path (e.g., `<DIR>/systemd/network/`).
   - `--tty <DEVICE>` — TTY device to use for the TUI (e.g., `/dev/tty1`,
     `/dev/ttyS0`). Redirects stdin/stdout to the specified device.
+- `getty` — Run as a getty replacement (login screen with system status).
+  Designed to be invoked by agetty instead of `/bin/login`. Displays
+  machine info, network/mDNS status, system stats (CPU, memory, disk),
+  and service health via the Town OS API at `localhost:5309`. While
+  services are starting, shows live `journalctl -f` output. Has its
+  own flags:
+  - `--etc-prefix <DIR>` — Same as initrd; passed through to
+    `ttyforce run` on reconfigure.
+  - `--tty <DEVICE>` — TTY device to use for the TUI.
+
+  Actions (key-triggered):
+  - `[l]` Login — `exec` into `/bin/login`, replacing the ttyforce
+    process. agetty respawns ttyforce after the shell exits.
+  - `[r]` Reconfigure — spawns `ttyforce run` as a child process with
+    the same `--etc-prefix`/`--tty` flags, resumes getty when done.
+  - `[R]` Reboot — reboots the machine.
+  - `[p]` Power Off — powers off the machine.
+  - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
+    Stops all podman containers, unmounts /town-os, wipes all btrfs
+    member disks, reboots.
 
 ## Global flags
 
@@ -54,6 +74,9 @@ ttyforce run                             # real installer (systemd)
 ttyforce initrd                          # real installer (initrd mode)
 ttyforce initrd --etc-prefix /mnt/root   # initrd, write configs to /mnt/root/systemd/network/
 ttyforce run -i hw.toml                  # TUI with mock executor
+ttyforce getty                           # getty replacement (system status + login)
+ttyforce getty --tty /dev/tty1           # getty on specific TTY
+ttyforce getty --etc-prefix /mnt/root    # getty with custom etc prefix
 ```
 
 # DESIGN:

@@ -137,8 +137,22 @@ impl GettyApp {
                 if let Event::Key(key) = event::read()? {
                     let action = self.map_key(key);
                     match action {
-                        GettyAction::Login | GettyAction::Reconfigure => {
-                            // Leave TUI for child process
+                        GettyAction::Login => {
+                            // exec into /bin/login — cede control entirely.
+                            // agetty will respawn us after the shell exits.
+                            self.stop_journal();
+                            disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                            self.exec_login();
+                            // exec_login only returns on failure — recover TUI
+                            let mut new_stdout = io::stdout();
+                            execute!(new_stdout, EnterAlternateScreen)?;
+                            enable_raw_mode()?;
+                            terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
+                        }
+                        GettyAction::Reconfigure => {
+                            // Spawn reconfigure as child, wait, then resume getty
+                            self.stop_journal();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
@@ -304,6 +318,15 @@ impl GettyApp {
         }
     }
 
+    /// Exec into /bin/login, replacing this process entirely.
+    /// Only returns if exec fails.
+    fn exec_login(&self) {
+        use std::os::unix::process::CommandExt;
+        let err = Command::new("/bin/login").exec();
+        // only reached on failure — exec replaces the process on success
+        cmd_log_append(format!("  -> exec /bin/login failed: {}", err));
+    }
+
     /// Execute a getty action.
     pub fn execute_action(
         &mut self,
@@ -311,15 +334,7 @@ impl GettyApp {
         executor: &mut dyn OperationExecutor,
     ) {
         match action {
-            GettyAction::None => {}
-            GettyAction::Login => {
-                cmd_log_append("$ /bin/login".to_string());
-                let status = std::process::Command::new("/bin/login").status();
-                match status {
-                    Ok(s) => cmd_log_append(format!("  -> login exited ({})", s)),
-                    Err(e) => cmd_log_append(format!("  -> login failed: {}", e)),
-                }
-            }
+            GettyAction::None | GettyAction::Login => {}
             GettyAction::Reconfigure => {
                 let exe = std::env::current_exe()
                     .unwrap_or_else(|_| "ttyforce".into());
