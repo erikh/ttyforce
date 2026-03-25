@@ -42,9 +42,25 @@ impl TownApiClient {
     }
 
     /// Fetch service/unit status from the Town OS API.
+    /// Queries both /system-services (infrastructure) and /systemd/units (packages).
     pub fn fetch_services(&self) -> Result<Vec<ServiceInfo>, String> {
-        let body = self.http_get("/systemd/units?limit=100")?;
-        parse_units_json(&body)
+        let mut all = Vec::new();
+
+        // System services (town-os-system--*)
+        if let Ok(body) = self.http_get("/system-services") {
+            if let Ok(services) = parse_units_json(&body) {
+                all.extend(services);
+            }
+        }
+
+        // Package services (town-os-package--*)
+        if let Ok(body) = self.http_get("/systemd/units?limit=100") {
+            if let Ok(services) = parse_units_json(&body) {
+                all.extend(services);
+            }
+        }
+
+        Ok(all)
     }
 
     /// Perform an HTTP GET request to the Town OS API.

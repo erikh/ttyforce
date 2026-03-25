@@ -256,13 +256,12 @@ impl GettyApp {
     }
 
     /// Check whether all services are active (no activating/failed/inactive).
+    /// An empty service list is considered "all active" (nothing to wait for).
+    /// An API error is not — we can't confirm services are ready.
     pub fn all_services_active(&self) -> bool {
         match &self.services {
-            Ok(services) if !services.is_empty() => {
-                services.iter().all(|s| s.active_state == "active")
-            }
-            // No services yet or API error — not all active
-            _ => false,
+            Ok(services) => services.iter().all(|s| s.active_state == "active"),
+            Err(_) => false,
         }
     }
 
@@ -1015,8 +1014,8 @@ mod tests {
     #[test]
     fn test_all_services_active_empty() {
         let app = test_app();
-        // Empty services list = not all active
-        assert!(!app.all_services_active());
+        // Empty services list = vacuously all active (nothing to wait for)
+        assert!(app.all_services_active());
     }
 
     #[test]
