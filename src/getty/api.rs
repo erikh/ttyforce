@@ -52,7 +52,7 @@ impl TownApiClient {
         let addr = "127.0.0.1:5309"
             .parse()
             .map_err(|e| format!("bad address: {}", e))?;
-        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
             .map_err(|e| format!("API unavailable: {}", e))?;
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))

@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 use ttyforce::engine::executor::{InitrdExecutor, RealExecutor, SimulatedResponse, TestExecutor};
 use ttyforce::engine::state_machine::InstallerStateMachine;
-use ttyforce::getty::GettyApp;
+use ttyforce::tui::GettyApp;
 use ttyforce::manifest::HardwareManifest;
 use ttyforce::tui::App;
 

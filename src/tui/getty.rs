@@ -1,4 +1,5 @@
-use std::io;
+use std::io::{self, BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -10,10 +11,11 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 
 use crate::engine::executor::OperationExecutor;
-use crate::engine::real_ops::{cmd_log, cmd_log_append, kmsg_log, run_cmd};
+use crate::engine::real_ops::{cmd_log_append, kmsg_log, run_cmd};
 use crate::getty::api::{ServiceInfo, TownApiClient};
 use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
+use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds};
 
 /// Actions that can be triggered from the getty screen.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,32 +39,13 @@ pub struct GettyApp {
     /// When Some, the user is in sledgehammer confirmation mode.
     pub sledgehammer_input: Option<String>,
     pub should_quit: bool,
-    last_refresh: Instant,
-}
-
-/// Redirect stdin/stdout to a TTY device, returning saved fds.
-fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
-    let tty_file = std::fs::File::options()
-        .read(true)
-        .write(true)
-        .open(tty_path)?;
-    let tty_fd = std::os::unix::io::AsRawFd::as_raw_fd(&tty_file);
-
-    let saved_stdin = nix::unistd::dup(0).map_err(io::Error::other)?;
-    let saved_stdout = nix::unistd::dup(1).map_err(io::Error::other)?;
-
-    nix::unistd::dup2(tty_fd, 0).map_err(io::Error::other)?;
-    nix::unistd::dup2(tty_fd, 1).map_err(io::Error::other)?;
-
-    std::mem::forget(tty_file);
-    Ok((saved_stdin, saved_stdout))
-}
-
-fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
-    let _ = nix::unistd::dup2(saved_stdin, 0);
-    let _ = nix::unistd::dup2(saved_stdout, 1);
-    let _ = nix::unistd::close(saved_stdin);
-    let _ = nix::unistd::close(saved_stdout);
+    last_fast_refresh: Instant,
+    last_slow_refresh: Instant,
+    /// Live journalctl -f output shown while services are starting.
+    journal_lines: Vec<String>,
+    journal_child: Option<Child>,
+    /// Max lines to keep in the journal buffer.
+    journal_max_lines: usize,
 }
 
 impl GettyApp {
@@ -84,7 +67,11 @@ impl GettyApp {
             mount_point,
             sledgehammer_input: None,
             should_quit: false,
-            last_refresh: Instant::now(),
+            last_fast_refresh: Instant::now(),
+            last_slow_refresh: Instant::now(),
+            journal_lines: Vec::new(),
+            journal_child: None,
+            journal_max_lines: 200,
         }
     }
 
@@ -128,10 +115,21 @@ impl GettyApp {
         let mut terminal = Terminal::new(backend)?;
 
         while !self.should_quit {
-            // Refresh system info periodically
-            if self.last_refresh.elapsed() >= Duration::from_secs(3) {
-                self.refresh();
+            // Fast refresh: proc file reads (instant, every 3s)
+            if self.last_fast_refresh.elapsed() >= Duration::from_secs(3) {
+                self.system_info.refresh_stats(&self.mount_point);
+                self.last_fast_refresh = Instant::now();
             }
+
+            // Slow refresh: network check + API (can block briefly, every 15s)
+            if self.last_slow_refresh.elapsed() >= Duration::from_secs(15) {
+                self.system_info.refresh_network();
+                self.services = self.api_client.fetch_services();
+                self.last_slow_refresh = Instant::now();
+            }
+
+            // Manage journal process: start if services starting, drain lines, stop when ready
+            self.manage_journal();
 
             terminal.draw(|f| self.render(f))?;
 
@@ -151,7 +149,8 @@ impl GettyApp {
                             execute!(new_stdout, EnterAlternateScreen)?;
                             enable_raw_mode()?;
                             terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
-                            self.refresh();
+                            self.last_fast_refresh = Instant::now() - Duration::from_secs(10);
+                            self.last_slow_refresh = Instant::now() - Duration::from_secs(20);
                         }
                         GettyAction::None => {}
                         _ => {
@@ -162,16 +161,10 @@ impl GettyApp {
             }
         }
 
+        self.stop_journal();
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
-    }
-
-    /// Refresh system info and service status.
-    pub fn refresh(&mut self) {
-        self.system_info = SystemInfo::probe(&self.mount_point);
-        self.services = self.api_client.fetch_services();
-        self.last_refresh = Instant::now();
     }
 
     /// Map a key event to a GettyAction.
@@ -218,6 +211,96 @@ impl GettyApp {
                 GettyAction::None
             }
             _ => GettyAction::None,
+        }
+    }
+
+    /// Check whether all services are active (no activating/failed/inactive).
+    pub fn all_services_active(&self) -> bool {
+        match &self.services {
+            Ok(services) if !services.is_empty() => {
+                services.iter().all(|s| s.active_state == "active")
+            }
+            // No services yet or API error — not all active
+            _ => false,
+        }
+    }
+
+    /// Ensure journalctl -f is running if services are still starting.
+    /// Kill it when all services are active.
+    fn manage_journal(&mut self) {
+        if self.all_services_active() {
+            self.stop_journal();
+            return;
+        }
+
+        // Start journal if not already running
+        if self.journal_child.is_none() {
+            self.start_journal();
+        }
+
+        // Drain available lines from the child's stdout (non-blocking)
+        self.drain_journal_lines();
+    }
+
+    fn start_journal(&mut self) {
+        let child = Command::new("journalctl")
+            .args(["-f", "--no-pager", "-n", "50", "-o", "short-iso"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match child {
+            Ok(c) => {
+                // Set stdout to non-blocking so we can poll it
+                if let Some(ref stdout) = c.stdout {
+                    set_nonblocking(stdout);
+                }
+                self.journal_child = Some(c);
+            }
+            Err(e) => {
+                self.journal_lines.push(format!("Failed to start journalctl: {}", e));
+            }
+        }
+    }
+
+    fn stop_journal(&mut self) {
+        if let Some(mut child) = self.journal_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    fn drain_journal_lines(&mut self) {
+        // Take the child temporarily to get a mutable reference to stdout
+        let Some(ref mut child) = self.journal_child else {
+            return;
+        };
+        let Some(ref mut stdout) = child.stdout else {
+            return;
+        };
+
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        // Read all available lines (non-blocking — will get WouldBlock when drained)
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    let trimmed = line.trim_end().to_string();
+                    if !trimmed.is_empty() {
+                        self.journal_lines.push(trimmed);
+                    }
+                    // Cap buffer size
+                    if self.journal_lines.len() > self.journal_max_lines {
+                        let excess = self.journal_lines.len() - self.journal_max_lines;
+                        self.journal_lines.drain(..excess);
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
         }
     }
 
@@ -322,7 +405,7 @@ impl GettyApp {
         self.render_title(f, chunks[0]);
         self.render_system_info(f, chunks[1]);
         self.render_services(f, chunks[2]);
-        self.render_cmd_log(f, chunks[3]);
+        render_cmd_log(f, chunks[3]);
 
         if self.sledgehammer_input.is_some() {
             self.render_sledgehammer_confirm(f, chunks[4]);
@@ -421,6 +504,12 @@ impl GettyApp {
     }
 
     fn render_services(&self, f: &mut ratatui::Frame, area: Rect) {
+        // If services are still starting, show live journal output
+        if !self.all_services_active() && !self.journal_lines.is_empty() {
+            self.render_journal(f, area);
+            return;
+        }
+
         let block = Block::default()
             .title(" Services ")
             .title_alignment(Alignment::Left)
@@ -485,28 +574,30 @@ impl GettyApp {
         }
     }
 
-    fn render_cmd_log(&self, f: &mut ratatui::Frame, area: Rect) {
-        let log = cmd_log();
+    fn render_journal(&self, f: &mut ratatui::Frame, area: Rect) {
         let block = Block::default()
-            .title(" Command Output ")
+            .title(" Services starting — live journal ")
+            .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(Color::Yellow));
 
         let inner_height = area.height.saturating_sub(2) as usize;
-        let start = log.len().saturating_sub(inner_height);
-        let visible: Vec<Line> = log[start..]
+        let start = self.journal_lines.len().saturating_sub(inner_height);
+        let visible: Vec<Line> = self.journal_lines[start..]
             .iter()
             .map(|line| {
-                let style = if line.starts_with('$') {
-                    Style::default().fg(Color::Yellow)
-                } else if line.contains("FAILED") || line.contains("error:") || line.contains("err:") {
+                let style = if line.contains("error")
+                    || line.contains("Error")
+                    || line.contains("FAILED")
+                    || line.contains("failed")
+                {
                     Style::default().fg(Color::Red)
-                } else if line.contains("-> ok") {
+                } else if line.contains("Started") || line.contains("Reached target") {
                     Style::default().fg(Color::Green)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                Line::from(Span::styled(line.as_str(), style))
+                Line::from(Span::styled(format!("  {}", line), style))
             })
             .collect();
 
@@ -552,20 +643,27 @@ impl GettyApp {
     }
 }
 
+/// Set a file descriptor to non-blocking mode using fcntl.
+fn set_nonblocking(stdout: &impl std::os::unix::io::AsRawFd) {
+    let fd = std::os::unix::io::AsRawFd::as_raw_fd(stdout);
+    let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL)
+        .unwrap_or(0);
+    let new_flags = nix::fcntl::OFlag::from_bits_truncate(flags)
+        | nix::fcntl::OFlag::O_NONBLOCK;
+    let _ = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
+}
+
 /// Discover btrfs member devices for a mount point.
-/// Uses `btrfs filesystem show` to find the devices.
 fn discover_btrfs_devices(mount_point: &str) -> Vec<String> {
     match run_cmd("btrfs", &["filesystem", "show", mount_point]) {
         Ok(output) => {
             let mut devices = Vec::new();
             for line in output.lines() {
                 let trimmed = line.trim();
-                // Lines like: "   devid    1 size 100.00GiB used 10.00GiB path /dev/sda1"
                 if trimmed.contains("path ") {
                     if let Some(path) = trimmed.rsplit("path ").next() {
                         let dev = path.trim().to_string();
                         if dev.starts_with("/dev/") {
-                            // Strip partition number to get the whole disk
                             let disk = strip_partition_suffix(&dev);
                             if !devices.contains(&disk) {
                                 devices.push(disk);
@@ -581,15 +679,11 @@ fn discover_btrfs_devices(mount_point: &str) -> Vec<String> {
 }
 
 /// Strip partition suffix from a device path to get the parent disk.
-/// e.g., /dev/sda1 -> /dev/sda, /dev/nvme0n1p1 -> /dev/nvme0n1
 fn strip_partition_suffix(device: &str) -> String {
-    // NVMe: /dev/nvme0n1p1 -> /dev/nvme0n1 (partition indicated by pN after nN)
     if device.contains("nvme") {
-        // Look for pattern: ...n<digits>p<digits> at end
         if let Some(pos) = device.rfind('p') {
             let after_p = &device[pos + 1..];
             let before_p = &device[..pos];
-            // Only strip if what's after 'p' is all digits AND before 'p' ends with n<digits>
             if !after_p.is_empty()
                 && after_p.chars().all(|c| c.is_ascii_digit())
                 && before_p.ends_with(|c: char| c.is_ascii_digit())
@@ -599,7 +693,6 @@ fn strip_partition_suffix(device: &str) -> String {
         }
         return device.to_string();
     }
-    // SD/VD/HD: /dev/sda1 -> /dev/sda (partition is trailing digits after letter)
     let trimmed = device.trim_end_matches(|c: char| c.is_ascii_digit());
     if trimmed.len() < device.len()
         && trimmed.len() > "/dev/".len()
@@ -687,7 +780,6 @@ mod tests {
 
         let enter = KeyEvent::from(KeyCode::Enter);
         assert_eq!(app.map_key(enter), GettyAction::None);
-        // Input should be cleared on wrong text
         assert_eq!(app.sledgehammer_input.as_deref(), Some(""));
     }
 
@@ -742,20 +834,10 @@ mod tests {
         let mut executor = MockExecutor::new(vec![]);
         app.execute_action(&GettyAction::Sledgehammer, &mut executor);
         let ops = executor.recorded_operations();
-        // Should have stop containers + unmount + reboot (no devices found in test)
         assert!(ops.len() >= 3);
-        assert!(matches!(
-            ops[0].operation,
-            Operation::StopAllContainers
-        ));
-        assert!(matches!(
-            ops[1].operation,
-            Operation::CleanupUnmount { .. }
-        ));
-        assert!(matches!(
-            ops[ops.len() - 1].operation,
-            Operation::Reboot
-        ));
+        assert!(matches!(ops[0].operation, Operation::StopAllContainers));
+        assert!(matches!(ops[1].operation, Operation::CleanupUnmount { .. }));
+        assert!(matches!(ops[ops.len() - 1].operation, Operation::Reboot));
     }
 
     #[test]
@@ -770,28 +852,20 @@ mod tests {
 
     #[test]
     fn test_strip_partition_suffix_nvme() {
-        assert_eq!(
-            strip_partition_suffix("/dev/nvme0n1p1"),
-            "/dev/nvme0n1"
-        );
+        assert_eq!(strip_partition_suffix("/dev/nvme0n1p1"), "/dev/nvme0n1");
     }
 
     #[test]
     fn test_strip_partition_suffix_nvme_no_partition() {
-        assert_eq!(
-            strip_partition_suffix("/dev/nvme0n1"),
-            "/dev/nvme0n1"
-        );
+        assert_eq!(strip_partition_suffix("/dev/nvme0n1"), "/dev/nvme0n1");
     }
 
     #[test]
     fn test_discover_btrfs_devices_empty() {
-        // btrfs command won't work in test env, should return empty vec
         let devices = discover_btrfs_devices("/nonexistent_mount_xyz");
         assert!(devices.is_empty());
     }
 
-    /// Create a minimal GettyApp for testing (no real system probing).
     fn test_app() -> GettyApp {
         GettyApp {
             system_info: SystemInfo {
@@ -819,7 +893,45 @@ mod tests {
             mount_point: "/town-os".to_string(),
             sledgehammer_input: None,
             should_quit: false,
-            last_refresh: Instant::now(),
+            last_fast_refresh: Instant::now(),
+            last_slow_refresh: Instant::now(),
+            journal_lines: Vec::new(),
+            journal_child: None,
+            journal_max_lines: 200,
         }
+    }
+
+    #[test]
+    fn test_all_services_active_empty() {
+        let app = test_app();
+        // Empty services list = not all active
+        assert!(!app.all_services_active());
+    }
+
+    #[test]
+    fn test_all_services_active_all_active() {
+        let mut app = test_app();
+        app.services = Ok(vec![
+            ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
+            ServiceInfo { name: "b.service".into(), active_state: "active".into(), description: String::new() },
+        ]);
+        assert!(app.all_services_active());
+    }
+
+    #[test]
+    fn test_all_services_active_some_activating() {
+        let mut app = test_app();
+        app.services = Ok(vec![
+            ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
+            ServiceInfo { name: "b.service".into(), active_state: "activating".into(), description: String::new() },
+        ]);
+        assert!(!app.all_services_active());
+    }
+
+    #[test]
+    fn test_all_services_active_api_error() {
+        let mut app = test_app();
+        app.services = Err("API unavailable".into());
+        assert!(!app.all_services_active());
     }
 }

@@ -83,6 +83,45 @@ impl SystemInfo {
             town_os_version,
         }
     }
+
+    /// Fast refresh: update only load average, memory, and disk stats.
+    /// These are instant /proc reads and statvfs — never blocks.
+    pub fn refresh_stats(&mut self, mount_point: &str) {
+        let loadavg = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+        self.load_average = parse_loadavg(&loadavg);
+
+        let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let (total, used) = parse_meminfo(&meminfo);
+        self.mem_total_mb = total;
+        self.mem_used_mb = used;
+
+        let (total_gb, used_gb, avail_gb) = probe_disk_usage(mount_point);
+        self.disk_total_gb = total_gb;
+        self.disk_used_gb = used_gb;
+        self.disk_available_gb = avail_gb;
+    }
+
+    /// Slow refresh: update network status (online check, IP, default route).
+    /// May block briefly due to TCP connect timeout.
+    pub fn refresh_network(&mut self) {
+        let route_content = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
+        let (iface, _gw) = parse_proc_route(&route_content).unwrap_or_default();
+
+        self.ip_address = if !iface.is_empty() {
+            crate::engine::initrd_ops::syscall::get_interface_ipv4(&iface)
+                .map(|ip| ip.to_string())
+        } else {
+            None
+        };
+
+        self.default_interface = if iface.is_empty() {
+            None
+        } else {
+            Some(iface)
+        };
+
+        self.network_online = check_online();
+    }
 }
 
 /// Parse /proc/cpuinfo for CPU model name and core count.
@@ -189,7 +228,7 @@ fn parse_hex_ip(hex: &str) -> String {
 pub fn check_online() -> bool {
     TcpStream::connect_timeout(
         &"1.1.1.1:53".parse().unwrap(),
-        Duration::from_secs(2),
+        Duration::from_millis(500),
     )
     .is_ok()
 }

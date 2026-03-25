@@ -17,7 +17,7 @@ use crate::tui::input::map_key_event;
 
 /// Redirect stdin and stdout to the given TTY device.
 /// Returns the saved file descriptors for stdin and stdout so they can be restored.
-fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
+pub(crate) fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
     let tty_file = File::options().read(true).write(true).open(tty_path)?;
     let tty_fd = tty_file.as_raw_fd();
 
@@ -40,11 +40,41 @@ fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
 }
 
 /// Restore stdin and stdout from saved file descriptors.
-fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
+pub(crate) fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
     let _ = nix::unistd::dup2(saved_stdin, 0);
     let _ = nix::unistd::dup2(saved_stdout, 1);
     let _ = nix::unistd::close(saved_stdin);
     let _ = nix::unistd::close(saved_stdout);
+}
+
+/// Render the command output log pane. Shared between installer and getty TUIs.
+pub(crate) fn render_cmd_log(f: &mut ratatui::Frame, area: Rect) {
+    let log = crate::engine::real_ops::cmd_log();
+    let block = Block::default()
+        .title(" Command Output ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let start = log.len().saturating_sub(inner_height);
+    let visible: Vec<Line> = log[start..]
+        .iter()
+        .map(|line| {
+            let style = if line.starts_with('$') {
+                Style::default().fg(Color::Yellow)
+            } else if line.contains("FAILED") || line.contains("error:") || line.contains("err:") {
+                Style::default().fg(Color::Red)
+            } else if line.contains("-> ok") {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            Line::from(Span::styled(line.as_str(), style))
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(visible).block(block);
+    f.render_widget(paragraph, area);
 }
 
 pub struct App {
@@ -201,32 +231,7 @@ impl App {
     }
 
     fn render_cmd_log(&self, f: &mut ratatui::Frame, area: Rect) {
-        let log = crate::engine::real_ops::cmd_log();
-        let block = Block::default()
-            .title(" Command Output ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
-        let inner_height = area.height.saturating_sub(2) as usize; // border top+bottom
-        let start = log.len().saturating_sub(inner_height);
-        let visible: Vec<Line> = log[start..]
-            .iter()
-            .map(|line| {
-                let style = if line.starts_with('$') {
-                    Style::default().fg(Color::Yellow)
-                } else if line.contains("FAILED") || line.contains("error:") || line.contains("err:") {
-                    Style::default().fg(Color::Red)
-                } else if line.contains("-> ok") {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                Line::from(Span::styled(line.as_str(), style))
-            })
-            .collect();
-
-        let paragraph = Paragraph::new(visible).block(block);
-        f.render_widget(paragraph, area);
+        render_cmd_log(f, area);
     }
 
     fn render_screen(&self, f: &mut ratatui::Frame, area: Rect) {
