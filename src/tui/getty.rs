@@ -596,9 +596,16 @@ impl GettyApp {
             }
             Ok(services) => {
                 let inner_height = area.height.saturating_sub(2) as usize;
-                let visible = services.iter().take(inner_height);
+                let visible: Vec<_> = services.iter().take(inner_height).collect();
+
+                let name_width = visible
+                    .iter()
+                    .map(|svc| svc.name.len())
+                    .max()
+                    .unwrap_or(0);
 
                 let items: Vec<ListItem> = visible
+                    .iter()
                     .map(|svc| {
                         let state_style = match svc.active_state.as_str() {
                             "active" => Style::default().fg(Color::Green),
@@ -610,7 +617,7 @@ impl GettyApp {
                         };
 
                         let line = Line::from(vec![
-                            Span::raw(format!("  {:<30} ", svc.name)),
+                            Span::raw(format!("  {:<width$} ", svc.name, width = name_width)),
                             Span::styled(
                                 format!("{:<12}", svc.active_state),
                                 state_style,
