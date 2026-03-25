@@ -17,6 +17,7 @@ pub enum ScreenId {
     WpsPrompt,
     WpsWaiting,
     NetworkProgress,
+    WifiQrDisplay,
     DiskGroupSelect,
     RaidConfig,
     Confirm,
@@ -45,6 +46,7 @@ pub enum UserInput {
     InitiateWps,
     WpsAccept,
     WpsDecline,
+    ShowWifiQr,
 
     // Disk
     SelectDiskGroup(usize),
@@ -66,6 +68,7 @@ pub struct InstallerStateMachine {
     pub disk_groups: Vec<DiskGroup>,
     pub selected_interface: Option<String>,
     pub selected_ssid: Option<String>,
+    pub wifi_password: Option<String>,
     pub selected_disk_group: Option<usize>,
     pub selected_disk: Option<usize>,
     pub selected_filesystem: FilesystemType,
@@ -108,6 +111,7 @@ impl InstallerStateMachine {
             disk_groups,
             selected_interface: None,
             selected_ssid: None,
+            wifi_password: None,
             selected_disk_group: None,
             selected_disk: None,
             selected_filesystem: FilesystemType::default(),
@@ -237,8 +241,29 @@ impl InstallerStateMachine {
                 self.network_state = NetworkState::Offline;
                 Some(ScreenId::NetworkConfig)
             }
+            (ScreenId::NetworkProgress, UserInput::ShowWifiQr) => {
+                if self.network_state.is_online() && self.selected_ssid.is_some() {
+                    self.current_screen = ScreenId::WifiQrDisplay;
+                    Some(ScreenId::WifiQrDisplay)
+                } else {
+                    None
+                }
+            }
             (ScreenId::NetworkProgress, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at network progress".to_string())
+            }
+
+            // === WiFi QR Display ===
+            (ScreenId::WifiQrDisplay, UserInput::Back) => {
+                self.current_screen = ScreenId::NetworkProgress;
+                Some(ScreenId::NetworkProgress)
+            }
+            (ScreenId::WifiQrDisplay, UserInput::Confirm) => {
+                self.current_screen = ScreenId::NetworkProgress;
+                Some(ScreenId::NetworkProgress)
+            }
+            (ScreenId::WifiQrDisplay, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at WiFi QR display".to_string())
             }
 
             // === RAID Config ===
@@ -588,6 +613,8 @@ impl InstallerStateMachine {
             None => return None,
         };
 
+        self.wifi_password = Some(password.clone());
+
         // Configure wifi auth
         let config_result = executor.execute(&Operation::ConfigureWifiSsidAuth {
             interface: iface_name.clone(),
@@ -694,6 +721,39 @@ impl InstallerStateMachine {
         self.selected_raid = Some(options[idx].clone());
         self.current_screen = ScreenId::DiskGroupSelect;
         Some(ScreenId::DiskGroupSelect)
+    }
+
+    /// Generate WiFi QR code string for the currently connected network.
+    /// Format: WIFI:T:<security>;S:<ssid>;P:<password>;;
+    pub fn wifi_qr_string(&self) -> Option<String> {
+        let ssid = self.selected_ssid.as_ref()?;
+
+        // Look up security type from wifi_networks
+        let security = self
+            .wifi_networks
+            .iter()
+            .find(|n| &n.ssid == ssid)
+            .map(|n| &n.security);
+
+        let sec_str = match security {
+            Some(crate::manifest::WifiSecurity::Open) => "nopass",
+            Some(crate::manifest::WifiSecurity::Wep) => "WEP",
+            _ => "WPA", // WPA2, WPA3, or unknown default to WPA
+        };
+
+        // Escape special characters in SSID and password per WiFi QR spec
+        let escaped_ssid = wifi_qr_escape(ssid);
+
+        if sec_str == "nopass" {
+            Some(format!("WIFI:T:nopass;S:{};;", escaped_ssid))
+        } else {
+            let password = self.wifi_password.as_deref().unwrap_or("");
+            let escaped_pass = wifi_qr_escape(password);
+            Some(format!(
+                "WIFI:T:{};S:{};P:{};;",
+                sec_str, escaped_ssid, escaped_pass
+            ))
+        }
     }
 
     pub fn max_disk_count(&self) -> usize {
@@ -1239,4 +1299,21 @@ impl InstallerStateMachine {
         self.current_screen = ScreenId::NetworkProgress;
         Some(ScreenId::NetworkProgress)
     }
+}
+
+/// Escape special characters in WiFi QR code fields.
+/// Per the WiFi QR spec, these characters must be backslash-escaped:
+/// \, ;, ,, ", and :
+fn wifi_qr_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' | ';' | ',' | '"' | ':' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }

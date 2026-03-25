@@ -529,6 +529,186 @@ fn test_wifi_qr_code_connection() {
     assert!(sm.network_state.is_online());
 }
 
+// === WiFi QR Display Screen ===
+
+#[test]
+fn test_wifi_qr_display_from_network_progress() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Get to WifiSelect via auto-detect
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+
+    // Select network, decline WPS, enter password
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
+    sm.process_input(
+        UserInput::EnterWifiPassword("mypassword".to_string()),
+        &mut executor,
+    );
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+
+    // Advance to online
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+
+    // Show QR code
+    let result = sm.process_input(UserInput::ShowWifiQr, &mut executor);
+    assert_eq!(result, Some(ScreenId::WifiQrDisplay));
+    assert_eq!(sm.current_screen, ScreenId::WifiQrDisplay);
+
+    // Verify QR string is generated
+    let qr_string = sm.wifi_qr_string();
+    assert!(qr_string.is_some());
+    let qr = qr_string.unwrap();
+    assert!(qr.starts_with("WIFI:T:WPA;S:HomeNetwork;P:mypassword;;"));
+
+    // Back returns to NetworkProgress
+    let result = sm.process_input(UserInput::Back, &mut executor);
+    assert_eq!(result, Some(ScreenId::NetworkProgress));
+}
+
+#[test]
+fn test_wifi_qr_display_enter_returns_to_network_progress() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
+    sm.process_input(
+        UserInput::EnterWifiPassword("pass".to_string()),
+        &mut executor,
+    );
+    while sm.advance_connectivity(&mut executor) {}
+
+    sm.process_input(UserInput::ShowWifiQr, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WifiQrDisplay);
+
+    // Enter also goes back
+    let result = sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(result, Some(ScreenId::NetworkProgress));
+}
+
+#[test]
+fn test_wifi_qr_not_available_when_not_online() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
+    sm.process_input(
+        UserInput::EnterWifiPassword("pass".to_string()),
+        &mut executor,
+    );
+    // Don't advance connectivity - not online yet
+
+    let result = sm.process_input(UserInput::ShowWifiQr, &mut executor);
+    assert_eq!(result, None); // Should not navigate
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+}
+
+#[test]
+fn test_wifi_qr_not_available_for_ethernet() {
+    let hw = load_hardware("ethernet_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    // Ethernet auto-detect
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+    assert!(sm.selected_ssid.is_none()); // No WiFi SSID
+
+    // ShowWifiQr should not navigate (no SSID)
+    let result = sm.process_input(UserInput::ShowWifiQr, &mut executor);
+    assert_eq!(result, None);
+}
+
+#[test]
+fn test_wifi_qr_string_open_network() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+
+    // Simulate selecting an open network
+    sm.selected_ssid = Some("OpenCafe".to_string());
+    sm.wifi_networks.push(WifiNetwork {
+        ssid: "OpenCafe".to_string(),
+        signal_strength: -50,
+        frequency_mhz: 2437,
+        security: ttyforce::manifest::WifiSecurity::Open,
+        reachable: true,
+    });
+
+    let qr = sm.wifi_qr_string().unwrap();
+    assert_eq!(qr, "WIFI:T:nopass;S:OpenCafe;;");
+}
+
+#[test]
+fn test_wifi_qr_string_escapes_special_chars() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+
+    sm.selected_ssid = Some("My:Net;work".to_string());
+    sm.wifi_password = Some("pass;word".to_string());
+    sm.wifi_networks.push(WifiNetwork {
+        ssid: "My:Net;work".to_string(),
+        signal_strength: -50,
+        frequency_mhz: 2437,
+        security: ttyforce::manifest::WifiSecurity::Wpa2,
+        reachable: true,
+    });
+
+    let qr = sm.wifi_qr_string().unwrap();
+    assert_eq!(qr, "WIFI:T:WPA;S:My\\:Net\\;work;P:pass\\;word;;");
+}
+
+#[test]
+fn test_wifi_qr_abort_from_display() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
+    sm.process_input(
+        UserInput::EnterWifiPassword("pass".to_string()),
+        &mut executor,
+    );
+    while sm.advance_connectivity(&mut executor) {}
+
+    sm.process_input(UserInput::ShowWifiQr, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::WifiQrDisplay);
+
+    let result = sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(result, Some(ScreenId::Reboot));
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+}
+
+#[test]
+fn test_wifi_qr_password_stored_after_connect() {
+    let hw = load_hardware("wifi_1disk");
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
+    sm.process_input(UserInput::WpsDecline, &mut executor);
+
+    assert!(sm.wifi_password.is_none());
+    sm.process_input(
+        UserInput::EnterWifiPassword("secretpass".to_string()),
+        &mut executor,
+    );
+    assert_eq!(sm.wifi_password, Some("secretpass".to_string()));
+}
+
 // === Abort and Reboot ===
 
 #[test]

@@ -15,6 +15,9 @@ pub fn map_key_event(key: KeyEvent, screen: &ScreenId, selected_index: usize) ->
         KeyCode::Char('r') if matches!(screen, ScreenId::WifiSelect) => {
             Some(UserInput::RefreshWifiScan)
         }
+        KeyCode::Char('s') if matches!(screen, ScreenId::NetworkProgress) => {
+            Some(UserInput::ShowWifiQr)
+        }
         KeyCode::Char('y') if matches!(screen, ScreenId::WpsPrompt) => {
             Some(UserInput::WpsAccept)
         }
@@ -34,6 +37,7 @@ fn map_enter(screen: &ScreenId, selected_index: usize) -> Option<UserInput> {
         ScreenId::WpsPrompt => None,    // y/n keys handle this
         ScreenId::WpsWaiting => None,   // auto-advances via polling
         ScreenId::NetworkProgress => Some(UserInput::Confirm),
+        ScreenId::WifiQrDisplay => Some(UserInput::Back),
         ScreenId::DiskGroupSelect => Some(UserInput::SelectDiskGroup(selected_index)),
         ScreenId::RaidConfig => Some(UserInput::SelectRaidOption(selected_index)),
         ScreenId::Confirm => Some(UserInput::ConfirmInstall),

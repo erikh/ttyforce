@@ -237,6 +237,7 @@ impl App {
             ScreenId::WpsPrompt => self.render_wps_prompt(f, area),
             ScreenId::WpsWaiting => self.render_wps_waiting(f, area),
             ScreenId::NetworkProgress => self.render_network_progress(f, area),
+            ScreenId::WifiQrDisplay => self.render_wifi_qr_display(f, area),
             ScreenId::DiskGroupSelect => self.render_disk_select(f, area),
             ScreenId::RaidConfig => self.render_raid_config(f, area),
             ScreenId::Confirm => self.render_confirm(f, area),
@@ -408,8 +409,14 @@ impl App {
     }
 
     fn render_network_progress(&self, f: &mut ratatui::Frame, area: Rect) {
+        let has_wifi_qr = self.state_machine.network_state.is_online()
+            && self.state_machine.selected_ssid.is_some();
         let status_icon = if self.state_machine.network_state.is_online() {
-            "\n  Press Enter to continue to disk setup"
+            if has_wifi_qr {
+                "\n  Enter: continue  |  s: show WiFi QR code"
+            } else {
+                "\n  Press Enter to continue to disk setup"
+            }
         } else if self.state_machine.network_state.is_terminal() {
             "\n  Press Esc to go back and try again"
         } else {
@@ -431,6 +438,117 @@ impl App {
         let paragraph = Paragraph::new(status).block(
             Block::default()
                 .title(" Network Progress ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+        f.render_widget(paragraph, center);
+    }
+
+    fn render_wifi_qr_display(&self, f: &mut ratatui::Frame, area: Rect) {
+        let ssid = self
+            .state_machine
+            .selected_ssid
+            .as_deref()
+            .unwrap_or("Unknown");
+
+        let qr_string = self.state_machine.wifi_qr_string();
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(format!("  Network: {}", ssid)));
+        lines.push(Line::from(""));
+
+        if let Some(ref data) = qr_string {
+            if let Ok(code) = qrcode::QrCode::new(data.as_bytes()) {
+                let modules = code.to_colors();
+                let width = code.width();
+
+                // Render QR with Unicode half-blocks: 2 QR rows per terminal line.
+                // Include a 1-module quiet zone (white border) on all sides.
+                let total_w = width + 2; // 1 quiet zone each side
+
+                // Top quiet zone (1 row of all-light paired with first QR row is handled below)
+                // We process rows in pairs: (row, row+1). Quiet zone rows are "light".
+                let total_h = width + 2; // 1 quiet zone top + QR rows + 1 quiet zone bottom
+
+                let module_at = |r: i32, c: i32| -> bool {
+                    let qr = r - 1;
+                    let qc = c - 1;
+                    if qr >= 0 && qr < width as i32 && qc >= 0 && qc < width as i32 {
+                        modules[(qr as usize) * width + (qc as usize)]
+                            == qrcode::Color::Dark
+                    } else {
+                        false // quiet zone = light
+                    }
+                };
+
+                // Center the QR code: compute left padding
+                let qr_char_width = total_w * 2; // 2 chars per module for squareness
+                let inner_width = area.width.saturating_sub(2) as usize; // border
+                let pad = if inner_width > qr_char_width {
+                    " ".repeat((inner_width - qr_char_width) / 2)
+                } else {
+                    String::new()
+                };
+
+                let mut row = 0i32;
+                while row < total_h as i32 {
+                    let mut spans: Vec<Span> = Vec::new();
+                    spans.push(Span::raw(pad.clone()));
+
+                    for col in 0..total_w as i32 {
+                        let top = module_at(row, col);
+                        let bot = if row + 1 < total_h as i32 {
+                            module_at(row + 1, col)
+                        } else {
+                            false
+                        };
+
+                        let (ch, style) = match (top, bot) {
+                            (true, true) => (
+                                "\u{2588}\u{2588}",
+                                Style::default().fg(Color::Black).bg(Color::Black),
+                            ),
+                            (true, false) => (
+                                "\u{2580}\u{2580}",
+                                Style::default().fg(Color::Black).bg(Color::White),
+                            ),
+                            (false, true) => (
+                                "\u{2584}\u{2584}",
+                                Style::default().fg(Color::Black).bg(Color::White),
+                            ),
+                            (false, false) => (
+                                "  ",
+                                Style::default().fg(Color::White).bg(Color::White),
+                            ),
+                        };
+                        spans.push(Span::styled(ch, style));
+                    }
+
+                    lines.push(Line::from(spans));
+                    row += 2;
+                }
+            } else {
+                lines.push(Line::from(
+                    "  Failed to generate QR code"
+                        .to_string(),
+                ));
+            }
+        } else {
+            lines.push(Line::from("  No WiFi credentials available"));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Scan with your phone to connect to this network"));
+        lines.push(Line::from("  Press Enter or Esc to go back"));
+
+        let content_height = lines.len() as u16 + 2;
+        let height_pct = (content_height * 100 / area.height.max(1)).clamp(40, 95);
+        let center = centered_rect(80, height_pct, area);
+
+        let paragraph = Paragraph::new(lines).block(
+            Block::default()
+                .title(" WiFi QR Code ")
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
