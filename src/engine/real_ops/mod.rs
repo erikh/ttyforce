@@ -136,6 +136,11 @@ pub fn execute(op: &Operation) -> OperationResult {
             network::cleanup_wpa_supplicant(interface)
         }
         Operation::CleanupUnmount { mount_point } => disk::cleanup_unmount(mount_point),
+
+        // Getty operations
+        Operation::PowerOff => system::power_off(),
+        Operation::StopAllContainers => system::stop_all_containers(),
+        Operation::WipeDisk { device } => system::wipe_disk(device),
     }
 }
 

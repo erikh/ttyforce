@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 
 use ttyforce::engine::executor::{InitrdExecutor, RealExecutor, SimulatedResponse, TestExecutor};
 use ttyforce::engine::state_machine::InstallerStateMachine;
+use ttyforce::getty::GettyApp;
 use ttyforce::manifest::HardwareManifest;
 use ttyforce::tui::App;
 
@@ -46,6 +47,15 @@ enum Command {
         #[arg(long)]
         tty: Option<String>,
     },
+    /// Run as getty replacement (system status + login screen)
+    Getty {
+        /// Root prefix for /etc config file writes (default: same as mount point)
+        #[arg(long)]
+        etc_prefix: Option<String>,
+        /// TTY device to use for the TUI (e.g. /dev/tty1, /dev/ttyS0)
+        #[arg(long)]
+        tty: Option<String>,
+    },
 }
 
 fn main() {
@@ -73,6 +83,9 @@ fn main() {
                 etc_prefix.as_deref(),
                 tty.as_deref(),
             );
+        }
+        Command::Getty { etc_prefix, tty } => {
+            run_getty(etc_prefix, tty);
         }
     }
 }
@@ -208,6 +221,17 @@ fn run_installer(
     if let Some(out) = output {
         let manifest = toml::to_string_pretty(&app.state_machine.action_manifest).unwrap();
         write_output(&manifest, Some(out));
+    }
+}
+
+fn run_getty(etc_prefix: Option<String>, tty: Option<String>) {
+    let tty_clone = tty.clone();
+    let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string());
+    let mut executor = RealExecutor::new();
+
+    if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {
+        eprintln!("Getty error: {}", e);
+        process::exit(1);
     }
 }
 

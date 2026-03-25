@@ -78,6 +78,9 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::CleanupNetworkConfig { .. } => "CleanupNetworkConfig",
         Operation::CleanupWpaSupplicant { .. } => "CleanupWpaSupplicant",
         Operation::CleanupUnmount { .. } => "CleanupUnmount",
+        Operation::PowerOff => "PowerOff",
+        Operation::StopAllContainers => "StopAllContainers",
+        Operation::WipeDisk { .. } => "WipeDisk",
     }
 }
 

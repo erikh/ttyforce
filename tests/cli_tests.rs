@@ -33,6 +33,7 @@ fn cli_help_flag() {
     assert!(stdout.contains("detect"));
     assert!(stdout.contains("output"));
     assert!(stdout.contains("run"));
+    assert!(stdout.contains("getty"));
     assert!(stdout.contains("--input"));
     assert!(stdout.contains("--output"));
 }
@@ -63,6 +64,15 @@ fn cli_run_help() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--input"));
     assert!(stdout.contains("--output"));
+}
+
+#[test]
+fn cli_getty_help() {
+    let out = ttyforce_bin().args(["getty", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--etc-prefix"), "expected --etc-prefix flag, got: {}", stdout);
+    assert!(stdout.contains("--tty"), "expected --tty flag, got: {}", stdout);
 }
 
 // === detect subcommand ===

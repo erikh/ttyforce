@@ -130,6 +130,13 @@ pub enum Operation {
     CleanupUnmount {
         mount_point: String,
     },
+
+    // Getty operations
+    PowerOff,
+    StopAllContainers,
+    WipeDisk {
+        device: String,
+    },
 }
 
 impl std::fmt::Display for Operation {
@@ -254,6 +261,9 @@ impl std::fmt::Display for Operation {
             Operation::CleanupUnmount { mount_point } => {
                 write!(f, "Cleanup unmount {}", mount_point)
             }
+            Operation::PowerOff => write!(f, "Power off"),
+            Operation::StopAllContainers => write!(f, "Stop all containers"),
+            Operation::WipeDisk { device } => write!(f, "Wipe disk {}", device),
         }
     }
 }

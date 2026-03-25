@@ -1,0 +1,825 @@
+use std::io;
+use std::time::{Duration, Instant};
+
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::prelude::*;
+use ratatui::widgets::*;
+
+use crate::engine::executor::OperationExecutor;
+use crate::engine::real_ops::{cmd_log, cmd_log_append, kmsg_log, run_cmd};
+use crate::getty::api::{ServiceInfo, TownApiClient};
+use crate::getty::sysinfo::SystemInfo;
+use crate::operations::Operation;
+
+/// Actions that can be triggered from the getty screen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GettyAction {
+    None,
+    Login,
+    Reconfigure,
+    Reboot,
+    PowerOff,
+    Sledgehammer,
+}
+
+/// The getty TUI application — replaces login on a TTY.
+pub struct GettyApp {
+    pub system_info: SystemInfo,
+    pub services: Result<Vec<ServiceInfo>, String>,
+    pub api_client: TownApiClient,
+    pub etc_prefix: Option<String>,
+    pub tty: Option<String>,
+    pub mount_point: String,
+    /// When Some, the user is in sledgehammer confirmation mode.
+    pub sledgehammer_input: Option<String>,
+    pub should_quit: bool,
+    last_refresh: Instant,
+}
+
+/// Redirect stdin/stdout to a TTY device, returning saved fds.
+fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
+    let tty_file = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(tty_path)?;
+    let tty_fd = std::os::unix::io::AsRawFd::as_raw_fd(&tty_file);
+
+    let saved_stdin = nix::unistd::dup(0).map_err(io::Error::other)?;
+    let saved_stdout = nix::unistd::dup(1).map_err(io::Error::other)?;
+
+    nix::unistd::dup2(tty_fd, 0).map_err(io::Error::other)?;
+    nix::unistd::dup2(tty_fd, 1).map_err(io::Error::other)?;
+
+    std::mem::forget(tty_file);
+    Ok((saved_stdin, saved_stdout))
+}
+
+fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
+    let _ = nix::unistd::dup2(saved_stdin, 0);
+    let _ = nix::unistd::dup2(saved_stdout, 1);
+    let _ = nix::unistd::close(saved_stdin);
+    let _ = nix::unistd::close(saved_stdout);
+}
+
+impl GettyApp {
+    pub fn new(
+        etc_prefix: Option<String>,
+        tty: Option<String>,
+        mount_point: String,
+    ) -> Self {
+        let api_client = TownApiClient::from_env(etc_prefix.as_deref());
+        let system_info = SystemInfo::probe(&mount_point);
+        let services = api_client.fetch_services();
+
+        Self {
+            system_info,
+            services,
+            api_client,
+            etc_prefix,
+            tty,
+            mount_point,
+            sledgehammer_input: None,
+            should_quit: false,
+            last_refresh: Instant::now(),
+        }
+    }
+
+    /// Run the getty TUI, optionally redirecting to a TTY device.
+    pub fn run(
+        &mut self,
+        executor: &mut dyn OperationExecutor,
+        tty: Option<&str>,
+    ) -> io::Result<()> {
+        let saved_fds = if let Some(tty_path) = tty {
+            kmsg_log(&format!("getty: redirecting to {}", tty_path));
+            match redirect_to_tty(tty_path) {
+                Ok(fds) => Some(fds),
+                Err(e) => {
+                    kmsg_log(&format!("getty: failed to open TTY {}: {}", tty_path, e));
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+
+        let result = self.run_tui_loop(executor);
+
+        if let Some((saved_stdin, saved_stdout)) = saved_fds {
+            restore_fds(saved_stdin, saved_stdout);
+        }
+
+        if let Err(ref e) = result {
+            kmsg_log(&format!("getty TUI error: {}", e));
+        }
+
+        result
+    }
+
+    fn run_tui_loop(&mut self, executor: &mut dyn OperationExecutor) -> io::Result<()> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+
+        while !self.should_quit {
+            // Refresh system info periodically
+            if self.last_refresh.elapsed() >= Duration::from_secs(3) {
+                self.refresh();
+            }
+
+            terminal.draw(|f| self.render(f))?;
+
+            if event::poll(Duration::from_secs(1))? {
+                if let Event::Key(key) = event::read()? {
+                    let action = self.map_key(key);
+                    match action {
+                        GettyAction::Login | GettyAction::Reconfigure => {
+                            // Leave TUI for child process
+                            disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                            self.execute_action(&action, executor);
+
+                            // Re-enter TUI
+                            let mut new_stdout = io::stdout();
+                            execute!(new_stdout, EnterAlternateScreen)?;
+                            enable_raw_mode()?;
+                            terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
+                            self.refresh();
+                        }
+                        GettyAction::None => {}
+                        _ => {
+                            self.execute_action(&action, executor);
+                        }
+                    }
+                }
+            }
+        }
+
+        disable_raw_mode()?;
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        Ok(())
+    }
+
+    /// Refresh system info and service status.
+    pub fn refresh(&mut self) {
+        self.system_info = SystemInfo::probe(&self.mount_point);
+        self.services = self.api_client.fetch_services();
+        self.last_refresh = Instant::now();
+    }
+
+    /// Map a key event to a GettyAction.
+    pub fn map_key(&mut self, key: KeyEvent) -> GettyAction {
+        // Ctrl+C always quits
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.should_quit = true;
+            return GettyAction::None;
+        }
+
+        // Sledgehammer confirmation mode
+        if let Some(ref mut input) = self.sledgehammer_input {
+            match key.code {
+                KeyCode::Esc => {
+                    self.sledgehammer_input = None;
+                }
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                KeyCode::Enter => {
+                    if input == "SLEDGEHAMMER" {
+                        self.sledgehammer_input = None;
+                        return GettyAction::Sledgehammer;
+                    }
+                    // Wrong input — clear and stay in confirmation mode
+                    input.clear();
+                }
+                KeyCode::Char(c) => {
+                    input.push(c);
+                }
+                _ => {}
+            }
+            return GettyAction::None;
+        }
+
+        // Normal mode
+        match key.code {
+            KeyCode::Char('l') => GettyAction::Login,
+            KeyCode::Char('r') => GettyAction::Reconfigure,
+            KeyCode::Char('R') => GettyAction::Reboot,
+            KeyCode::Char('p') => GettyAction::PowerOff,
+            KeyCode::Char('!') => {
+                self.sledgehammer_input = Some(String::new());
+                GettyAction::None
+            }
+            _ => GettyAction::None,
+        }
+    }
+
+    /// Execute a getty action.
+    pub fn execute_action(
+        &mut self,
+        action: &GettyAction,
+        executor: &mut dyn OperationExecutor,
+    ) {
+        match action {
+            GettyAction::None => {}
+            GettyAction::Login => {
+                cmd_log_append("$ /bin/login".to_string());
+                let status = std::process::Command::new("/bin/login").status();
+                match status {
+                    Ok(s) => cmd_log_append(format!("  -> login exited ({})", s)),
+                    Err(e) => cmd_log_append(format!("  -> login failed: {}", e)),
+                }
+            }
+            GettyAction::Reconfigure => {
+                let exe = std::env::current_exe()
+                    .unwrap_or_else(|_| "ttyforce".into());
+                let mut args: Vec<String> = vec!["run".to_string()];
+                if let Some(ref prefix) = self.etc_prefix {
+                    args.push("--etc-prefix".to_string());
+                    args.push(prefix.clone());
+                }
+                if let Some(ref tty) = self.tty {
+                    args.push("--tty".to_string());
+                    args.push(tty.clone());
+                }
+                cmd_log_append(format!("$ {} {}", exe.display(), args.join(" ")));
+                let status = std::process::Command::new(&exe).args(&args).status();
+                match status {
+                    Ok(s) => cmd_log_append(format!("  -> reconfigure exited ({})", s)),
+                    Err(e) => cmd_log_append(format!("  -> reconfigure failed: {}", e)),
+                }
+            }
+            GettyAction::Reboot => {
+                let op = Operation::Reboot;
+                let result = executor.execute(&op);
+                cmd_log_append(format!("  -> reboot: {:?}", result));
+            }
+            GettyAction::PowerOff => {
+                let op = Operation::PowerOff;
+                let result = executor.execute(&op);
+                cmd_log_append(format!("  -> poweroff: {:?}", result));
+            }
+            GettyAction::Sledgehammer => {
+                self.execute_sledgehammer(executor);
+            }
+        }
+    }
+
+    fn execute_sledgehammer(&mut self, executor: &mut dyn OperationExecutor) {
+        cmd_log_append("sledgehammer: starting wipe sequence".to_string());
+
+        // Stop all podman containers before unmount
+        let stop_op = Operation::StopAllContainers;
+        let result = executor.execute(&stop_op);
+        cmd_log_append(format!("  -> stop containers: {:?}", result));
+
+        // Unmount /town-os
+        let unmount_op = Operation::CleanupUnmount {
+            mount_point: self.mount_point.clone(),
+        };
+        let result = executor.execute(&unmount_op);
+        cmd_log_append(format!("  -> unmount: {:?}", result));
+
+        // Discover btrfs member devices
+        let devices = discover_btrfs_devices(&self.mount_point);
+
+        // Wipe each device
+        for device in &devices {
+            let wipe_op = Operation::WipeDisk {
+                device: device.clone(),
+            };
+            let result = executor.execute(&wipe_op);
+            cmd_log_append(format!("  -> wipe {}: {:?}", device, result));
+        }
+
+        // Reboot
+        let reboot_op = Operation::Reboot;
+        let result = executor.execute(&reboot_op);
+        cmd_log_append(format!("  -> reboot: {:?}", result));
+    }
+
+    fn render(&self, f: &mut ratatui::Frame) {
+        let area = f.area();
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Title bar
+                Constraint::Length(8),  // System info
+                Constraint::Min(5),    // Services
+                Constraint::Length(10), // Command log
+                Constraint::Length(3),  // Action bar
+            ])
+            .split(area);
+
+        self.render_title(f, chunks[0]);
+        self.render_system_info(f, chunks[1]);
+        self.render_services(f, chunks[2]);
+        self.render_cmd_log(f, chunks[3]);
+
+        if self.sledgehammer_input.is_some() {
+            self.render_sledgehammer_confirm(f, chunks[4]);
+        } else {
+            self.render_actions(f, chunks[4]);
+        }
+    }
+
+    fn render_title(&self, f: &mut ratatui::Frame, area: Rect) {
+        let version = self
+            .system_info
+            .town_os_version
+            .as_deref()
+            .unwrap_or("");
+        let title_text = if version.is_empty() {
+            format!("{}  —  Town OS", self.system_info.mdns_url)
+        } else {
+            format!(
+                "{}  —  Town OS {}",
+                self.system_info.mdns_url, version
+            )
+        };
+        let title = Paragraph::new(title_text)
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(Block::default().borders(Borders::ALL));
+        f.render_widget(title, area);
+    }
+
+    fn render_system_info(&self, f: &mut ratatui::Frame, area: Rect) {
+        let info = &self.system_info;
+
+        let mem_pct = if info.mem_total_mb > 0 {
+            (info.mem_used_mb as f64 / info.mem_total_mb as f64 * 100.0) as u64
+        } else {
+            0
+        };
+
+        let network_line = if info.network_online {
+            let ip = info.ip_address.as_deref().unwrap_or("unknown");
+            let iface = info.default_interface.as_deref().unwrap_or("unknown");
+            format!("Online ({} via {})", ip, iface)
+        } else {
+            "Offline".to_string()
+        };
+
+        let network_style = if info.network_online {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("  Kernel: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!(
+                    "{} {}",
+                    info.kernel_version, info.architecture
+                )),
+                Span::styled("     CPU: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{} ({} cores)", info.cpu_model, info.cpu_cores)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Load:   ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{:.2}", info.load_average)),
+                Span::styled("              Memory: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!(
+                    "{} / {} MB ({}%)",
+                    info.mem_used_mb, info.mem_total_mb, mem_pct
+                )),
+            ]),
+            Line::from(vec![
+                Span::styled("  Disk:   ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!(
+                    "{:.1} / {:.1} GB available on {}",
+                    info.disk_available_gb, info.disk_total_gb, self.mount_point
+                )),
+            ]),
+            Line::from(vec![
+                Span::styled("  Network: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(network_line, network_style),
+            ]),
+        ];
+
+        let block = Block::default()
+            .title(" System ")
+            .title_alignment(Alignment::Left)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let paragraph = Paragraph::new(lines).block(block);
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_services(&self, f: &mut ratatui::Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Services ")
+            .title_alignment(Alignment::Left)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        match &self.services {
+            Ok(services) if services.is_empty() => {
+                let paragraph = Paragraph::new("  No services found")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .block(block);
+                f.render_widget(paragraph, area);
+            }
+            Ok(services) => {
+                let inner_height = area.height.saturating_sub(2) as usize;
+                let visible = services.iter().take(inner_height);
+
+                let items: Vec<ListItem> = visible
+                    .map(|svc| {
+                        let state_style = match svc.active_state.as_str() {
+                            "active" => Style::default().fg(Color::Green),
+                            "failed" => Style::default().fg(Color::Red),
+                            "activating" | "deactivating" | "reloading" => {
+                                Style::default().fg(Color::Yellow)
+                            }
+                            _ => Style::default().fg(Color::DarkGray),
+                        };
+
+                        let line = Line::from(vec![
+                            Span::raw(format!("  {:<30} ", svc.name)),
+                            Span::styled(
+                                format!("{:<12}", svc.active_state),
+                                state_style,
+                            ),
+                            Span::styled(
+                                svc.description.clone(),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ]);
+                        ListItem::new(line)
+                    })
+                    .collect();
+
+                let list = List::new(items).block(block);
+                f.render_widget(list, area);
+            }
+            Err(err) => {
+                let lines = vec![
+                    Line::from(Span::styled(
+                        format!("  {}", err),
+                        Style::default().fg(Color::Yellow),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "  Services may still be starting...",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ];
+                let paragraph = Paragraph::new(lines).block(block);
+                f.render_widget(paragraph, area);
+            }
+        }
+    }
+
+    fn render_cmd_log(&self, f: &mut ratatui::Frame, area: Rect) {
+        let log = cmd_log();
+        let block = Block::default()
+            .title(" Command Output ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let start = log.len().saturating_sub(inner_height);
+        let visible: Vec<Line> = log[start..]
+            .iter()
+            .map(|line| {
+                let style = if line.starts_with('$') {
+                    Style::default().fg(Color::Yellow)
+                } else if line.contains("FAILED") || line.contains("error:") || line.contains("err:") {
+                    Style::default().fg(Color::Red)
+                } else if line.contains("-> ok") {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(line.as_str(), style))
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(visible).block(block);
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
+        let actions = Paragraph::new(
+            "  [l] Login   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Sledgehammer",
+        )
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+        f.render_widget(actions, area);
+    }
+
+    fn render_sledgehammer_confirm(&self, f: &mut ratatui::Frame, area: Rect) {
+        let input = self
+            .sledgehammer_input
+            .as_deref()
+            .unwrap_or("");
+        let text = format!(
+            "  Type SLEDGEHAMMER to wipe all data and reboot: {}_    (Esc to cancel)",
+            input
+        );
+        let paragraph = Paragraph::new(text)
+            .style(
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Red)),
+            );
+        f.render_widget(paragraph, area);
+    }
+}
+
+/// Discover btrfs member devices for a mount point.
+/// Uses `btrfs filesystem show` to find the devices.
+fn discover_btrfs_devices(mount_point: &str) -> Vec<String> {
+    match run_cmd("btrfs", &["filesystem", "show", mount_point]) {
+        Ok(output) => {
+            let mut devices = Vec::new();
+            for line in output.lines() {
+                let trimmed = line.trim();
+                // Lines like: "   devid    1 size 100.00GiB used 10.00GiB path /dev/sda1"
+                if trimmed.contains("path ") {
+                    if let Some(path) = trimmed.rsplit("path ").next() {
+                        let dev = path.trim().to_string();
+                        if dev.starts_with("/dev/") {
+                            // Strip partition number to get the whole disk
+                            let disk = strip_partition_suffix(&dev);
+                            if !devices.contains(&disk) {
+                                devices.push(disk);
+                            }
+                        }
+                    }
+                }
+            }
+            devices
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Strip partition suffix from a device path to get the parent disk.
+/// e.g., /dev/sda1 -> /dev/sda, /dev/nvme0n1p1 -> /dev/nvme0n1
+fn strip_partition_suffix(device: &str) -> String {
+    // NVMe: /dev/nvme0n1p1 -> /dev/nvme0n1 (partition indicated by pN after nN)
+    if device.contains("nvme") {
+        // Look for pattern: ...n<digits>p<digits> at end
+        if let Some(pos) = device.rfind('p') {
+            let after_p = &device[pos + 1..];
+            let before_p = &device[..pos];
+            // Only strip if what's after 'p' is all digits AND before 'p' ends with n<digits>
+            if !after_p.is_empty()
+                && after_p.chars().all(|c| c.is_ascii_digit())
+                && before_p.ends_with(|c: char| c.is_ascii_digit())
+            {
+                return before_p.to_string();
+            }
+        }
+        return device.to_string();
+    }
+    // SD/VD/HD: /dev/sda1 -> /dev/sda (partition is trailing digits after letter)
+    let trimmed = device.trim_end_matches(|c: char| c.is_ascii_digit());
+    if trimmed.len() < device.len()
+        && trimmed.len() > "/dev/".len()
+        && trimmed.ends_with(|c: char| c.is_ascii_alphabetic())
+    {
+        return trimmed.to_string();
+    }
+    device.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::executor::MockExecutor;
+
+    #[test]
+    fn test_key_login() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('l'));
+        assert_eq!(app.map_key(key), GettyAction::Login);
+    }
+
+    #[test]
+    fn test_key_reconfigure() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('r'));
+        assert_eq!(app.map_key(key), GettyAction::Reconfigure);
+    }
+
+    #[test]
+    fn test_key_reboot() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('R'));
+        assert_eq!(app.map_key(key), GettyAction::Reboot);
+    }
+
+    #[test]
+    fn test_key_poweroff() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('p'));
+        assert_eq!(app.map_key(key), GettyAction::PowerOff);
+    }
+
+    #[test]
+    fn test_key_sledgehammer_enter_mode() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('!'));
+        assert_eq!(app.map_key(key), GettyAction::None);
+        assert!(app.sledgehammer_input.is_some());
+    }
+
+    #[test]
+    fn test_key_sledgehammer_cancel() {
+        let mut app = test_app();
+        app.sledgehammer_input = Some(String::new());
+        let key = KeyEvent::from(KeyCode::Esc);
+        app.map_key(key);
+        assert!(app.sledgehammer_input.is_none());
+    }
+
+    #[test]
+    fn test_key_sledgehammer_type_and_confirm() {
+        let mut app = test_app();
+        app.sledgehammer_input = Some(String::new());
+
+        for c in "SLEDGEHAMMER".chars() {
+            let key = KeyEvent::from(KeyCode::Char(c));
+            assert_eq!(app.map_key(key), GettyAction::None);
+        }
+
+        assert_eq!(
+            app.sledgehammer_input.as_deref(),
+            Some("SLEDGEHAMMER")
+        );
+
+        let enter = KeyEvent::from(KeyCode::Enter);
+        assert_eq!(app.map_key(enter), GettyAction::Sledgehammer);
+        assert!(app.sledgehammer_input.is_none());
+    }
+
+    #[test]
+    fn test_key_sledgehammer_wrong_text() {
+        let mut app = test_app();
+        app.sledgehammer_input = Some("WRONG".to_string());
+
+        let enter = KeyEvent::from(KeyCode::Enter);
+        assert_eq!(app.map_key(enter), GettyAction::None);
+        // Input should be cleared on wrong text
+        assert_eq!(app.sledgehammer_input.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn test_key_sledgehammer_backspace() {
+        let mut app = test_app();
+        app.sledgehammer_input = Some("SLE".to_string());
+
+        let key = KeyEvent::from(KeyCode::Backspace);
+        app.map_key(key);
+        assert_eq!(app.sledgehammer_input.as_deref(), Some("SL"));
+    }
+
+    #[test]
+    fn test_key_unknown() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::F(1));
+        assert_eq!(app.map_key(key), GettyAction::None);
+    }
+
+    #[test]
+    fn test_key_ctrl_c_quits() {
+        let mut app = test_app();
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        app.map_key(key);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_execute_reboot() {
+        let mut app = test_app();
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_action(&GettyAction::Reboot, &mut executor);
+        let ops = executor.recorded_operations();
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0].operation, Operation::Reboot));
+    }
+
+    #[test]
+    fn test_execute_poweroff() {
+        let mut app = test_app();
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_action(&GettyAction::PowerOff, &mut executor);
+        let ops = executor.recorded_operations();
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0].operation, Operation::PowerOff));
+    }
+
+    #[test]
+    fn test_execute_sledgehammer_records_stop_unmount_and_reboot() {
+        let mut app = test_app();
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_action(&GettyAction::Sledgehammer, &mut executor);
+        let ops = executor.recorded_operations();
+        // Should have stop containers + unmount + reboot (no devices found in test)
+        assert!(ops.len() >= 3);
+        assert!(matches!(
+            ops[0].operation,
+            Operation::StopAllContainers
+        ));
+        assert!(matches!(
+            ops[1].operation,
+            Operation::CleanupUnmount { .. }
+        ));
+        assert!(matches!(
+            ops[ops.len() - 1].operation,
+            Operation::Reboot
+        ));
+    }
+
+    #[test]
+    fn test_strip_partition_suffix_sda1() {
+        assert_eq!(strip_partition_suffix("/dev/sda1"), "/dev/sda");
+    }
+
+    #[test]
+    fn test_strip_partition_suffix_sda() {
+        assert_eq!(strip_partition_suffix("/dev/sda"), "/dev/sda");
+    }
+
+    #[test]
+    fn test_strip_partition_suffix_nvme() {
+        assert_eq!(
+            strip_partition_suffix("/dev/nvme0n1p1"),
+            "/dev/nvme0n1"
+        );
+    }
+
+    #[test]
+    fn test_strip_partition_suffix_nvme_no_partition() {
+        assert_eq!(
+            strip_partition_suffix("/dev/nvme0n1"),
+            "/dev/nvme0n1"
+        );
+    }
+
+    #[test]
+    fn test_discover_btrfs_devices_empty() {
+        // btrfs command won't work in test env, should return empty vec
+        let devices = discover_btrfs_devices("/nonexistent_mount_xyz");
+        assert!(devices.is_empty());
+    }
+
+    /// Create a minimal GettyApp for testing (no real system probing).
+    fn test_app() -> GettyApp {
+        GettyApp {
+            system_info: SystemInfo {
+                hostname: "testbox".to_string(),
+                kernel_version: "6.1.0".to_string(),
+                architecture: "x86_64".to_string(),
+                cpu_model: "Test CPU".to_string(),
+                cpu_cores: 4,
+                load_average: 0.5,
+                mem_total_mb: 8192,
+                mem_used_mb: 2048,
+                disk_total_gb: 500.0,
+                disk_used_gb: 100.0,
+                disk_available_gb: 400.0,
+                network_online: true,
+                ip_address: Some("192.168.1.100".to_string()),
+                default_interface: Some("eth0".to_string()),
+                mdns_url: "testbox.local".to_string(),
+                town_os_version: Some("1.0".to_string()),
+            },
+            services: Ok(vec![]),
+            api_client: TownApiClient::new(None),
+            etc_prefix: None,
+            tty: None,
+            mount_point: "/town-os".to_string(),
+            sledgehammer_input: None,
+            should_quit: false,
+            last_refresh: Instant::now(),
+        }
+    }
+}

@@ -21,6 +21,34 @@ pub fn install_base_system(target: &str) -> OperationResult {
     }
 }
 
+/// Power off the system using the reboot(2) syscall with RB_POWER_OFF.
+pub fn power_off() -> OperationResult {
+    nix::unistd::sync();
+    match nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_POWER_OFF) {
+        Ok(_) => OperationResult::Success,
+        Err(e) => OperationResult::Error(format!("poweroff syscall failed: {}", e)),
+    }
+}
+
+/// Stop all podman containers.
+pub fn stop_all_containers() -> OperationResult {
+    match run_cmd("podman", &["stop", "--all", "--time", "10"]) {
+        Ok(_) => OperationResult::Success,
+        Err(e) => OperationResult::Error(format!("podman stop --all failed: {}", e)),
+    }
+}
+
+/// Wipe a disk's partition table and filesystem signatures.
+pub fn wipe_disk(device: &str) -> OperationResult {
+    if let Err(e) = run_cmd("wipefs", &["--all", device]) {
+        return OperationResult::Error(format!("wipefs failed on {}: {}", device, e));
+    }
+    match run_cmd("sgdisk", &["--zap-all", device]) {
+        Ok(_) => OperationResult::Success,
+        Err(e) => OperationResult::Error(format!("sgdisk failed on {}: {}", device, e)),
+    }
+}
+
 /// Reboot the system using the reboot(2) syscall.
 pub fn reboot() -> OperationResult {
     nix::unistd::sync();
