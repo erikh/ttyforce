@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ethernet_state_progression() {
+    fn test_ethernet_state_progression() -> Result<(), String> {
         let mut state = NetworkState::Offline;
         let expected = vec![
             NetworkState::DeviceEnabled,
@@ -96,14 +96,17 @@ mod tests {
             NetworkState::Online,
         ];
         for exp in expected {
-            state = state.next_for_ethernet().unwrap();
+            state = state
+                .next_for_ethernet()
+                .ok_or_else(|| format!("expected transition to {:?} but got None", exp))?;
             assert_eq!(state, exp);
         }
         assert!(state.next_for_ethernet().is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_wifi_state_progression() {
+    fn test_wifi_state_progression() -> Result<(), String> {
         let mut state = NetworkState::Offline;
         let expected = vec![
             NetworkState::DeviceEnabled,
@@ -119,10 +122,13 @@ mod tests {
             NetworkState::Online,
         ];
         for exp in expected {
-            state = state.next_for_wifi().unwrap();
+            state = state
+                .next_for_wifi()
+                .ok_or_else(|| format!("expected transition to {:?} but got None", exp))?;
             assert_eq!(state, exp);
         }
         assert!(state.next_for_wifi().is_none());
+        Ok(())
     }
 
     #[test]

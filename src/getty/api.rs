@@ -170,24 +170,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_units_json_basic() {
+    fn test_parse_units_json_basic() -> Result<(), String> {
         let json = r#"[
             {"Name": "caddy.service", "ActiveState": "active", "Description": "Caddy web server"},
             {"Name": "forgejo.service", "ActiveState": "inactive", "Description": "Forgejo git server"}
         ]"#;
-        let services = parse_units_json(json).unwrap();
+        let services = parse_units_json(json)?;
         assert_eq!(services.len(), 2);
         assert_eq!(services[0].name, "caddy.service");
         assert_eq!(services[0].active_state, "active");
         assert_eq!(services[0].description, "Caddy web server");
         assert_eq!(services[1].name, "forgejo.service");
         assert_eq!(services[1].active_state, "inactive");
+        Ok(())
     }
 
     #[test]
-    fn test_parse_units_json_empty_array() {
-        let services = parse_units_json("[]").unwrap();
+    fn test_parse_units_json_empty_array() -> Result<(), String> {
+        let services = parse_units_json("[]")?;
         assert!(services.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -200,11 +202,13 @@ mod tests {
     fn test_parse_units_json_not_array() {
         let result = parse_units_json(r#"{"key": "value"}"#);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("expected entries array"));
+        if let Err(msg) = result {
+            assert!(msg.contains("expected entries array"));
+        }
     }
 
     #[test]
-    fn test_parse_units_json_paginated() {
+    fn test_parse_units_json_paginated() -> Result<(), String> {
         let json = r#"{
             "entries": [
                 {"Name": "caddy.service", "ActiveState": "active", "Description": "Caddy"},
@@ -214,44 +218,49 @@ mod tests {
             "total_pages": 1,
             "total_count": 2
         }"#;
-        let services = parse_units_json(json).unwrap();
+        let services = parse_units_json(json)?;
         assert_eq!(services.len(), 2);
         assert_eq!(services[0].name, "caddy.service");
         assert_eq!(services[0].active_state, "active");
         assert_eq!(services[1].active_state, "activating");
+        Ok(())
     }
 
     #[test]
-    fn test_parse_units_json_paginated_empty_entries() {
+    fn test_parse_units_json_paginated_empty_entries() -> Result<(), String> {
         let json = r#"{"entries": [], "has_more": false, "total_count": 0}"#;
-        let services = parse_units_json(json).unwrap();
+        let services = parse_units_json(json)?;
         assert!(services.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_parse_units_json_missing_fields() {
+    fn test_parse_units_json_missing_fields() -> Result<(), String> {
         let json = r#"[{"Name": "test.service"}]"#;
-        let services = parse_units_json(json).unwrap();
+        let services = parse_units_json(json)?;
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].active_state, "unknown");
         assert_eq!(services[0].description, "");
+        Ok(())
     }
 
     #[test]
-    fn test_parse_units_json_lowercase_fields() {
+    fn test_parse_units_json_lowercase_fields() -> Result<(), String> {
         let json = r#"[{"name": "test.service", "active_state": "failed", "description": "A test"}]"#;
-        let services = parse_units_json(json).unwrap();
+        let services = parse_units_json(json)?;
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "test.service");
         assert_eq!(services[0].active_state, "failed");
+        Ok(())
     }
 
     #[test]
-    fn test_parse_units_json_skips_empty_name() {
+    fn test_parse_units_json_skips_empty_name() -> Result<(), String> {
         let json = r#"[{"Name": "", "ActiveState": "active"}, {"Name": "real.service", "ActiveState": "active"}]"#;
-        let services = parse_units_json(json).unwrap();
+        let services = parse_units_json(json)?;
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "real.service");
+        Ok(())
     }
 
     #[test]

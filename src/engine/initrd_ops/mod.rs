@@ -131,7 +131,9 @@ fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str, opti
 
     // For btrfs RAID arrays, scan for member devices before mounting
     if fs_type == "btrfs" {
-        let _ = crate::engine::real_ops::run_cmd("btrfs", &["device", "scan"]);
+        if let Err(e) = crate::engine::real_ops::run_cmd("btrfs", &["device", "scan"]) {
+            crate::engine::real_ops::cmd_log_append(format!("  btrfs device scan warning: {}", e));
+        }
     }
 
     match nix::mount::mount(
@@ -151,6 +153,11 @@ fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str, opti
 
 /// Unmount a filesystem using the umount2(2) syscall. Best-effort.
 fn unmount_syscall(mount_point: &str) -> OperationResult {
-    let _ = nix::mount::umount2(mount_point, nix::mount::MntFlags::MNT_DETACH);
+    if let Err(e) = nix::mount::umount2(mount_point, nix::mount::MntFlags::MNT_DETACH) {
+        crate::engine::real_ops::cmd_log_append(format!(
+            "  umount2 warning (best-effort): {}",
+            e
+        ));
+    }
     OperationResult::Success
 }

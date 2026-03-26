@@ -375,18 +375,12 @@ impl InstallerStateMachine {
             self.bring_ethernet_online(eth_name.clone(), executor)
         } else {
             // Check for wifi interfaces
-            let has_wifi = self
+            if let Some(wifi_iface) = self
                 .interfaces
                 .iter()
-                .any(|i| i.kind == InterfaceKind::Wifi);
-            if has_wifi {
-                let wifi_name = self
-                    .interfaces
-                    .iter()
-                    .find(|i| i.kind == InterfaceKind::Wifi)
-                    .unwrap()
-                    .name
-                    .clone();
+                .find(|i| i.kind == InterfaceKind::Wifi)
+            {
+                let wifi_name = wifi_iface.name.clone();
                 self.selected_interface = Some(wifi_name.clone());
 
                 // Enable and scan
@@ -430,19 +424,13 @@ impl InstallerStateMachine {
                 Some(ScreenId::WifiSelect)
             } else {
                 // No interfaces at all - check for ethernet without link
-                let has_any_eth = self
+                if let Some(eth_iface) = self
                     .interfaces
                     .iter()
-                    .any(|i| i.kind == InterfaceKind::Ethernet);
-                if has_any_eth {
+                    .find(|i| i.kind == InterfaceKind::Ethernet)
+                {
                     // Try the first ethernet anyway
-                    let eth_name = self
-                        .interfaces
-                        .iter()
-                        .find(|i| i.kind == InterfaceKind::Ethernet)
-                        .unwrap()
-                        .name
-                        .clone();
+                    let eth_name = eth_iface.name.clone();
                     self.selected_interface = Some(eth_name.clone());
                     self.bring_ethernet_online(eth_name, executor)
                 } else {

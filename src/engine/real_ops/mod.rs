@@ -25,7 +25,9 @@ pub fn cmd_log_append(msg: String) {
     }
     // Best-effort write to serial console for debugging
     if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/ttyS0") {
-        let _ = writeln!(f, "{}", msg);
+        if let Err(e) = writeln!(f, "{}", msg) {
+            eprintln!("ttyS0 write: {}", e);
+        }
     }
 }
 
@@ -33,7 +35,9 @@ pub fn cmd_log_append(msg: String) {
 /// Messages are prefixed with "ttyforce: " so they can be identified in dmesg.
 pub fn kmsg_log(msg: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
-        let _ = writeln!(f, "ttyforce: {}", msg);
+        if let Err(e) = writeln!(f, "ttyforce: {}", msg) {
+            eprintln!("kmsg write: {}", e);
+        }
     }
 }
 

@@ -24,8 +24,29 @@ pub struct SystemInfo {
 impl SystemInfo {
     /// Probe the live system for all info.
     pub fn probe(mount_point: &str) -> Self {
-        let utsname = nix::sys::utsname::uname()
-            .expect("uname() should not fail on Linux");
+        let utsname = match nix::sys::utsname::uname() {
+            Ok(u) => u,
+            Err(_) => {
+                return Self {
+                    hostname: "unknown".into(),
+                    kernel_version: "unknown".into(),
+                    architecture: "unknown".into(),
+                    cpu_model: "Unknown".into(),
+                    cpu_cores: 1,
+                    load_average: 0.0,
+                    mem_total_mb: 0,
+                    mem_used_mb: 0,
+                    disk_total_gb: 0.0,
+                    disk_used_gb: 0.0,
+                    disk_available_gb: 0.0,
+                    network_online: false,
+                    ip_address: None,
+                    default_interface: None,
+                    mdns_url: "unknown.local".into(),
+                    town_os_version: None,
+                };
+            }
+        };
         let hostname = utsname.nodename().to_string_lossy().to_string();
         let kernel_version = utsname.release().to_string_lossy().to_string();
         let architecture = utsname.machine().to_string_lossy().to_string();
@@ -227,7 +248,7 @@ fn parse_hex_ip(hex: &str) -> String {
 /// Check if the machine is online by attempting a TCP connect to 1.1.1.1:53.
 pub fn check_online() -> bool {
     TcpStream::connect_timeout(
-        &"1.1.1.1:53".parse().unwrap(),
+        &std::net::SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53),
         Duration::from_millis(500),
     )
     .is_ok()
@@ -335,11 +356,12 @@ eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
 eth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
 ";
         let result = parse_proc_route(content);
-        assert!(result.is_some());
-        let (iface, gw) = result.unwrap();
-        assert_eq!(iface, "eth0");
-        // 0101A8C0 in little-endian = 192.168.1.1
-        assert_eq!(gw, "192.168.1.1");
+        assert!(result.is_some(), "parse_proc_route should return Some for valid route table");
+        if let Some((iface, gw)) = result {
+            assert_eq!(iface, "eth0");
+            // 0101A8C0 in little-endian = 192.168.1.1
+            assert_eq!(gw, "192.168.1.1");
+        }
     }
 
     #[test]

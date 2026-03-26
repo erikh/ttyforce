@@ -152,7 +152,13 @@ fn write_output(content: &str, output: Option<&str>) {
 
 fn run_detect(input: Option<&str>, output: Option<&str>) {
     let hardware = load_hardware(input, false);
-    let manifest = toml::to_string_pretty(&hardware).unwrap();
+    let manifest = match toml::to_string_pretty(&hardware) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to serialize hardware manifest: {}", e);
+            process::exit(1);
+        }
+    };
     write_output(&manifest, output);
 }
 
@@ -175,7 +181,13 @@ fn run_output(input: Option<&str>, output: Option<&str>) {
 
     print_operations_summary(&app.state_machine);
 
-    let manifest = toml::to_string_pretty(&app.state_machine.action_manifest).unwrap();
+    let manifest = match toml::to_string_pretty(&app.state_machine.action_manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to serialize action manifest: {}", e);
+            process::exit(1);
+        }
+    };
     write_output(&manifest, output);
 }
 
@@ -222,7 +234,13 @@ fn run_installer(
     print_operations_summary(&app.state_machine);
 
     if let Some(out) = output {
-        let manifest = toml::to_string_pretty(&app.state_machine.action_manifest).unwrap();
+        let manifest = match toml::to_string_pretty(&app.state_machine.action_manifest) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to serialize action manifest: {}", e);
+                process::exit(1);
+            }
+        };
         write_output(&manifest, Some(out));
     }
 }
@@ -270,7 +288,13 @@ fn run_fixture(scenario_path: &str, output: Option<&str>) {
         state_machine.process_input(input, &mut executor);
     }
 
-    let manifest = toml::to_string_pretty(&state_machine.action_manifest).unwrap();
+    let manifest = match toml::to_string_pretty(&state_machine.action_manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to serialize action manifest: {}", e);
+            process::exit(1);
+        }
+    };
     write_output(&manifest, output);
 }
 

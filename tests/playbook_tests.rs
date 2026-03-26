@@ -35,18 +35,18 @@ struct Playbook {
     expected_screens: Vec<String>,
 }
 
-fn load_playbook(name: &str) -> Playbook {
+fn load_playbook(name: &str) -> Result<Playbook, String> {
     let path = format!("fixtures/playbooks/{}.toml", name);
     let content =
-        fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {}: {}", path, e));
-    toml::from_str(&content).unwrap_or_else(|e| panic!("failed to parse {}: {}", path, e))
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {}", path, e))?;
+    toml::from_str(&content).map_err(|e| format!("failed to parse {}: {}", path, e))
 }
 
-fn run_playbook(name: &str) {
-    let playbook = load_playbook(name);
+fn run_playbook(name: &str) -> Result<(), String> {
+    let playbook = load_playbook(name)?;
 
     let hardware = HardwareManifest::load(&playbook.hardware_file)
-        .unwrap_or_else(|e| panic!("failed to load hardware {}: {}", playbook.hardware_file, e));
+        .map_err(|e| format!("failed to load hardware {}: {}", playbook.hardware_file, e))?;
 
     let mut sm = InstallerStateMachine::new(hardware);
     let mut executor = TestExecutor::new(playbook.simulated_responses);
@@ -92,10 +92,12 @@ fn run_playbook(name: &str) {
         "Rebooted" => InstallerFinalState::Rebooted,
         "Aborted" => InstallerFinalState::Aborted,
         "Exited" => InstallerFinalState::Exited,
-        other => panic!(
-            "[{}] unknown expected_final_state: {}",
-            playbook.description, other
-        ),
+        other => {
+            return Err(format!(
+                "[{}] unknown expected_final_state: {}",
+                playbook.description, other
+            ));
+        }
     };
     assert_eq!(
         sm.action_manifest.final_state, expected_state,
@@ -162,101 +164,108 @@ fn run_playbook(name: &str) {
         exec_types.len(),
         sm.action_manifest.final_state
     );
+
+    Ok(())
 }
 
 // === Individual playbook tests ===
 
 #[test]
-fn playbook_ethernet_1disk_full_install() {
-    run_playbook("ethernet_1disk_full_install");
+fn playbook_ethernet_1disk_full_install() -> Result<(), String> {
+    run_playbook("ethernet_1disk_full_install")
 }
 
 #[test]
-fn playbook_ethernet_4disk_btrfs_raid5() {
-    run_playbook("ethernet_4disk_btrfs_raid5");
+fn playbook_ethernet_4disk_btrfs_raid5() -> Result<(), String> {
+    run_playbook("ethernet_4disk_btrfs_raid5")
 }
 
 #[test]
-fn playbook_wifi_1disk_full_install() {
-    run_playbook("wifi_1disk_full_install");
+fn playbook_wifi_1disk_full_install() -> Result<(), String> {
+    run_playbook("wifi_1disk_full_install")
 }
 
 #[test]
-fn playbook_wifi_wrong_password_retry() {
-    run_playbook("wifi_wrong_password_retry");
+fn playbook_wifi_wrong_password_retry() -> Result<(), String> {
+    run_playbook("wifi_wrong_password_retry")
 }
 
 #[test]
-fn playbook_wifi_signal_timeout() {
-    run_playbook("wifi_signal_timeout");
+fn playbook_wifi_signal_timeout() -> Result<(), String> {
+    run_playbook("wifi_signal_timeout")
 }
 
 #[test]
-fn playbook_wifi_ethernet_prefers_ethernet() {
-    run_playbook("wifi_ethernet_prefers_ethernet");
+fn playbook_wifi_ethernet_prefers_ethernet() -> Result<(), String> {
+    run_playbook("wifi_ethernet_prefers_ethernet")
 }
 
 #[test]
-fn playbook_dead_ethernet_falls_to_wifi() {
-    run_playbook("dead_ethernet_falls_to_wifi");
+fn playbook_dead_ethernet_falls_to_wifi() -> Result<(), String> {
+    run_playbook("dead_ethernet_falls_to_wifi")
 }
 
 #[test]
-fn playbook_abort_install() {
-    run_playbook("abort_install");
+fn playbook_abort_install() -> Result<(), String> {
+    run_playbook("abort_install")
 }
 
 #[test]
-fn playbook_wifi_scan_refresh() {
-    run_playbook("wifi_scan_refresh");
+fn playbook_wifi_scan_refresh() -> Result<(), String> {
+    run_playbook("wifi_scan_refresh")
 }
 
 #[test]
-fn playbook_mixed_drives_workstation_raid5() {
-    run_playbook("mixed_drives_workstation_raid5");
+fn playbook_mixed_drives_workstation_raid5() -> Result<(), String> {
+    run_playbook("mixed_drives_workstation_raid5")
 }
 
 #[test]
-fn playbook_reboot_after_install() {
-    run_playbook("reboot_after_install");
+fn playbook_reboot_after_install() -> Result<(), String> {
+    run_playbook("reboot_after_install")
 }
 
 #[test]
-fn playbook_abort_after_ethernet_online() {
-    run_playbook("abort_after_ethernet_online");
+fn playbook_abort_after_ethernet_online() -> Result<(), String> {
+    run_playbook("abort_after_ethernet_online")
 }
 
 #[test]
-fn playbook_abort_after_wifi_connect() {
-    run_playbook("abort_after_wifi_connect");
+fn playbook_abort_after_wifi_connect() -> Result<(), String> {
+    run_playbook("abort_after_wifi_connect")
 }
 
 #[test]
-fn playbook_abort_after_confirm() {
-    run_playbook("abort_after_confirm");
+fn playbook_abort_after_confirm() -> Result<(), String> {
+    run_playbook("abort_after_confirm")
 }
 
 // === Discovery test: automatically find and run all playbooks ===
 
 #[test]
-fn all_playbooks_parse_and_run() {
+fn all_playbooks_parse_and_run() -> Result<(), String> {
     let playbook_dir = Path::new("fixtures/playbooks");
     if !playbook_dir.exists() {
-        panic!("fixtures/playbooks directory not found");
+        return Err("fixtures/playbooks directory not found".to_string());
     }
 
     let mut count = 0;
-    for entry in fs::read_dir(playbook_dir).unwrap() {
-        let entry = entry.unwrap();
+    for entry in fs::read_dir(playbook_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.extension().map(|e| e == "toml").unwrap_or(false) {
-            let name = path.file_stem().unwrap().to_str().unwrap();
+            let name = path
+                .file_stem()
+                .ok_or("missing file stem")?
+                .to_str()
+                .ok_or("non-utf8 file stem")?;
             eprintln!("Running playbook: {}", name);
-            run_playbook(name);
+            run_playbook(name)?;
             count += 1;
         }
     }
 
     assert!(count > 0, "no playbooks found in fixtures/playbooks/");
     eprintln!("All {} playbooks passed", count);
+    Ok(())
 }

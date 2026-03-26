@@ -406,7 +406,11 @@ fn integration_btrfs_subvolume() {
     let mount_res = std::process::Command::new("mount")
         .args([&part_dev, mount_point])
         .output();
-    if mount_res.is_err() || !mount_res.unwrap().status.success() {
+    let mount_ok = match mount_res {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    };
+    if !mount_ok {
         eprintln!("skipping subvolume test (mount failed)");
         return;
     }
@@ -422,16 +426,31 @@ fn integration_btrfs_subvolume() {
     );
 
     // Verify subvolume exists
-    let check = std::process::Command::new("btrfs")
+    let check = match std::process::Command::new("btrfs")
         .args(["subvolume", "list", mount_point])
         .output()
-        .expect("btrfs list");
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("btrfs list failed: {}", e);
+            // Cleanup before returning
+            if let Err(ue) = std::process::Command::new("umount").arg(mount_point).output() {
+                eprintln!("umount cleanup: {}", ue);
+            }
+            std::fs::remove_dir(mount_point).ok();
+            panic!("btrfs subvolume list command failed: {}", e);
+        }
+    };
     let output = String::from_utf8_lossy(&check.stdout);
     assert!(output.contains("@test"), "subvolume not found in:\n{}", output);
 
-    // Cleanup
-    let _ = std::process::Command::new("umount").arg(mount_point).output();
-    let _ = std::fs::remove_dir(mount_point);
+    // Cleanup (best-effort)
+    if let Err(e) = std::process::Command::new("umount").arg(mount_point).output() {
+        eprintln!("umount cleanup: {}", e);
+    }
+    if let Err(e) = std::fs::remove_dir(mount_point) {
+        eprintln!("rmdir cleanup: {}", e);
+    }
 }
 
 #[test]
@@ -559,18 +578,24 @@ fn integration_configure_dhcp_no_server() {
     let mut exec = SystemdExecutor::new();
 
     // Remove the static IP so the polling loop has nothing to find
-    let _ = std::process::Command::new("ip")
+    if let Err(e) = std::process::Command::new("ip")
         .args(["addr", "flush", "dev", &iface])
-        .output();
+        .output()
+    {
+        eprintln!("ip addr flush: {}", e);
+    }
 
     let result = exec.execute(&Operation::ConfigureDhcp {
         interface: iface.clone(),
     });
 
     // Restore the networkd-managed state (re-applies the static IP from the .network file)
-    let _ = std::process::Command::new("networkctl")
+    if let Err(e) = std::process::Command::new("networkctl")
         .args(["reconfigure", &iface])
-        .output();
+        .output()
+    {
+        eprintln!("networkctl reconfigure: {}", e);
+    }
 
     // The DHCP trigger may "succeed" (networkd ReconfigureLink returns ok),
     // but no IP will be assigned, so we expect a timeout error.
@@ -607,9 +632,12 @@ fn integration_configure_dhcp_with_static_ip() {
     });
 
     // Reconfigure the link via networkd to restore its managed state
-    let _ = std::process::Command::new("networkctl")
+    if let Err(e) = std::process::Command::new("networkctl")
         .args(["reconfigure", &iface])
-        .output();
+        .output()
+    {
+        eprintln!("networkctl reconfigure: {}", e);
+    }
 
     // The polling loop should find the existing static IP and return Success
     assert!(

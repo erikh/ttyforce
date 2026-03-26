@@ -6,7 +6,7 @@ use crate::detect::network::{parse_iw_scan, parse_iwlist_scan};
 use crate::engine::feedback::OperationResult;
 use crate::network::wifi::WifiNetwork;
 
-use super::run_cmd;
+use super::{cmd_log_append, run_cmd};
 
 /// Enable a network interface via networkctl.
 pub fn enable_interface(interface: &str) -> OperationResult {
@@ -146,8 +146,10 @@ pub fn authenticate_wifi(interface: &str, ssid: &str, password: &str) -> Operati
         return OperationResult::Error("failed to write wpa_supplicant config".into());
     }
 
-    // Kill any existing wpa_supplicant for this interface
-    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    // Kill any existing wpa_supplicant for this interface (best-effort)
+    if let Err(e) = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]) {
+        cmd_log_append(format!("  pkill wpa_supplicant: {}", e));
+    }
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     match run_cmd(
@@ -362,15 +364,19 @@ pub fn cleanup_network_config(interface: &str) -> OperationResult {
         }
     }
     // Best-effort reload
-    let _ = run_cmd("networkctl", &["reload"]);
+    if let Err(e) = run_cmd("networkctl", &["reload"]) {
+        cmd_log_append(format!("  networkctl reload warning: {}", e));
+    }
     OperationResult::Success
 }
 
 /// Kill wpa_supplicant for an interface and remove its config file.
 /// Best-effort: missing processes and files are not errors.
 pub fn cleanup_wpa_supplicant(interface: &str) -> OperationResult {
-    // Kill any wpa_supplicant for this interface (ignore failure)
-    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    // Kill any wpa_supplicant for this interface (best-effort)
+    if let Err(e) = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]) {
+        cmd_log_append(format!("  pkill wpa_supplicant: {}", e));
+    }
     // Remove config file (ignore NotFound)
     let conf_path = format!("/tmp/wpa_supplicant_{}.conf", interface);
     match fs::remove_file(&conf_path) {

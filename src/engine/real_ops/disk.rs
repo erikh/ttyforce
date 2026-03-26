@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::engine::feedback::OperationResult;
 
-use super::run_cmd;
+use super::{cmd_log_append, run_cmd};
 
 /// Partition a disk with GPT and a single primary partition.
 /// Runs `partprobe` and `udevadm settle` afterward so the kernel picks up the
@@ -16,9 +16,13 @@ pub fn partition_disk(device: &str) -> OperationResult {
         return OperationResult::Error(format!("failed to partition {}: {}", device, e));
     }
 
-    // Re-read partition table
-    let _ = run_cmd("partprobe", &[device]);
-    let _ = run_cmd("udevadm", &["settle", "--timeout=5"]);
+    // Re-read partition table (best-effort)
+    if let Err(e) = run_cmd("partprobe", &[device]) {
+        cmd_log_append(format!("  partprobe warning: {}", e));
+    }
+    if let Err(e) = run_cmd("udevadm", &["settle", "--timeout=5"]) {
+        cmd_log_append(format!("  udevadm settle warning: {}", e));
+    }
 
     OperationResult::Success
 }
@@ -77,7 +81,9 @@ pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str, options:
 
     // For btrfs RAID arrays, scan for member devices before mounting
     if fs_type == "btrfs" {
-        let _ = run_cmd("btrfs", &["device", "scan"]);
+        if let Err(e) = run_cmd("btrfs", &["device", "scan"]) {
+            cmd_log_append(format!("  btrfs device scan warning: {}", e));
+        }
     }
 
     let result = if let Some(opts) = options {
@@ -122,8 +128,12 @@ pub fn generate_fstab(mount_point: &str, device: &str, fs_type: &str) -> Operati
     }
 
     let symlink_path = format!("{}/{}", wants_dir, service_name);
-    // Remove existing symlink if present
-    let _ = fs::remove_file(&symlink_path);
+    // Remove existing symlink if present (ignore error if not found)
+    if let Err(e) = fs::remove_file(&symlink_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            cmd_log_append(format!("  remove old symlink warning: {}", e));
+        }
+    }
     if let Err(e) = std::os::unix::fs::symlink(
         format!("/etc/systemd/system/{}", service_name),
         &symlink_path,
@@ -167,7 +177,9 @@ pub fn generate_mount_service(mount_point: &str, device: &str, fs_type: &str) ->
 /// Recursively unmount a mount point. Best-effort: returns Success even on
 /// failure since the mount may not exist.
 pub fn cleanup_unmount(mount_point: &str) -> OperationResult {
-    let _ = run_cmd("umount", &["-R", mount_point]);
+    if let Err(e) = run_cmd("umount", &["-R", mount_point]) {
+        cmd_log_append(format!("  umount warning (best-effort): {}", e));
+    }
     OperationResult::Success
 }
 
@@ -196,18 +208,17 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_fstab_creates_service() {
+    fn test_generate_fstab_creates_service() -> Result<(), String> {
         let tmp = std::env::temp_dir().join("ttyforce-mount-svc-test");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let _ignore = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).map_err(|e| format!("create_dir_all: {}", e))?;
 
-        let result = generate_fstab(tmp.to_str().unwrap(), "/dev/sda1", "btrfs");
+        let tmp_str = tmp.to_str().ok_or("temp path not valid UTF-8")?;
+        let result = generate_fstab(tmp_str, "/dev/sda1", "btrfs");
         assert!(result.is_success(), "generate_fstab failed: {:?}", result);
 
-        let svc = std::fs::read_to_string(
-            tmp.join("systemd/system/mount-town-os.service"),
-        )
-        .unwrap();
+        let svc = std::fs::read_to_string(tmp.join("systemd/system/mount-town-os.service"))
+            .map_err(|e| format!("read service file: {}", e))?;
         assert!(svc.contains("/dev/sda1"));
         assert!(svc.contains("btrfs"));
 
@@ -216,26 +227,27 @@ mod tests {
         let link = tmp.join("systemd/system/local-fs.target.wants/mount-town-os.service");
         assert!(link.symlink_metadata().is_ok(), "enable symlink missing");
 
-        let _ = std::fs::remove_dir_all(&tmp);
+        let _ignore = std::fs::remove_dir_all(&tmp);
+        Ok(())
     }
 
     #[test]
-    fn test_generate_fstab_idempotent() {
+    fn test_generate_fstab_idempotent() -> Result<(), String> {
         let tmp = std::env::temp_dir().join("ttyforce-mount-svc-idem-test");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let _ignore = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).map_err(|e| format!("create_dir_all: {}", e))?;
 
-        generate_fstab(tmp.to_str().unwrap(), "/dev/sda1", "btrfs");
-        generate_fstab(tmp.to_str().unwrap(), "/dev/sda1", "btrfs");
+        let tmp_str = tmp.to_str().ok_or("temp path not valid UTF-8")?;
+        generate_fstab(tmp_str, "/dev/sda1", "btrfs");
+        generate_fstab(tmp_str, "/dev/sda1", "btrfs");
 
         // Should still work (overwrites cleanly)
-        let svc = std::fs::read_to_string(
-            tmp.join("systemd/system/mount-town-os.service"),
-        )
-        .unwrap();
+        let svc = std::fs::read_to_string(tmp.join("systemd/system/mount-town-os.service"))
+            .map_err(|e| format!("read service file: {}", e))?;
         assert!(svc.contains("/dev/sda1"));
 
-        let _ = std::fs::remove_dir_all(&tmp);
+        let _ignore = std::fs::remove_dir_all(&tmp);
+        Ok(())
     }
 
     #[test]

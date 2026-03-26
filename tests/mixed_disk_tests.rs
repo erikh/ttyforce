@@ -5,8 +5,8 @@ use ttyforce::engine::OperationExecutor;
 use ttyforce::manifest::{HardwareManifest, InstallerFinalState, OperationOutcome};
 use ttyforce::operations::Operation;
 
-fn load_hardware(name: &str) -> HardwareManifest {
-    HardwareManifest::load(&format!("fixtures/hardware/{}.toml", name)).unwrap()
+fn load_hardware(name: &str) -> Result<HardwareManifest, String> {
+    HardwareManifest::load(&format!("fixtures/hardware/{}.toml", name)).map_err(|e| e.to_string())
 }
 
 fn success_executor() -> TestExecutor {
@@ -52,8 +52,8 @@ fn run_install(
 // =====================================================
 
 #[test]
-fn test_workstation_disk_grouping() {
-    let hw = load_hardware("mixed_drives_workstation");
+fn test_workstation_disk_grouping() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_workstation")?;
     let disks: Vec<DiskInfo> = hw.disks.iter().map(DiskInfo::from).collect();
     let groups = DiskGroup::from_disks(&disks);
 
@@ -72,11 +72,12 @@ fn test_workstation_disk_grouping() {
     assert_eq!(groups[2].make, "Western Digital");
     assert_eq!(groups[2].model, "Red Plus");
     assert_eq!(groups[2].disk_count(), 2);
+    Ok(())
 }
 
 #[test]
-fn test_workstation_select_crucial_btrfs_raid5() {
-    let hw = load_hardware("mixed_drives_workstation");
+fn test_workstation_select_crucial_btrfs_raid5() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_workstation")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -102,11 +103,12 @@ fn test_workstation_select_crucial_btrfs_raid5() {
         _ => false,
     });
     assert!(has_btrfs_raid);
+    Ok(())
 }
 
 #[test]
-fn test_workstation_select_samsung_btrfs_mirror() {
-    let hw = load_hardware("mixed_drives_workstation");
+fn test_workstation_select_samsung_btrfs_mirror() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_workstation")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -130,11 +132,12 @@ fn test_workstation_select_samsung_btrfs_mirror() {
         _ => false,
     });
     assert!(has_btrfs_raid);
+    Ok(())
 }
 
 #[test]
-fn test_workstation_select_wd_btrfs_mirror() {
-    let hw = load_hardware("mixed_drives_workstation");
+fn test_workstation_select_wd_btrfs_mirror() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_workstation")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -158,11 +161,12 @@ fn test_workstation_select_wd_btrfs_mirror() {
         _ => false,
     });
     assert!(has_btrfs_raid);
+    Ok(())
 }
 
 #[test]
-fn test_workstation_select_crucial_single() {
-    let hw = load_hardware("mixed_drives_workstation");
+fn test_workstation_select_crucial_single() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_workstation")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -183,6 +187,7 @@ fn test_workstation_select_crucial_single() {
         .filter(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }))
         .count();
     assert_eq!(has_subvol, 2); // @etc, @var
+    Ok(())
 }
 
 // =====================================================
@@ -192,8 +197,8 @@ fn test_workstation_select_crucial_single() {
 // =====================================================
 
 #[test]
-fn test_server_disk_grouping() {
-    let hw = load_hardware("mixed_drives_server");
+fn test_server_disk_grouping() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_server")?;
     let disks: Vec<DiskInfo> = hw.disks.iter().map(DiskInfo::from).collect();
     let groups = DiskGroup::from_disks(&disks);
 
@@ -206,11 +211,12 @@ fn test_server_disk_grouping() {
     assert_eq!(groups[1].make, "Seagate");
     assert_eq!(groups[1].model, "Exos X18");
     assert_eq!(groups[1].disk_count(), 6);
+    Ok(())
 }
 
 #[test]
-fn test_server_select_seagate_btrfs_raid5() {
-    let hw = load_hardware("mixed_drives_server");
+fn test_server_select_seagate_btrfs_raid5() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_server")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -245,11 +251,12 @@ fn test_server_select_seagate_btrfs_raid5() {
         .filter(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }))
         .count();
     assert_eq!(subvol_count, 2); // @etc, @var
+    Ok(())
 }
 
 #[test]
-fn test_server_select_intel_btrfs_mirror() {
-    let hw = load_hardware("mixed_drives_server");
+fn test_server_select_intel_btrfs_mirror() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_server")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -275,11 +282,12 @@ fn test_server_select_intel_btrfs_mirror() {
         _ => false,
     });
     assert!(has_btrfs_raid);
+    Ok(())
 }
 
 #[test]
-fn test_server_raidz_filters_small_groups() {
-    let hw = load_hardware("mixed_drives_server");
+fn test_server_raidz_filters_small_groups() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_server")?;
     let sm = InstallerStateMachine::new(hw);
 
     // For BtrfsRaid5 (needs >=3), Intel (2 disks) should be filtered out
@@ -288,6 +296,7 @@ fn test_server_raidz_filters_small_groups() {
     let compatible = sm_copy.compatible_disk_groups();
     assert_eq!(compatible.len(), 1); // only Seagate
     assert_eq!(sm_copy.disk_groups[compatible[0]].make, "Seagate");
+    Ok(())
 }
 
 // =====================================================
@@ -299,8 +308,8 @@ fn test_server_raidz_filters_small_groups() {
 // =====================================================
 
 #[test]
-fn test_homelab_disk_grouping() {
-    let hw = load_hardware("mixed_drives_homelab");
+fn test_homelab_disk_grouping() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_homelab")?;
     let disks: Vec<DiskInfo> = hw.disks.iter().map(DiskInfo::from).collect();
     let groups = DiskGroup::from_disks(&disks);
 
@@ -317,11 +326,12 @@ fn test_homelab_disk_grouping() {
 
     assert_eq!(groups[3].make, "Western Digital");
     assert_eq!(groups[3].disk_count(), 1);
+    Ok(())
 }
 
 #[test]
-fn test_homelab_select_toshiba_btrfs_mirror() {
-    let hw = load_hardware("mixed_drives_homelab");
+fn test_homelab_select_toshiba_btrfs_mirror() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_homelab")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -347,11 +357,12 @@ fn test_homelab_select_toshiba_btrfs_mirror() {
         _ => false,
     });
     assert!(has_raid);
+    Ok(())
 }
 
 #[test]
-fn test_homelab_select_wd_single_btrfs() {
-    let hw = load_hardware("mixed_drives_homelab");
+fn test_homelab_select_wd_single_btrfs() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_homelab")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -381,11 +392,12 @@ fn test_homelab_select_wd_single_btrfs() {
         _ => false,
     });
     assert!(has_install);
+    Ok(())
 }
 
 #[test]
-fn test_homelab_mirror_filters_single_disk_groups() {
-    let hw = load_hardware("mixed_drives_homelab");
+fn test_homelab_mirror_filters_single_disk_groups() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_homelab")?;
     let sm = InstallerStateMachine::new(hw);
 
     let mut sm_copy = sm;
@@ -394,6 +406,7 @@ fn test_homelab_mirror_filters_single_disk_groups() {
     // Only Toshiba has 2 disks; Samsung, Seagate, WD have 1 each
     assert_eq!(compatible.len(), 1);
     assert_eq!(sm_copy.disk_groups[compatible[0]].make, "Toshiba");
+    Ok(())
 }
 
 // =====================================================
@@ -401,8 +414,8 @@ fn test_homelab_mirror_filters_single_disk_groups() {
 // =====================================================
 
 #[test]
-fn test_workstation_crucial_raid5_manifest_output() {
-    let hw = load_hardware("mixed_drives_workstation");
+fn test_workstation_crucial_raid5_manifest_output() -> Result<(), String> {
+    let hw = load_hardware("mixed_drives_workstation")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -426,8 +439,9 @@ fn test_workstation_crucial_raid5_manifest_output() {
     }
 
     // Save and reload to verify serialization round-trip
-    let serialized = toml::to_string_pretty(&sm.action_manifest).unwrap();
+    let serialized = toml::to_string_pretty(&sm.action_manifest).map_err(|e| e.to_string())?;
     assert!(serialized.contains("PartitionDisk"));
     assert!(serialized.contains("BtrfsRaidSetup"));
     assert!(serialized.contains("InstallBaseSystem"));
+    Ok(())
 }

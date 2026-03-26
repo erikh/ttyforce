@@ -18,7 +18,9 @@ use crate::engine::real_ops::{cmd_log_append, run_cmd};
 pub fn enable_interface(interface: &str) -> OperationResult {
     // Best-effort rfkill unblock for wifi interfaces
     if interface.starts_with("wl") || interface.starts_with("wlan") {
-        let _ = run_cmd("rfkill", &["unblock", "wifi"]);
+        if let Err(e) = run_cmd("rfkill", &["unblock", "wifi"]) {
+            cmd_log_append(format!("  rfkill unblock wifi: {}", e));
+        }
     }
 
     cmd_log_append(format!("$ ioctl SIOCSIFFLAGS IFF_UP on {}", interface));
@@ -111,7 +113,9 @@ pub fn authenticate_wifi(interface: &str, ssid: &str, password: &str) -> Operati
         return OperationResult::Error("failed to write wpa_supplicant config".into());
     }
 
-    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    if let Err(e) = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]) {
+        cmd_log_append(format!("  pkill wpa_supplicant: {}", e));
+    }
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     match run_cmd(
@@ -178,8 +182,10 @@ pub fn wps_pbc_start(interface: &str) -> OperationResult {
         return OperationResult::Error("failed to write WPS wpa_supplicant config".into());
     }
 
-    // Kill any existing wpa_supplicant for this interface
-    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    // Kill any existing wpa_supplicant for this interface (best-effort)
+    if let Err(e) = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]) {
+        cmd_log_append(format!("  pkill wpa_supplicant: {}", e));
+    }
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Start wpa_supplicant
@@ -283,7 +289,9 @@ fn configure_dhcp_with(
 
 /// Trigger DHCP on an interface via dhcpcd.
 fn try_trigger_dhcp(interface: &str) -> OperationResult {
-    let _ = run_cmd("dhcpcd", &["--release", interface]);
+    if let Err(e) = run_cmd("dhcpcd", &["--release", interface]) {
+        cmd_log_append(format!("  dhcpcd release: {}", e));
+    }
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     match run_cmd("dhcpcd", &["-b", interface]) {
@@ -302,7 +310,9 @@ fn write_resolv_conf_from_lease(interface: &str) {
             for line in content.lines() {
                 cmd_log_append(format!("  {}", line));
             }
-            let _ = fs::write("/etc/resolv.conf", content);
+            if let Err(e) = fs::write("/etc/resolv.conf", content) {
+                cmd_log_append(format!("  write resolv.conf failed: {}", e));
+            }
             return;
         }
     }
@@ -314,7 +324,9 @@ fn write_resolv_conf_from_lease(interface: &str) {
             for line in content.lines() {
                 cmd_log_append(format!("  {}", line));
             }
-            let _ = fs::write("/etc/resolv.conf", content);
+            if let Err(e) = fs::write("/etc/resolv.conf", content) {
+                cmd_log_append(format!("  write resolv.conf failed: {}", e));
+            }
             return;
         }
     }
@@ -330,7 +342,9 @@ fn write_resolv_conf_from_lease(interface: &str) {
     // Last resort: write a default resolv.conf
     cmd_log_append("$ write /etc/resolv.conf with fallback nameservers".to_string());
     let fallback = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n";
-    let _ = fs::write("/etc/resolv.conf", fallback);
+    if let Err(e) = fs::write("/etc/resolv.conf", fallback) {
+        cmd_log_append(format!("  write resolv.conf failed: {}", e));
+    }
 }
 
 /// Parse dhcpcd --dumplease output and generate resolv.conf content.
@@ -606,14 +620,20 @@ fn parse_dns_response(data: &[u8]) -> Result<String, String> {
 
 /// Kill dhcpcd for an interface. Best-effort.
 pub fn cleanup_network_config(interface: &str) -> OperationResult {
-    let _ = run_cmd("dhcpcd", &["--release", interface]);
-    let _ = run_cmd("pkill", &["-f", &format!("dhcpcd.*{}", interface)]);
+    if let Err(e) = run_cmd("dhcpcd", &["--release", interface]) {
+        cmd_log_append(format!("  dhcpcd release: {}", e));
+    }
+    if let Err(e) = run_cmd("pkill", &["-f", &format!("dhcpcd.*{}", interface)]) {
+        cmd_log_append(format!("  pkill dhcpcd: {}", e));
+    }
     OperationResult::Success
 }
 
 /// Kill wpa_supplicant for an interface and remove its config file.
 pub fn cleanup_wpa_supplicant(interface: &str) -> OperationResult {
-    let _ = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]);
+    if let Err(e) = run_cmd("pkill", &["-f", &format!("wpa_supplicant.*{}", interface)]) {
+        cmd_log_append(format!("  pkill wpa_supplicant: {}", e));
+    }
     let conf_path = format!("/tmp/wpa_supplicant_{}.conf", interface);
     match fs::remove_file(&conf_path) {
         Ok(_) => {}
@@ -760,8 +780,8 @@ mod tests {
     }
 
     #[test]
-    fn test_build_dns_query() {
-        let query = build_dns_query("example.com").unwrap();
+    fn test_build_dns_query() -> Result<(), String> {
+        let query = build_dns_query("example.com")?;
         // Header: 12 bytes
         assert_eq!(query[0..2], [0x12, 0x34]); // ID
         assert_eq!(query[4..6], [0, 1]); // QDCOUNT=1
@@ -771,10 +791,11 @@ mod tests {
         assert_eq!(query[20], 3); // "com" length
         assert_eq!(&query[21..24], b"com");
         assert_eq!(query[24], 0); // root label
+        Ok(())
     }
 
     #[test]
-    fn test_parse_dns_response() {
+    fn test_parse_dns_response() -> Result<(), String> {
         // Minimal DNS response with one A record for 93.184.216.34
         let mut resp = Vec::new();
         // Header
@@ -795,8 +816,9 @@ mod tests {
         resp.extend_from_slice(&[0, 4]); // RDLENGTH=4
         resp.extend_from_slice(&[93, 184, 216, 34]); // RDATA
 
-        let ip = parse_dns_response(&resp).unwrap();
+        let ip = parse_dns_response(&resp)?;
         assert_eq!(ip, "93.184.216.34");
+        Ok(())
     }
 
     #[test]
@@ -806,12 +828,16 @@ mod tests {
     }
 
     #[test]
-    fn test_get_nameserver_parsing() {
+    fn test_get_nameserver_parsing() -> Result<(), String> {
         // This test verifies the parsing logic, not actual /etc/resolv.conf
         // The function reads from the filesystem so we test the format expectations
         let line = "nameserver 8.8.8.8";
-        let ns = line.strip_prefix("nameserver").unwrap().trim();
+        let ns = line
+            .strip_prefix("nameserver")
+            .ok_or("expected 'nameserver' prefix")?
+            .trim();
         assert_eq!(ns, "8.8.8.8");
+        Ok(())
     }
 
     // DHCP polling tests
@@ -867,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dhcpcd_lease_dns_full() {
+    fn test_parse_dhcpcd_lease_dns_full() -> Result<(), String> {
         let lease = "\
 ip_address=192.168.1.50
 subnet_mask=255.255.255.0
@@ -876,18 +902,20 @@ domain_name_servers=8.8.8.8 8.8.4.4
 domain_name='example.local'
 lease_time=86400
 ";
-        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some from parse_dhcpcd_lease_dns")?;
         assert!(result.contains("nameserver 8.8.8.8\n"));
         assert!(result.contains("nameserver 8.8.4.4\n"));
         assert!(result.contains("search example.local\n"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_dhcpcd_lease_dns_no_domain() {
+    fn test_parse_dhcpcd_lease_dns_no_domain() -> Result<(), String> {
         let lease = "domain_name_servers=1.1.1.1\n";
-        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some from parse_dhcpcd_lease_dns")?;
         assert_eq!(result, "nameserver 1.1.1.1\n");
         assert!(!result.contains("search"));
+        Ok(())
     }
 
     #[test]
@@ -924,16 +952,17 @@ lease_time=86400
     // Resolv.conf / nameserver tests
 
     #[test]
-    fn test_parse_dhcpcd_lease_dns_multiple_nameservers() {
+    fn test_parse_dhcpcd_lease_dns_multiple_nameservers() -> Result<(), String> {
         let lease = "domain_name_servers=1.1.1.1 8.8.8.8 9.9.9.9\n";
-        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some")?;
         assert!(result.contains("nameserver 1.1.1.1\n"));
         assert!(result.contains("nameserver 8.8.8.8\n"));
         assert!(result.contains("nameserver 9.9.9.9\n"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_dhcpcd_lease_dns_with_other_fields() {
+    fn test_parse_dhcpcd_lease_dns_with_other_fields() -> Result<(), String> {
         // Realistic dhcpcd --dumplease output
         let lease = "\
 broadcast_address=192.168.1.255
@@ -947,36 +976,42 @@ network_number=192.168.1.0
 routers=192.168.1.1
 subnet_mask=255.255.255.0
 ";
-        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some")?;
         assert!(result.contains("search home.local\n"));
         assert!(result.contains("nameserver 192.168.1.1\n"));
         // Should not contain other lease fields
         assert!(!result.contains("broadcast"));
         assert!(!result.contains("routers"));
+        Ok(())
     }
 
     #[test]
-    fn test_parse_dhcpcd_lease_dns_domain_with_quotes() {
+    fn test_parse_dhcpcd_lease_dns_domain_with_quotes() -> Result<(), String> {
         let lease = "domain_name='mynet.example.com'\ndomain_name_servers=10.0.0.1\n";
-        let result = parse_dhcpcd_lease_dns(lease).unwrap();
+        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some")?;
         assert!(result.contains("search mynet.example.com\n"));
         assert!(!result.contains("'")); // quotes should be stripped
+        Ok(())
     }
 
     // QR code parsing tests
 
     #[test]
-    fn test_parse_wifi_qr_full() {
-        let (ssid, pass) = parse_wifi_qr("WIFI:T:WPA;S:MyNetwork;P:secret123;;").unwrap();
+    fn test_parse_wifi_qr_full() -> Result<(), String> {
+        let (ssid, pass) = parse_wifi_qr("WIFI:T:WPA;S:MyNetwork;P:secret123;;")
+            .ok_or("expected Some from parse_wifi_qr")?;
         assert_eq!(ssid, "MyNetwork");
         assert_eq!(pass, "secret123");
+        Ok(())
     }
 
     #[test]
-    fn test_parse_wifi_qr_no_password() {
-        let (ssid, pass) = parse_wifi_qr("WIFI:T:nopass;S:OpenNet;;").unwrap();
+    fn test_parse_wifi_qr_no_password() -> Result<(), String> {
+        let (ssid, pass) = parse_wifi_qr("WIFI:T:nopass;S:OpenNet;;")
+            .ok_or("expected Some from parse_wifi_qr")?;
         assert_eq!(ssid, "OpenNet");
         assert_eq!(pass, ""); // no password = empty string
+        Ok(())
     }
 
     #[test]
@@ -995,10 +1030,12 @@ subnet_mask=255.255.255.0
     }
 
     #[test]
-    fn test_parse_wifi_qr_wpa3() {
-        let (ssid, pass) = parse_wifi_qr("WIFI:T:SAE;S:SecureNet;P:wpa3pass;;").unwrap();
+    fn test_parse_wifi_qr_wpa3() -> Result<(), String> {
+        let (ssid, pass) = parse_wifi_qr("WIFI:T:SAE;S:SecureNet;P:wpa3pass;;")
+            .ok_or("expected Some from parse_wifi_qr")?;
         assert_eq!(ssid, "SecureNet");
         assert_eq!(pass, "wpa3pass");
+        Ok(())
     }
 
     // DNS resolve.conf generation

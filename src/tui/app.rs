@@ -41,10 +41,18 @@ pub(crate) fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
 
 /// Restore stdin and stdout from saved file descriptors.
 pub(crate) fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
-    let _ = nix::unistd::dup2(saved_stdin, 0);
-    let _ = nix::unistd::dup2(saved_stdout, 1);
-    let _ = nix::unistd::close(saved_stdin);
-    let _ = nix::unistd::close(saved_stdout);
+    if let Err(e) = nix::unistd::dup2(saved_stdin, 0) {
+        eprintln!("restore stdin failed: {}", e);
+    }
+    if let Err(e) = nix::unistd::dup2(saved_stdout, 1) {
+        eprintln!("restore stdout failed: {}", e);
+    }
+    if let Err(e) = nix::unistd::close(saved_stdin) {
+        eprintln!("close saved stdin: {}", e);
+    }
+    if let Err(e) = nix::unistd::close(saved_stdout) {
+        eprintln!("close saved stdout: {}", e);
+    }
 }
 
 /// Render the command output log pane. Shared between installer and getty TUIs.
@@ -911,25 +919,27 @@ mod tests {
     }
 
     #[test]
-    fn test_redirect_and_restore_with_devnull() {
+    fn test_redirect_and_restore_with_devnull() -> Result<(), String> {
         // Use /dev/null as a stand-in — it's always available and read+write.
         // This tests the dup/dup2/restore mechanics without needing a real TTY.
-        let saved_stdin = nix::unistd::dup(0).unwrap();
-        let saved_stdout = nix::unistd::dup(1).unwrap();
+        let saved_stdin = nix::unistd::dup(0).map_err(|e| format!("dup stdin: {}", e))?;
+        let saved_stdout = nix::unistd::dup(1).map_err(|e| format!("dup stdout: {}", e))?;
 
         let result = redirect_to_tty("/dev/null");
         assert!(result.is_ok(), "redirect_to_tty(/dev/null) failed: {:?}", result);
 
-        let (inner_stdin, inner_stdout) = result.unwrap();
+        let (inner_stdin, inner_stdout) = result.map_err(|e| format!("redirect: {}", e))?;
         // After redirect, fd 0 and 1 should point to /dev/null.
         // Restore original fds.
         restore_fds(inner_stdin, inner_stdout);
 
         // Verify stdout still works after restore by writing to it
         use std::io::Write;
-        let _ = writeln!(std::io::stdout(), "stdout still works after restore");
+        writeln!(std::io::stdout(), "stdout still works after restore")
+            .map_err(|e| format!("writeln: {}", e))?;
 
-        let _ = nix::unistd::close(saved_stdin);
-        let _ = nix::unistd::close(saved_stdout);
+        nix::unistd::close(saved_stdin).map_err(|e| format!("close saved_stdin: {}", e))?;
+        nix::unistd::close(saved_stdout).map_err(|e| format!("close saved_stdout: {}", e))?;
+        Ok(())
     }
 }

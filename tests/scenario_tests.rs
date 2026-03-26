@@ -7,8 +7,8 @@ use ttyforce::network::wifi::WifiNetwork;
 use ttyforce::network::NetworkState;
 use ttyforce::operations::Operation;
 
-fn load_hardware(name: &str) -> HardwareManifest {
-    HardwareManifest::load(&format!("fixtures/hardware/{}.toml", name)).unwrap()
+fn load_hardware(name: &str) -> Result<HardwareManifest, String> {
+    HardwareManifest::load(&format!("fixtures/hardware/{}.toml", name)).map_err(|e| e.to_string())
 }
 
 // Helper to make a default successful executor
@@ -53,8 +53,8 @@ fn run_ethernet_single_disk_install(
 // === Wifi Selection and Connection Scenarios ===
 
 #[test]
-fn test_wifi_select_and_connect() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_select_and_connect() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -77,11 +77,12 @@ fn test_wifi_select_and_connect() {
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 #[test]
-fn test_wifi_select_refresh() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_select_refresh() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
 
     let new_networks = vec![
@@ -121,11 +122,12 @@ fn test_wifi_select_refresh() {
     assert_eq!(sm.wifi_networks.len(), 2);
     assert_eq!(sm.wifi_networks[0].ssid, "NewNetwork1");
     assert_eq!(sm.wifi_networks[1].ssid, "NewNetwork2");
+    Ok(())
 }
 
 #[test]
-fn test_wifi_wrong_password() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_wrong_password() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("AuthenticateWifi".to_string()),
@@ -147,18 +149,19 @@ fn test_wifi_wrong_password() {
     // Should stay on wifi password screen with error
     assert_eq!(sm.current_screen, ScreenId::WifiPassword);
     assert!(sm.error_message.is_some());
-    assert!(sm.error_message.as_ref().unwrap().contains("Authentication failed"));
+    assert!(sm.error_message.as_ref().is_some_and(|m| m.contains("Authentication failed")));
 
     // Verify auth error was recorded in action manifest
     let has_auth_error = sm.action_manifest.operations.iter().any(|op| {
         matches!(&op.operation, Operation::WifiAuthError { .. })
     });
     assert!(has_auth_error);
+    Ok(())
 }
 
 #[test]
-fn test_wifi_signal_timeout() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_signal_timeout() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("AuthenticateWifi".to_string()),
@@ -177,18 +180,19 @@ fn test_wifi_signal_timeout() {
     // Should go back to wifi select
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
     assert!(sm.error_message.is_some());
-    assert!(sm.error_message.as_ref().unwrap().contains("timed out"));
+    assert!(sm.error_message.as_ref().is_some_and(|m| m.contains("timed out")));
 
     // Verify timeout was recorded in action manifest
     let has_timeout = sm.action_manifest.operations.iter().any(|op| {
         matches!(&op.operation, Operation::WifiConnectionTimeout { .. })
     });
     assert!(has_timeout);
+    Ok(())
 }
 
 #[test]
-fn test_wifi_successful_connect_with_ip() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_successful_connect_with_ip() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![
         SimulatedResponse {
@@ -221,15 +225,16 @@ fn test_wifi_successful_connect_with_ip() {
     assert!(sm.network_state.is_online());
 
     // Verify IP was assigned to interface
-    let wlan = sm.interfaces.iter().find(|i| i.name == "wlan0").unwrap();
+    let wlan = sm.interfaces.iter().find(|i| i.name == "wlan0").ok_or("wlan0 interface not found")?;
     assert_eq!(wlan.ip_address, Some("192.168.1.100".to_string()));
+    Ok(())
 }
 
 // === Default Device Priority ===
 
 #[test]
-fn test_default_device_ethernet_first() {
-    let hw = load_hardware("wifi_ethernet_1disk");
+fn test_default_device_ethernet_first() -> Result<(), String> {
+    let hw = load_hardware("wifi_ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -238,11 +243,12 @@ fn test_default_device_ethernet_first() {
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 #[test]
-fn test_default_device_wifi_fallback() {
-    let hw = load_hardware("wifi_dead_ethernet_1disk");
+fn test_default_device_wifi_fallback() -> Result<(), String> {
+    let hw = load_hardware("wifi_dead_ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -250,11 +256,12 @@ fn test_default_device_wifi_fallback() {
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.selected_interface, Some("wlan0".to_string()));
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+    Ok(())
 }
 
 #[test]
-fn test_default_device_user_choice() {
-    let hw = load_hardware("wifi_ethernet_1disk");
+fn test_default_device_user_choice() -> Result<(), String> {
+    let hw = load_hardware("wifi_ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -262,13 +269,14 @@ fn test_default_device_user_choice() {
     sm.process_input(UserInput::Select(1), &mut executor);
     assert_eq!(sm.selected_interface, Some("wlan0".to_string()));
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+    Ok(())
 }
 
 // === Full Install Scenarios ===
 
 #[test]
-fn test_full_install_ethernet_4disk_btrfs_raid5() {
-    let hw = load_hardware("ethernet_4disk_same");
+fn test_full_install_ethernet_4disk_btrfs_raid5() -> Result<(), String> {
+    let hw = load_hardware("ethernet_4disk_same")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -301,11 +309,12 @@ fn test_full_install_ethernet_4disk_btrfs_raid5() {
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::RebootSystem, &mut executor);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Rebooted);
+    Ok(())
 }
 
 #[test]
-fn test_full_install_ethernet_1disk() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_full_install_ethernet_1disk() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut executor = success_executor();
     let sm = run_ethernet_single_disk_install(hw, &mut executor);
 
@@ -321,11 +330,12 @@ fn test_full_install_ethernet_1disk() {
     assert!(has_mkfs);
     assert!(has_subvol);
     assert!(has_install);
+    Ok(())
 }
 
 #[test]
-fn test_full_install_wifi_1disk() {
-    let hw = load_hardware("wifi_1disk");
+fn test_full_install_wifi_1disk() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -352,14 +362,15 @@ fn test_full_install_wifi_1disk() {
     // Confirm and install
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+    Ok(())
 }
 
 // === Ethernet Auto-detect ===
 
 #[test]
-fn test_ethernet_auto_detect_records_all_ops() {
+fn test_ethernet_auto_detect_records_all_ops() -> Result<(), String> {
     // Connected ethernet (has_link + has_carrier) skips Enable/CheckLink but runs IP/DHCP/connectivity
-    let hw = load_hardware("ethernet_1disk");
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -380,13 +391,14 @@ fn test_ethernet_auto_detect_records_all_ops() {
     assert!(op_types.contains(&"CheckLinkAvailability"));
     assert!(op_types.contains(&"CheckIpAddress"));
     assert!(op_types.contains(&"SelectPrimaryInterface"));
+    Ok(())
 }
 
 #[test]
-fn test_ethernet_already_connected_skips_dhcp() {
+fn test_ethernet_already_connected_skips_dhcp() -> Result<(), String> {
     // Use nocarrier fixture so bring_ethernet_online runs the step-by-step path,
     // but simulate that CheckIpAddress finds an existing IP (skip DHCP).
-    let hw = load_hardware("ethernet_1disk_nocarrier");
+    let hw = load_hardware("ethernet_1disk_nocarrier")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![
         SimulatedResponse {
@@ -435,14 +447,15 @@ fn test_ethernet_already_connected_skips_dhcp() {
     assert!(op_types.contains(&"SelectPrimaryInterface"));
 
     // Verify the IP was stored
-    let iface = sm.interfaces.iter().find(|i| i.name == "eth0").unwrap();
+    let iface = sm.interfaces.iter().find(|i| i.name == "eth0").ok_or("eth0 interface not found")?;
     assert_eq!(iface.ip_address.as_deref(), Some("192.168.1.50"));
+    Ok(())
 }
 
 #[test]
-fn test_ethernet_no_ip_runs_dhcp() {
+fn test_ethernet_no_ip_runs_dhcp() -> Result<(), String> {
     // Use nocarrier fixture so bring_ethernet_online runs the step-by-step path.
-    let hw = load_hardware("ethernet_1disk_nocarrier");
+    let hw = load_hardware("ethernet_1disk_nocarrier")?;
     let mut sm = InstallerStateMachine::new(hw);
     // First CheckIpAddress returns NoIp, second (after DHCP) falls through to default (Success)
     let mut executor = TestExecutor::new(vec![
@@ -487,12 +500,13 @@ fn test_ethernet_no_ip_runs_dhcp() {
     assert!(op_types.contains(&"CheckLinkAvailability"));
     assert!(op_types.contains(&"ConfigureDhcp"), "DHCP should run when no IP is assigned");
     assert!(op_types.contains(&"CheckIpAddress"));
+    Ok(())
 }
 
 #[test]
-fn test_ethernet_link_failure() {
+fn test_ethernet_link_failure() -> Result<(), String> {
     // Use nocarrier fixture so bring_ethernet_online actually checks link
-    let hw = load_hardware("ethernet_1disk_nocarrier");
+    let hw = load_hardware("ethernet_1disk_nocarrier")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
@@ -504,13 +518,14 @@ fn test_ethernet_link_failure() {
     while sm.advance_connectivity(&mut executor) {}
     assert!(matches!(sm.network_state, NetworkState::Error(_)));
     assert!(sm.error_message.is_some());
+    Ok(())
 }
 
 // === QR Code Wifi ===
 
 #[test]
-fn test_wifi_qr_code_connection() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_code_connection() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("ConfigureWifiQrCode".to_string()),
@@ -527,13 +542,14 @@ fn test_wifi_qr_code_connection() {
     assert_eq!(result, Some(ScreenId::NetworkProgress));
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 // === WiFi QR Display Screen ===
 
 #[test]
-fn test_wifi_qr_display_from_network_progress() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_display_from_network_progress() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -560,19 +576,18 @@ fn test_wifi_qr_display_from_network_progress() {
     assert_eq!(sm.current_screen, ScreenId::WifiQrDisplay);
 
     // Verify QR string is generated
-    let qr_string = sm.wifi_qr_string();
-    assert!(qr_string.is_some());
-    let qr = qr_string.unwrap();
+    let qr = sm.wifi_qr_string().ok_or("wifi_qr_string returned None")?;
     assert!(qr.starts_with("WIFI:T:WPA;S:HomeNetwork;P:mypassword;;"));
 
     // Back returns to NetworkProgress
     let result = sm.process_input(UserInput::Back, &mut executor);
     assert_eq!(result, Some(ScreenId::NetworkProgress));
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_display_enter_returns_to_network_progress() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_display_enter_returns_to_network_progress() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -591,11 +606,12 @@ fn test_wifi_qr_display_enter_returns_to_network_progress() {
     // Enter also goes back
     let result = sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(result, Some(ScreenId::NetworkProgress));
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_not_available_when_not_online() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_not_available_when_not_online() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -611,11 +627,12 @@ fn test_wifi_qr_not_available_when_not_online() {
     let result = sm.process_input(UserInput::ShowWifiQr, &mut executor);
     assert_eq!(result, None); // Should not navigate
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_not_available_for_ethernet() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_wifi_qr_not_available_for_ethernet() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -628,11 +645,12 @@ fn test_wifi_qr_not_available_for_ethernet() {
     // ShowWifiQr should not navigate (no SSID)
     let result = sm.process_input(UserInput::ShowWifiQr, &mut executor);
     assert_eq!(result, None);
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_string_open_network() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_string_open_network() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
 
     // Simulate selecting an open network
@@ -645,13 +663,14 @@ fn test_wifi_qr_string_open_network() {
         reachable: true,
     });
 
-    let qr = sm.wifi_qr_string().unwrap();
+    let qr = sm.wifi_qr_string().ok_or("wifi_qr_string returned None")?;
     assert_eq!(qr, "WIFI:T:nopass;S:OpenCafe;;");
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_string_escapes_special_chars() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_string_escapes_special_chars() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
 
     sm.selected_ssid = Some("My:Net;work".to_string());
@@ -664,13 +683,14 @@ fn test_wifi_qr_string_escapes_special_chars() {
         reachable: true,
     });
 
-    let qr = sm.wifi_qr_string().unwrap();
+    let qr = sm.wifi_qr_string().ok_or("wifi_qr_string returned None")?;
     assert_eq!(qr, "WIFI:T:WPA;S:My\\:Net\\;work;P:pass\\;word;;");
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_abort_from_display() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_abort_from_display() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -689,11 +709,12 @@ fn test_wifi_qr_abort_from_display() {
     let result = sm.process_input(UserInput::AbortInstall, &mut executor);
     assert_eq!(result, Some(ScreenId::Reboot));
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+    Ok(())
 }
 
 #[test]
-fn test_wifi_qr_password_stored_after_connect() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wifi_qr_password_stored_after_connect() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -707,13 +728,14 @@ fn test_wifi_qr_password_stored_after_connect() {
         &mut executor,
     );
     assert_eq!(sm.wifi_password, Some("secretpass".to_string()));
+    Ok(())
 }
 
 // === Abort and Reboot ===
 
 #[test]
-fn test_abort_install() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_abort_install() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -725,11 +747,12 @@ fn test_abort_install() {
     let ops = executor.recorded_operations();
     let has_abort = ops.iter().any(|r| matches!(&r.operation, Operation::Abort { .. }));
     assert!(has_abort);
+    Ok(())
 }
 
 #[test]
-fn test_reboot_after_install() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_reboot_after_install() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut executor = success_executor();
     let mut sm = run_ethernet_single_disk_install(hw, &mut executor);
 
@@ -740,11 +763,12 @@ fn test_reboot_after_install() {
     let ops = executor.recorded_operations();
     let has_reboot = ops.iter().any(|r| matches!(&r.operation, Operation::Reboot));
     assert!(has_reboot);
+    Ok(())
 }
 
 #[test]
-fn test_abort_at_confirmation() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_abort_at_confirmation() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -759,13 +783,14 @@ fn test_abort_at_confirmation() {
     // Abort
     sm.process_input(UserInput::AbortInstall, &mut executor);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+    Ok(())
 }
 
 // === Navigation Tests ===
 
 #[test]
-fn test_back_navigation() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_back_navigation() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -779,11 +804,12 @@ fn test_back_navigation() {
     // Go back to network progress
     sm.process_input(UserInput::Back, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    Ok(())
 }
 
 #[test]
-fn test_back_from_raid_to_network_progress() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_back_from_raid_to_network_progress() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -795,11 +821,12 @@ fn test_back_from_raid_to_network_progress() {
 
     sm.process_input(UserInput::Back, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    Ok(())
 }
 
 #[test]
-fn test_back_from_confirm_to_disk_group() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_back_from_confirm_to_disk_group() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -812,13 +839,14 @@ fn test_back_from_confirm_to_disk_group() {
 
     sm.process_input(UserInput::Back, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::DiskGroupSelect);
+    Ok(())
 }
 
 // === Crowded Wifi ===
 
 #[test]
-fn test_crowded_wifi_select() {
-    let hw = load_hardware("wifi_crowded_1disk");
+fn test_crowded_wifi_select() -> Result<(), String> {
+    let hw = load_hardware("wifi_crowded_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -830,13 +858,14 @@ fn test_crowded_wifi_select() {
     sm.process_input(UserInput::SelectWifiNetwork(0), &mut executor);
     assert_eq!(sm.selected_ssid, Some("HomeNetwork".to_string()));
     assert_eq!(sm.current_screen, ScreenId::WpsPrompt);
+    Ok(())
 }
 
 // === Mixed Hardware Configs ===
 
 #[test]
-fn test_wifi_ethernet_4disk_prefers_ethernet() {
-    let hw = load_hardware("wifi_ethernet_4disk");
+fn test_wifi_ethernet_4disk_prefers_ethernet() -> Result<(), String> {
+    let hw = load_hardware("wifi_ethernet_4disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -844,24 +873,26 @@ fn test_wifi_ethernet_4disk_prefers_ethernet() {
     assert_eq!(sm.selected_interface, Some("eth0".to_string()));
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 #[test]
-fn test_wifi_dead_ethernet_4disk_falls_to_wifi() {
-    let hw = load_hardware("wifi_dead_ethernet_4disk");
+fn test_wifi_dead_ethernet_4disk_falls_to_wifi() -> Result<(), String> {
+    let hw = load_hardware("wifi_dead_ethernet_4disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Confirm, &mut executor);
     assert_eq!(sm.selected_interface, Some("wlan0".to_string()));
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
+    Ok(())
 }
 
 // === Action Manifest Recording ===
 
 #[test]
-fn test_action_manifest_records_all_operations() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_action_manifest_records_all_operations() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut executor = success_executor();
     let sm = run_ethernet_single_disk_install(hw, &mut executor);
 
@@ -879,11 +910,12 @@ fn test_action_manifest_records_all_operations() {
         .operations
         .iter()
         .all(|op| op.result == OperationOutcome::Success));
+    Ok(())
 }
 
 #[test]
-fn test_action_manifest_records_errors() {
-    let hw = load_hardware("wifi_1disk");
+fn test_action_manifest_records_errors() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("AuthenticateWifi".to_string()),
@@ -906,25 +938,27 @@ fn test_action_manifest_records_errors() {
         .iter()
         .any(|op| matches!(&op.result, OperationOutcome::Error(_)));
     assert!(has_error);
+    Ok(())
 }
 
 // === Quit ===
 
 #[test]
-fn test_quit_from_any_screen() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_quit_from_any_screen() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
     sm.process_input(UserInput::Quit, &mut executor);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
+    Ok(())
 }
 
 // === Network shutdown of non-primary ===
 
 #[test]
-fn test_non_primary_interfaces_shut_down() {
-    let hw = load_hardware("wifi_ethernet_1disk");
+fn test_non_primary_interfaces_shut_down() -> Result<(), String> {
+    let hw = load_hardware("wifi_ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -936,13 +970,14 @@ fn test_non_primary_interfaces_shut_down() {
     // This verifies the logic runs without error
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 // === Invalid selections ===
 
 #[test]
-fn test_invalid_disk_group_selection() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_invalid_disk_group_selection() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -956,13 +991,14 @@ fn test_invalid_disk_group_selection() {
     assert!(result.is_none());
     assert!(sm.error_message.is_some());
     assert_eq!(sm.current_screen, ScreenId::DiskGroupSelect);
+    Ok(())
 }
 
 // === Cleanup on abort ===
 
 #[test]
-fn test_abort_after_ethernet_cleanup_ops() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_abort_after_ethernet_cleanup_ops() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -985,16 +1021,17 @@ fn test_abort_after_ethernet_cleanup_ops() {
         .collect();
 
     // CleanupNetworkConfig should appear before Abort
-    let cleanup_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig");
-    let abort_idx = op_types.iter().position(|t| *t == "Abort");
-    assert!(cleanup_idx.is_some(), "expected CleanupNetworkConfig in ops: {:?}", op_types);
-    assert!(abort_idx.is_some());
-    assert!(cleanup_idx.unwrap() < abort_idx.unwrap());
+    let cleanup_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig")
+        .ok_or(format!("expected CleanupNetworkConfig in ops: {:?}", op_types))?;
+    let abort_idx = op_types.iter().position(|t| *t == "Abort")
+        .ok_or("expected Abort in ops")?;
+    assert!(cleanup_idx < abort_idx);
+    Ok(())
 }
 
 #[test]
-fn test_abort_after_wifi_cleanup_ops() {
-    let hw = load_hardware("wifi_1disk");
+fn test_abort_after_wifi_cleanup_ops() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1021,21 +1058,21 @@ fn test_abort_after_wifi_cleanup_ops() {
         .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
         .collect();
 
-    let has_wpa_cleanup = op_types.contains(&"CleanupWpaSupplicant");
-    let has_net_cleanup = op_types.contains(&"CleanupNetworkConfig");
-    let abort_idx = op_types.iter().position(|t| *t == "Abort").unwrap();
-    let wpa_idx = op_types.iter().position(|t| *t == "CleanupWpaSupplicant").unwrap();
-    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig").unwrap();
+    let abort_idx = op_types.iter().position(|t| *t == "Abort")
+        .ok_or("expected Abort in ops")?;
+    let wpa_idx = op_types.iter().position(|t| *t == "CleanupWpaSupplicant")
+        .ok_or("expected CleanupWpaSupplicant")?;
+    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig")
+        .ok_or("expected CleanupNetworkConfig")?;
 
-    assert!(has_wpa_cleanup, "expected CleanupWpaSupplicant");
-    assert!(has_net_cleanup, "expected CleanupNetworkConfig");
     assert!(wpa_idx < net_idx, "wpa cleanup should come before networkd cleanup");
     assert!(net_idx < abort_idx, "cleanup should come before Abort");
+    Ok(())
 }
 
 #[test]
-fn test_abort_no_artifacts_no_cleanup() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_abort_no_artifacts_no_cleanup() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1052,11 +1089,12 @@ fn test_abort_no_artifacts_no_cleanup() {
 
     // Only Abort, no cleanup ops
     assert_eq!(op_types, vec!["Abort"], "expected only Abort, got: {:?}", op_types);
+    Ok(())
 }
 
 #[test]
-fn test_abort_after_install_unmounts() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_abort_after_install_unmounts() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1080,22 +1118,20 @@ fn test_abort_after_install_unmounts() {
         .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
         .collect();
 
-    let has_unmount = op_types.contains(&"CleanupUnmount");
-    let has_net_cleanup = op_types.contains(&"CleanupNetworkConfig");
-    let abort_idx = op_types.iter().position(|t| *t == "Abort").unwrap();
-
-    assert!(has_unmount, "expected CleanupUnmount in ops: {:?}", op_types);
-    assert!(has_net_cleanup, "expected CleanupNetworkConfig in ops: {:?}", op_types);
-
-    let unmount_idx = op_types.iter().position(|t| *t == "CleanupUnmount").unwrap();
-    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig").unwrap();
+    let abort_idx = op_types.iter().position(|t| *t == "Abort")
+        .ok_or("expected Abort in ops")?;
+    let unmount_idx = op_types.iter().position(|t| *t == "CleanupUnmount")
+        .ok_or(format!("expected CleanupUnmount in ops: {:?}", op_types))?;
+    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig")
+        .ok_or(format!("expected CleanupNetworkConfig in ops: {:?}", op_types))?;
     assert!(unmount_idx < net_idx, "unmount should come before network cleanup");
     assert!(net_idx < abort_idx, "cleanup should come before Abort");
+    Ok(())
 }
 
 #[test]
-fn test_invalid_raid_selection() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_invalid_raid_selection() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1106,13 +1142,14 @@ fn test_invalid_raid_selection() {
     let result = sm.process_input(UserInput::SelectRaidOption(99), &mut executor);
     assert!(result.is_none());
     assert!(sm.error_message.is_some());
+    Ok(())
 }
 
 // === advance_connectivity tests ===
 
 #[test]
-fn test_advance_connectivity_full_flow() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_advance_connectivity_full_flow() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1128,11 +1165,12 @@ fn test_advance_connectivity_full_flow() {
     }
     assert!(sm.network_state.is_online());
     assert!(steps > 0, "should have taken at least one step");
+    Ok(())
 }
 
 #[test]
-fn test_advance_connectivity_retries_router() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_advance_connectivity_retries_router() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
 
     // Router fails first 3 times, then succeeds
@@ -1159,11 +1197,12 @@ fn test_advance_connectivity_retries_router() {
 
     // Should eventually succeed (default Success after consumed responses)
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 #[test]
-fn test_advance_connectivity_router_max_retries_error() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_advance_connectivity_router_max_retries_error() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
 
     // Router always fails
@@ -1178,12 +1217,13 @@ fn test_advance_connectivity_router_max_retries_error() {
 
     assert!(matches!(sm.network_state, NetworkState::Error(_)));
     assert!(sm.error_message.is_some());
-    assert!(sm.error_message.as_ref().unwrap().contains("router"));
+    assert!(sm.error_message.as_ref().is_some_and(|m| m.contains("router")));
+    Ok(())
 }
 
 #[test]
-fn test_advance_connectivity_dns_retries_after_ping() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_advance_connectivity_dns_retries_after_ping() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
 
     // DNS fails 5 times then succeeds
@@ -1202,11 +1242,12 @@ fn test_advance_connectivity_dns_retries_after_ping() {
 
     // Should succeed — DNS retries until consumed responses are gone, then default Success
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 #[test]
-fn test_advance_connectivity_wifi_flow() {
-    let hw = load_hardware("wifi_1disk");
+fn test_advance_connectivity_wifi_flow() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![
         SimulatedResponse {
@@ -1248,20 +1289,22 @@ fn test_advance_connectivity_wifi_flow() {
     // Drive connectivity — wifi starts at Connected, then DHCP, then checks
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
+    Ok(())
 }
 
 #[test]
-fn test_advance_connectivity_no_interface_returns_false() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_advance_connectivity_no_interface_returns_false() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
     // Don't select any interface
     assert!(!sm.advance_connectivity(&mut executor));
+    Ok(())
 }
 
 #[test]
-fn test_advance_connectivity_online_returns_false() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_advance_connectivity_online_returns_false() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1271,13 +1314,14 @@ fn test_advance_connectivity_online_returns_false() {
 
     // Should return false — already online
     assert!(!sm.advance_connectivity(&mut executor));
+    Ok(())
 }
 
 // === Root partition protection tests ===
 
 #[test]
-fn test_install_never_targets_root_partition() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_install_never_targets_root_partition() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1316,33 +1360,37 @@ fn test_install_never_targets_root_partition() {
             _ => {}
         }
     }
+    Ok(())
 }
 
 #[test]
-fn test_default_mount_point_is_town_os() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_default_mount_point_is_town_os() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let sm = InstallerStateMachine::new(hw);
     assert_eq!(sm.mount_point, "/town-os");
+    Ok(())
 }
 
 #[test]
-fn test_default_etc_prefix_is_at_etc_subvolume() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_default_etc_prefix_is_at_etc_subvolume() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let sm = InstallerStateMachine::new(hw);
     assert_eq!(sm.etc_prefix(), "/town-os/@etc");
+    Ok(())
 }
 
 #[test]
-fn test_custom_etc_prefix_overrides_default() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_custom_etc_prefix_overrides_default() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     sm.etc_prefix = Some("/overlays/etc".to_string());
     assert_eq!(sm.etc_prefix(), "/overlays/etc");
+    Ok(())
 }
 
 #[test]
-fn test_persist_network_config_targets_etc_subvolume() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_persist_network_config_targets_etc_subvolume() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut executor = success_executor();
     let sm = run_ethernet_single_disk_install(hw, &mut executor);
 
@@ -1352,22 +1400,19 @@ fn test_persist_network_config_targets_etc_subvolume() {
         .operations
         .iter()
         .find(|op| matches!(&op.operation, Operation::PersistNetworkConfig { .. }));
-    assert!(persist_op.is_some(), "PersistNetworkConfig operation missing from manifest");
-
-    if let Some(op) = persist_op {
-        match &op.operation {
-            Operation::PersistNetworkConfig { mount_point, .. } => {
-                assert_eq!(mount_point, "/town-os/@etc",
-                    "PersistNetworkConfig should write to @etc subvolume, got: {}", mount_point);
-            }
-            _ => unreachable!(),
-        }
+    let op = persist_op.ok_or("PersistNetworkConfig operation missing from manifest")?;
+    if let Operation::PersistNetworkConfig { mount_point, .. } = &op.operation {
+        assert_eq!(mount_point, "/town-os/@etc",
+            "PersistNetworkConfig should write to @etc subvolume, got: {}", mount_point);
+    } else {
+        return Err("expected PersistNetworkConfig operation".to_string());
     }
+    Ok(())
 }
 
 #[test]
-fn test_generate_fstab_targets_etc_subvolume() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_generate_fstab_targets_etc_subvolume() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut executor = success_executor();
     let sm = run_ethernet_single_disk_install(hw, &mut executor);
 
@@ -1376,22 +1421,19 @@ fn test_generate_fstab_targets_etc_subvolume() {
         .operations
         .iter()
         .find(|op| matches!(&op.operation, Operation::GenerateFstab { .. }));
-    assert!(fstab_op.is_some(), "GenerateFstab operation missing from manifest");
-
-    if let Some(op) = fstab_op {
-        match &op.operation {
-            Operation::GenerateFstab { mount_point, .. } => {
-                assert_eq!(mount_point, "/town-os/@etc",
-                    "GenerateFstab should write to @etc subvolume, got: {}", mount_point);
-            }
-            _ => unreachable!(),
-        }
+    let op = fstab_op.ok_or("GenerateFstab operation missing from manifest")?;
+    if let Operation::GenerateFstab { mount_point, .. } = &op.operation {
+        assert_eq!(mount_point, "/town-os/@etc",
+            "GenerateFstab should write to @etc subvolume, got: {}", mount_point);
+    } else {
+        return Err("expected GenerateFstab operation".to_string());
     }
+    Ok(())
 }
 
 #[test]
-fn test_cleanup_unmount_after_successful_install() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_cleanup_unmount_after_successful_install() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1420,17 +1462,20 @@ fn test_cleanup_unmount_after_successful_install() {
     );
 
     // The final CleanupUnmount should come after InstallBaseSystem
-    let install_pos = op_types.iter().position(|t| *t == "InstallBaseSystem").unwrap();
-    let unmount_pos = op_types.iter().rposition(|t| *t == "CleanupUnmount").unwrap();
+    let install_pos = op_types.iter().position(|t| *t == "InstallBaseSystem")
+        .ok_or("expected InstallBaseSystem in ops")?;
+    let unmount_pos = op_types.iter().rposition(|t| *t == "CleanupUnmount")
+        .ok_or("expected CleanupUnmount in ops")?;
     assert!(
         unmount_pos > install_pos,
         "final CleanupUnmount should come after InstallBaseSystem"
     );
+    Ok(())
 }
 
 #[test]
-fn test_generate_fstab_in_install_flow() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_generate_fstab_in_install_flow() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1453,14 +1498,15 @@ fn test_generate_fstab_in_install_flow() {
         "GenerateFstab should be emitted during install, got: {:?}",
         op_types
     );
+    Ok(())
 }
 
 #[test]
-fn test_btrfs_device_scan_before_mount() {
+fn test_btrfs_device_scan_before_mount() -> Result<(), String> {
     // The mount_filesystem function in real_ops runs btrfs device scan
     // for btrfs. Verify the MountFilesystem operation is present and
     // uses btrfs as fs_type.
-    let hw = load_hardware("ethernet_1disk");
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1484,11 +1530,12 @@ fn test_btrfs_device_scan_before_mount() {
             assert_eq!(fs_type, "btrfs", "fs_type should be btrfs");
         }
     }
+    Ok(())
 }
 
 #[test]
-fn test_subvolumes_are_etc_and_var() {
-    let hw = load_hardware("ethernet_1disk");
+fn test_subvolumes_are_etc_and_var() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = success_executor();
 
@@ -1513,6 +1560,7 @@ fn test_subvolumes_are_etc_and_var() {
         .collect();
 
     assert_eq!(subvol_names, vec!["@etc", "@var"]);
+    Ok(())
 }
 
 // === WPS Push Button Tests ===
@@ -1533,8 +1581,8 @@ fn wps_executor() -> TestExecutor {
 }
 
 #[test]
-fn test_wps_start_from_wifi_select() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wps_start_from_wifi_select() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = wps_executor();
 
@@ -1547,11 +1595,12 @@ fn test_wps_start_from_wifi_select() {
     assert_eq!(sm.current_screen, ScreenId::WpsWaiting);
     assert_eq!(sm.network_state, NetworkState::WpsWaiting);
     assert!(sm.wps_start_time.is_some());
+    Ok(())
 }
 
 #[test]
-fn test_wps_completed_advances_to_network_progress() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wps_completed_advances_to_network_progress() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = wps_executor();
 
@@ -1563,11 +1612,12 @@ fn test_wps_completed_advances_to_network_progress() {
     sm.advance_connectivity(&mut executor);
     assert_eq!(sm.network_state, NetworkState::Connected);
     assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    Ok(())
 }
 
 #[test]
-fn test_wps_cancel_returns_to_wifi_select() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wps_cancel_returns_to_wifi_select() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = wps_executor();
 
@@ -1586,11 +1636,12 @@ fn test_wps_cancel_returns_to_wifi_select() {
         .iter()
         .any(|r| matches!(&r.operation, Operation::CleanupWpaSupplicant { .. }));
     assert!(has_cleanup, "WPS cancel should clean up wpa_supplicant");
+    Ok(())
 }
 
 #[test]
-fn test_wps_pending_keeps_polling() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wps_pending_keeps_polling() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = TestExecutor::new(vec![
         SimulatedResponse {
@@ -1613,11 +1664,12 @@ fn test_wps_pending_keeps_polling() {
     assert!(should_continue);
     assert_eq!(sm.network_state, NetworkState::WpsWaiting);
     assert_eq!(sm.current_screen, ScreenId::WpsWaiting);
+    Ok(())
 }
 
 #[test]
-fn test_wps_full_install_flow() {
-    let hw = load_hardware("wifi_1disk");
+fn test_wps_full_install_flow() -> Result<(), String> {
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new(hw);
     let mut executor = wps_executor();
 
@@ -1650,4 +1702,5 @@ fn test_wps_full_install_flow() {
         .collect();
     assert!(op_types.contains(&"WpsPbcStart"), "manifest should contain WpsPbcStart");
     assert!(op_types.contains(&"WpsPbcStatus"), "manifest should contain WpsPbcStatus");
+    Ok(())
 }

@@ -343,8 +343,12 @@ impl GettyApp {
 
     fn stop_journal(&mut self) {
         if let Some(mut child) = self.journal_child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(e) = child.kill() {
+                eprintln!("kill journal child: {}", e);
+            }
+            if let Err(e) = child.wait() {
+                eprintln!("wait journal child: {}", e);
+            }
         }
     }
 
@@ -819,7 +823,9 @@ fn set_nonblocking(stdout: &impl std::os::unix::io::AsRawFd) {
         .unwrap_or(0);
     let new_flags = nix::fcntl::OFlag::from_bits_truncate(flags)
         | nix::fcntl::OFlag::O_NONBLOCK;
-    let _ = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
+    if let Err(e) = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(new_flags)) {
+        eprintln!("fcntl F_SETFL: {}", e);
+    }
 }
 
 /// Discover btrfs member devices for a mount point.
