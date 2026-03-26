@@ -482,21 +482,41 @@ impl GettyApp {
             .town_os_version
             .as_deref()
             .unwrap_or("");
-        let title_text = if version.is_empty() {
-            format!("{}  —  Town OS", self.system_info.mdns_url)
-        } else {
-            format!(
-                "{}  —  Town OS {}",
-                self.system_info.mdns_url, version
-            )
+
+        let url = format!("http://{}", self.system_info.mdns_url);
+
+        let api_status = match &self.system_services {
+            Ok(services) if services.iter().all(|s| s.active_state == "active") => {
+                Span::styled(" ready ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            }
+            Ok(services) if services.iter().any(|s| s.active_state == "failed") => {
+                Span::styled(" degraded ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            }
+            Ok(_) => {
+                Span::styled(" starting ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            }
+            Err(_) => {
+                Span::styled(" unavailable ", Style::default().fg(Color::Red))
+            }
         };
-        let title = Paragraph::new(title_text)
+
+        let version_span = if version.is_empty() {
+            Span::styled("Town OS", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::styled(format!("Town OS {}", version), Style::default().fg(Color::DarkGray))
+        };
+
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(&url, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            api_status,
+            Span::raw("  "),
+            version_span,
+        ]);
+
+        let title = Paragraph::new(line)
             .alignment(Alignment::Center)
-            .style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, area);
     }
