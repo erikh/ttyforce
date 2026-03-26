@@ -490,16 +490,15 @@ fn integration_install_base_system_placeholder() {
     require_env!(test_iface());
     let mut exec = SystemdExecutor::new();
 
-    // InstallBaseSystem will fail (no pacstrap / no install script) — that's expected
+    // InstallBaseSystem succeeds as no-op when no install.sh exists
     let result = exec.execute(&Operation::InstallBaseSystem {
         target: "/tmp/ttyforce-install-test".into(),
     });
-    // Should be an error because pacstrap doesn't exist or target is invalid
-    match &result {
-        OperationResult::Error(_) => {} // expected
-        OperationResult::Success => {}  // acceptable if pacstrap happens to exist
-        other => panic!("unexpected result: {:?}", other),
-    }
+    assert!(
+        matches!(result, OperationResult::Success),
+        "expected success (no-op), got: {:?}",
+        result
+    );
 }
 
 // NOTE: We do NOT test Reboot in integration tests — it would halt the container.

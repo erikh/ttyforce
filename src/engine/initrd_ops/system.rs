@@ -3,7 +3,8 @@ use crate::engine::feedback::OperationResult;
 use crate::engine::real_ops::run_cmd;
 
 /// Install the base system to the target mount point.
-/// Same as systemd executor — uses install.sh or pacstrap.
+/// Runs install.sh if present, otherwise succeeds as a no-op
+/// (Town OS is already installed via squashfs).
 pub fn install_base_system(target: &str) -> OperationResult {
     let install_script = format!("{}/install.sh", target);
     if std::path::Path::new(&install_script).exists() {
@@ -15,10 +16,7 @@ pub fn install_base_system(target: &str) -> OperationResult {
         }
     }
 
-    match run_cmd("pacstrap", &[target, "base", "linux", "linux-firmware"]) {
-        Ok(_) => OperationResult::Success,
-        Err(e) => OperationResult::Error(format!("base system install failed: {}", e)),
-    }
+    OperationResult::Success
 }
 
 /// Power off the system using the reboot(2) syscall with RB_POWER_OFF.

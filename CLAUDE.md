@@ -5,12 +5,21 @@
 
 # RULES:
 
+- ensure deny(dead_code) and deny(unsafe) are at the top and honored
+- handle all std::result::Result in an appropriate way
+- do not use unwrap
+- do not use unsafe code
+- write tests for everything, including integration and real tests
+- use make test to validate any changes
+- integration tests should not alter the host, ever
 - tests: unless said otherwise, they perform with simulated input and produce output on the operations that would be performed. They never affect the running system.
 - running tests: use the make tasks every time.
 - tests should always include the linting checks
 - lint checks should be a rust community standard of linters, run as the `lint` make tasks
 - never use `let _ = expr;` to suppress unused variable warnings or work around the borrow checker. Fix the actual problem: use the variable, remove the parameter, or restructure the code.
 - `#![deny(dead_code)]` and `#![deny(unsafe_code)]` are set at the crate level in both lib.rs and main.rs. Never add `#[allow(dead_code)]` or `#[allow(unsafe_code)]` to bypass them — remove dead code, and use safe abstractions (e.g., nix crate) instead of unsafe.
+- do not modify the system beyond configuring hardware
+- please check all std::result::Results and handle accordingly
 
 # CLI:
 
@@ -28,43 +37,47 @@ The binary has five subcommands and two global flags.
   using systemd (dbus, networkd, resolved, logind).
 - `initrd` — Run installer in initrd mode using syscalls and sysfs directly
   (no systemd dbus). Has its own flags:
-  - `--etc-prefix <DIR>` — Directory that maps to /etc on the installed
-    system. Defaults to `<mount_point>/@etc`. Files are written directly
-    under this path (e.g., `<DIR>/systemd/network/`).
-  - `--tty <DEVICE>` — TTY device to use for the TUI (e.g., `/dev/tty1`,
-    `/dev/ttyS0`). Redirects stdin/stdout to the specified device.
+    - `--etc-prefix <DIR>` — Directory that maps to /etc on the installed
+      system. Defaults to `<mount_point>/@etc`. Files are written directly
+      under this path (e.g., `<DIR>/systemd/network/`).
+    - `--tty <DEVICE>` — TTY device to use for the TUI (e.g., `/dev/tty1`,
+      `/dev/ttyS0`). Redirects stdin/stdout to the specified device.
 - `getty` — Run as a getty replacement (login screen with system status).
   Designed to be invoked by agetty instead of `/bin/login`. Displays
   machine info, network/mDNS status, system stats (CPU, memory, disk),
   and service health via the Town OS API at `localhost:5309`. While
   services are starting, shows live `journalctl -f` output. Has its
   own flags:
-  - `--etc-prefix <DIR>` — Same as initrd; passed through to
-    `ttyforce run` on reconfigure.
-  - `--tty <DEVICE>` — TTY device to use for the TUI.
+    - `--etc-prefix <DIR>` — Same as initrd; passed through to
+      `ttyforce run` on reconfigure.
+    - `--tty <DEVICE>` — TTY device to use for the TUI.
+    - `--console` — Listen to `/dev/kmsg` and force a full TUI repaint
+      whenever kernel messages arrive. Use this when running on a console
+      TTY (e.g. `/dev/tty1`) where kernel/systemd messages bleed through
+      and corrupt the display.
 
-  Actions (key-triggered):
-  - `[.]` Login — `exec` into `/bin/login`, replacing the ttyforce
-    process. agetty respawns ttyforce after the shell exits.
-  - `[l]` Log — show live journalctl output panel.
-  - `[s]` Status — show service status panel.
-  - `[r]` Reconfigure — spawns `ttyforce run` as a child process with
-    the same `--etc-prefix`/`--tty` flags, resumes getty when done.
-  - `[R]` Reboot — reboots the machine.
-  - `[p]` Power Off — powers off the machine.
-  - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
-    Stops all podman containers, unmounts /town-os, wipes all btrfs
-    member disks, reboots.
+    Actions (key-triggered):
+    - `[.]` Login — `exec` into `/bin/login`, replacing the ttyforce
+      process. agetty respawns ttyforce after the shell exits.
+    - `[l]` Log — show live journalctl output panel.
+    - `[s]` Status — show service status panel.
+    - `[r]` Reconfigure — spawns `ttyforce run` as a child process with
+      the same `--etc-prefix`/`--tty` flags, resumes getty when done.
+    - `[R]` Reboot — reboots the machine.
+    - `[p]` Power Off — powers off the machine.
+    - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
+      Stops all podman containers, unmounts /town-os, wipes all btrfs
+      member disks, reboots.
 
-  During startup, the log panel is shown automatically with a
-  "Services starting" header. When all services become active, it
-  auto-switches to the status panel. After that, `l` and `s` toggle
-  between the two panels freely.
+    During startup, the log panel is shown automatically with a
+    "Services starting" header. When all services become active, it
+    auto-switches to the status panel. After that, `l` and `s` toggle
+    between the two panels freely.
 
-  Service status is fetched from the Town OS API at
-  `GET /systemd/units?limit=100` on `localhost:5309`.
-  Authentication uses a bearer token from `TTYFORCE_API_TOKEN` env
-  var or `<etc_prefix>/ttyforce/api-token` file.
+    Service status is fetched from the Town OS API at
+    `GET /systemd/units?limit=100` on `localhost:5309`.
+    Authentication uses a bearer token from `TTYFORCE_API_TOKEN` env
+    var or `<etc_prefix>/ttyforce/api-token` file.
 
 ## Global flags
 
@@ -221,12 +234,13 @@ dbus calls. Two executor backends exist:
 - `parted` — disk partitioning (GPT + single partition)
 - `mkfs.btrfs` — btrfs filesystem creation
 - `btrfs` — subvolume management
-- `pacstrap` or `<mount>/install.sh` — base system installation
+- `<mount>/install.sh` — custom install script (optional)
 - `pkill` — cleanup of dhcpcd/wpa_supplicant processes
 
 ## Config persistence:
 
 After a successful install, the `PersistNetworkConfig` operation writes:
+
 - `<etc_prefix>/systemd/network/20-<iface>.network` — networkd DHCP unit
   matched by MAC address (not interface name) so it works regardless of
   interface naming scheme (initrd may use `eth0` while booted system uses
@@ -253,6 +267,7 @@ the `.network` file. ttyforce assumes it is already enabled.
 
 After dhcpcd obtains a DHCP lease, `/etc/resolv.conf` is written from
 the lease data using this fallback chain:
+
 1. `dhcpcd --dumplease <iface>` — parse `domain_name_servers=` field
 2. `dhcpcd -U <iface>` — alternative dump format
 3. Check if `/etc/resolv.conf` already has nameservers (dhcpcd hooks)
@@ -266,6 +281,7 @@ hook scripts that normally manage resolv.conf.
 The TUI has a persistent command log pane in the bottom half of the
 screen, visible on every screen. All shell commands and syscall
 operations are logged with arguments and results, color-coded:
+
 - Yellow: command invocation (`$ cmd args`)
 - Green: success (`-> ok`)
 - Red: errors (`-> FAILED`, `error:`)
@@ -279,6 +295,7 @@ console) for debugging when the TUI is running on a different TTY.
 
 The installer ensures internet is accessible before proceeding to disk
 setup. Both ethernet and wifi flows check:
+
 1. Upstream router reachable (gateway exists)
 2. Internet routable (ICMP ping to 1.1.1.1)
 3. DNS works (resolve example.com)
@@ -294,7 +311,7 @@ screen. This applies to both systemd and initrd executors.
 4. CreateBtrfsSubvolume (@etc, @var — Town OS overlay subvolumes)
 5. GenerateFstab (mount service to <etc_prefix>/systemd/system/)
 6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/)
-7. InstallBaseSystem (runs install.sh or pacstrap — may be a no-op)
+7. InstallBaseSystem (runs install.sh if present, otherwise no-op)
 8. CleanupUnmount (final unmount so systemd doesn't see stale mount)
 
 ttyforce does NOT create @, @home, @snapshots subvolumes. It creates
@@ -317,6 +334,7 @@ single member partition may fail in initrd environments.
 After a successful install, a systemd service unit `mount-town-os.service`
 is written to `<etc_prefix>/systemd/system/` and enabled via symlink in
 `local-fs.target.wants/`. This service:
+
 - Runs `mkdir -p /town-os` and `btrfs device scan` before mounting
 - Mounts the btrfs volume with `subvol=@` at the configured mount point
 - Runs before `local-fs.target` and `multi-user.target`
@@ -343,6 +361,7 @@ partition, NOT the root partition. The root filesystem is not affected.
 
 Files written during install — all go inside the `@etc` btrfs subvolume
 (`<mount_point>/@etc/` by default, overridable via `--etc-prefix`):
+
 - `<etc_prefix>/systemd/system/mount-town-os.service` — mount service
 - `<etc_prefix>/systemd/system/local-fs.target.wants/` — enable symlink
 - `<etc_prefix>/systemd/network/20-<iface>.network` — networkd DHCP unit
@@ -355,6 +374,7 @@ install process and is overwritten by the installed system on boot.
 ## TUI layout:
 
 The TUI has three main sections:
+
 - Title bar (3 lines)
 - Content area (flexible, gets all remaining space)
 - Command output pane (10 lines, scrolls to bottom)
@@ -367,6 +387,7 @@ groups and other selections are always visible.
 
 In initrd mode, disk detection uses generic sysfs properties instead of
 dbus/UDisks2. A block device in `/sys/block/` is considered a real disk if:
+
 1. `removable` is not `1` (filters USB sticks, CD-ROMs, floppies)
 2. `size` > 0 (filters uninitialized devices)
 3. `device/` subdirectory exists (filters loop, ram, dm, zram — virtual devices)
@@ -389,13 +410,14 @@ partition, with a tmpfs overlay for writability. The boot process:
 
 After boot, `town-os-make-storage.service` runs `make-storage.sh` →
 `make-btrfs.sh` which:
+
 1. Detects disks and creates btrfs (single/raid1/raid5)
 2. Mounts at `/town-os`
 3. Creates subvolumes `@var` and `@etc`
 4. Mounts `@var` → `/overlays/var`, `@etc` → `/overlays/etc`
 5. Adds overlay entries to `/etc/fstab`:
-   - overlay for `/etc` (lower=squashfs, upper=`/overlays/etc`)
-   - overlay for `/var` (lower=squashfs, upper=`/overlays/var`)
+    - overlay for `/etc` (lower=squashfs, upper=`/overlays/etc`)
+    - overlay for `/var` (lower=squashfs, upper=`/overlays/var`)
 6. Reloads systemd and mounts all
 
 ttyforce replaces step 1-3 of the `make-btrfs.sh` flow (disk detection,
@@ -407,9 +429,9 @@ The `--etc-prefix` flag should point to wherever the `@etc` subvolume
 is accessible (defaults to `<mount_point>/@etc`). The path is used
 directly — no `/etc/` prefix is added.
 
-NOTE: ttyforce does NOT run pacstrap/InstallBaseSystem — the system is
-already installed via squashfs. InstallBaseSystem is a no-op or runs a
-custom `install.sh` script if present.
+NOTE: ttyforce does NOT install the base system — the system is
+already installed via squashfs. InstallBaseSystem runs `install.sh`
+if present, otherwise it is a no-op.
 
 ## Architecture:
 

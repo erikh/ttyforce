@@ -857,7 +857,7 @@ impl InstallerStateMachine {
         }
 
         // Generate mount service and persist network config BEFORE install
-        // so they are written even if InstallBaseSystem fails (e.g. no pacstrap)
+        // so they are written even if InstallBaseSystem fails
         let etc = self.etc_prefix().to_string();
         crate::engine::real_ops::cmd_log_append(format!(
             "  etc_prefix={} mount_point={}",

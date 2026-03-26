@@ -3,9 +3,9 @@ use crate::engine::feedback::OperationResult;
 use super::run_cmd;
 
 /// Install the base system to the target mount point.
-/// This is a placeholder that runs a configurable install command.
+/// Runs install.sh if present, otherwise succeeds as a no-op
+/// (Town OS is already installed via squashfs).
 pub fn install_base_system(target: &str) -> OperationResult {
-    // Check if a custom install script exists
     let install_script = format!("{}/install.sh", target);
     if std::path::Path::new(&install_script).exists() {
         match run_cmd("sh", &[&install_script]) {
@@ -16,11 +16,7 @@ pub fn install_base_system(target: &str) -> OperationResult {
         }
     }
 
-    // Default: try pacstrap-style install
-    match run_cmd("pacstrap", &[target, "base", "linux", "linux-firmware"]) {
-        Ok(_) => OperationResult::Success,
-        Err(e) => OperationResult::Error(format!("base system install failed: {}", e)),
-    }
+    OperationResult::Success
 }
 
 /// Power off the system.

@@ -132,7 +132,7 @@ Two executor backends are available:
   - `parted` — disk partitioning
   - `mkfs.btrfs` — btrfs filesystem creation
   - `btrfs` — subvolume management
-  - `pacstrap` or `install.sh` — base system installation
+  - `install.sh` — custom install script (optional)
   - `pkill` — cleanup of dhcpcd/wpa_supplicant processes
 
 ### Hardware detection

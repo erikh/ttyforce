@@ -1,4 +1,6 @@
+use std::fs::File;
 use std::io::{self, BufRead, BufReader};
+use std::os::unix::io::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -61,6 +63,8 @@ pub struct GettyApp {
     journal_child: Option<Child>,
     /// Max lines to keep in the journal buffer.
     journal_max_lines: usize,
+    /// Non-blocking reader for /dev/kmsg (only when --console is set).
+    kmsg_reader: Option<BufReader<File>>,
 }
 
 impl GettyApp {
@@ -68,11 +72,18 @@ impl GettyApp {
         etc_prefix: Option<String>,
         tty: Option<String>,
         mount_point: String,
+        console_mode: bool,
     ) -> Self {
         let api_client = TownApiClient::from_env(etc_prefix.as_deref());
         let system_info = SystemInfo::probe(&mount_point);
         let system_services = api_client.fetch_system_services();
         let all_services = api_client.fetch_all_services();
+
+        let kmsg_reader = if console_mode {
+            open_kmsg()
+        } else {
+            None
+        };
 
         Self {
             system_info,
@@ -90,6 +101,7 @@ impl GettyApp {
             journal_lines: Vec::new(),
             journal_child: None,
             journal_max_lines: 200,
+            kmsg_reader,
         }
     }
 
@@ -149,6 +161,11 @@ impl GettyApp {
 
             // Manage journal process: start if services starting, drain lines, stop when ready
             self.manage_journal();
+
+            // In console mode, detect kernel messages and force full repaint
+            if self.drain_kmsg() {
+                terminal.clear()?;
+            }
 
             terminal.draw(|f| self.render(f))?;
 
@@ -363,6 +380,31 @@ impl GettyApp {
                 Err(_) => break,
             }
         }
+    }
+
+    /// Drain any pending kernel messages from /dev/kmsg.
+    /// Returns true if any messages were read (console was written to).
+    fn drain_kmsg(&mut self) -> bool {
+        let Some(ref mut reader) = self.kmsg_reader else {
+            return false;
+        };
+
+        let mut got_output = false;
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    got_output = true;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+
+        got_output
     }
 
     /// Exec into /bin/login, replacing this process entirely.
@@ -746,6 +788,30 @@ impl GettyApp {
     }
 }
 
+/// Open /dev/kmsg for non-blocking reading, seeked to the end
+/// so we only see new messages.
+fn open_kmsg() -> Option<BufReader<File>> {
+    let file = match File::open("/dev/kmsg") {
+        Ok(f) => f,
+        Err(e) => {
+            kmsg_log(&format!("getty: failed to open /dev/kmsg: {}", e));
+            return None;
+        }
+    };
+
+    // Set non-blocking so reads don't block the TUI loop
+    set_nonblocking(&file);
+
+    // Seek to end so we don't replay old messages
+    let fd = file.as_raw_fd();
+    if let Err(e) = nix::unistd::lseek(fd, 0, nix::unistd::Whence::SeekEnd) {
+        kmsg_log(&format!("getty: failed to seek /dev/kmsg: {}", e));
+        return None;
+    }
+
+    Some(BufReader::new(file))
+}
+
 /// Set a file descriptor to non-blocking mode using fcntl.
 fn set_nonblocking(stdout: &impl std::os::unix::io::AsRawFd) {
     let fd = std::os::unix::io::AsRawFd::as_raw_fd(stdout);
@@ -1042,6 +1108,7 @@ mod tests {
             journal_lines: Vec::new(),
             journal_child: None,
             journal_max_lines: 200,
+            kmsg_reader: None,
         }
     }
 
