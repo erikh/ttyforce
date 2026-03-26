@@ -411,10 +411,91 @@ impl GettyApp {
         got_output
     }
 
+    /// Clear the screen and display /etc/issue like agetty does before login.
+    fn display_issue(&self) {
+        use std::io::Write;
+        let mut stdout = io::stdout();
+
+        // Clear screen and move cursor home
+        if let Err(e) = write!(stdout, "\x1b[2J\x1b[H") {
+            eprintln!("clear screen: {}", e);
+        }
+
+        // Read and display /etc/issue if it exists
+        if let Ok(content) = std::fs::read_to_string("/etc/issue") {
+            let processed = self.substitute_issue_escapes(&content);
+            if let Err(e) = write!(stdout, "{}", processed) {
+                eprintln!("write /etc/issue: {}", e);
+            }
+        }
+
+        if let Err(e) = stdout.flush() {
+            eprintln!("flush stdout: {}", e);
+        }
+    }
+
+    /// Perform agetty-style escape substitutions on /etc/issue content.
+    fn substitute_issue_escapes(&self, content: &str) -> String {
+        let utsname = nix::sys::utsname::uname().ok();
+        let hostname = utsname
+            .as_ref()
+            .map(|u| u.nodename().to_string_lossy().to_string())
+            .unwrap_or_else(|| "localhost".to_string());
+        let os_name = utsname
+            .as_ref()
+            .map(|u| u.sysname().to_string_lossy().to_string())
+            .unwrap_or_else(|| "Linux".to_string());
+        let release = utsname
+            .as_ref()
+            .map(|u| u.release().to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let machine = utsname
+            .as_ref()
+            .map(|u| u.machine().to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let tty_raw = self.tty.as_deref().unwrap_or("tty1");
+        let tty_name = tty_raw.strip_prefix("/dev/").unwrap_or(tty_raw);
+
+        let now = std::time::SystemTime::now();
+        let secs = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Simple date/time formatting without external crate
+        let (date_str, time_str) = format_unix_timestamp(secs);
+
+        let mut result = String::with_capacity(content.len());
+        let mut chars = content.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('n') => result.push_str(&hostname),
+                    Some('l') => result.push_str(tty_name),
+                    Some('d') => result.push_str(&date_str),
+                    Some('t') => result.push_str(&time_str),
+                    Some('s') => result.push_str(&os_name),
+                    Some('m') => result.push_str(&machine),
+                    Some('r') => result.push_str(&release),
+                    Some('\\') => result.push('\\'),
+                    Some(other) => {
+                        result.push('\\');
+                        result.push(other);
+                    }
+                    None => result.push('\\'),
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        result
+    }
+
     /// Exec into /bin/login, replacing this process entirely.
     /// Only returns if exec fails.
     fn exec_login(&self) {
         use std::os::unix::process::CommandExt;
+        self.display_issue();
         let err = Command::new("/bin/login").exec();
         // only reached on failure — exec replaces the process on success
         cmd_log_append(format!("  -> exec /bin/login failed: {}", err));
@@ -878,6 +959,56 @@ fn strip_partition_suffix(device: &str) -> String {
     device.to_string()
 }
 
+/// Format a Unix timestamp as (date, time) strings.
+/// Returns ("YYYY-MM-DD", "HH:MM:SS") in UTC.
+fn format_unix_timestamp(secs: u64) -> (String, String) {
+    // Days from Unix epoch, accounting for leap years
+    let secs_per_day: u64 = 86400;
+    let mut days = secs / secs_per_day;
+    let day_secs = secs % secs_per_day;
+
+    let hours = day_secs / 3600;
+    let minutes = (day_secs % 3600) / 60;
+    let seconds = day_secs % 60;
+
+    // Compute year, month, day from days since 1970-01-01
+    let mut year: u64 = 1970;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let leap = is_leap_year(year);
+    let month_days: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+
+    let mut month: u64 = 1;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    let day = days + 1;
+
+    (
+        format!("{:04}-{:02}-{:02}", year, month, day),
+        format!("{:02}:{:02}:{:02}", hours, minutes, seconds),
+    )
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,5 +1281,121 @@ mod tests {
         let mut app = test_app();
         app.system_services = Err("API unavailable".into());
         assert!(!app.all_services_active());
+    }
+
+    #[test]
+    fn test_format_unix_timestamp_epoch() {
+        let (date, time) = format_unix_timestamp(0);
+        assert_eq!(date, "1970-01-01");
+        assert_eq!(time, "00:00:00");
+    }
+
+    #[test]
+    fn test_format_unix_timestamp_known_date() {
+        // 2024-01-15 12:30:45 UTC = 1705321845
+        let (date, time) = format_unix_timestamp(1705321845);
+        assert_eq!(date, "2024-01-15");
+        assert_eq!(time, "12:30:45");
+    }
+
+    #[test]
+    fn test_format_unix_timestamp_leap_year() {
+        // 2024-02-29 00:00:00 UTC = 1709164800
+        let (date, _time) = format_unix_timestamp(1709164800);
+        assert_eq!(date, "2024-02-29");
+    }
+
+    #[test]
+    fn test_is_leap_year() {
+        assert!(is_leap_year(2000)); // divisible by 400
+        assert!(is_leap_year(2024)); // divisible by 4, not 100
+        assert!(!is_leap_year(1900)); // divisible by 100, not 400
+        assert!(!is_leap_year(2023)); // not divisible by 4
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_hostname() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("Welcome to \\n");
+        // Uses system hostname from uname, not the test app's system_info
+        assert!(!result.contains("\\n"));
+        assert!(result.starts_with("Welcome to "));
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_tty() {
+        let mut app = test_app();
+        app.tty = Some("/dev/tty3".to_string());
+        let result = app.substitute_issue_escapes("TTY: \\l");
+        assert_eq!(result, "TTY: tty3");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_tty_default() {
+        let app = test_app();
+        // tty is None in test_app
+        let result = app.substitute_issue_escapes("TTY: \\l");
+        assert_eq!(result, "TTY: tty1");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_os_name() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("\\s");
+        assert_eq!(result, "Linux");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_backslash() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("path\\\\end");
+        assert_eq!(result, "path\\end");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_unknown_escape() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("\\z");
+        assert_eq!(result, "\\z");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_no_escapes() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("plain text");
+        assert_eq!(result, "plain text");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_trailing_backslash() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("end\\");
+        assert_eq!(result, "end\\");
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_date_time() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("\\d \\t");
+        // Should contain date and time patterns (YYYY-MM-DD HH:MM:SS)
+        assert!(result.contains('-'), "expected date with dashes: {}", result);
+        assert!(result.contains(':'), "expected time with colons: {}", result);
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_machine() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("\\m");
+        // Machine comes from uname, should be non-empty
+        assert!(!result.is_empty());
+        assert!(!result.contains("\\m"));
+    }
+
+    #[test]
+    fn test_substitute_issue_escapes_kernel_release() {
+        let app = test_app();
+        let result = app.substitute_issue_escapes("\\r");
+        assert!(!result.is_empty());
+        assert!(!result.contains("\\r"));
     }
 }
