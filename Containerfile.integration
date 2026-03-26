@@ -13,6 +13,7 @@ RUN apt-get update && \
         systemd-coredump \
         systemd-journal-remote \
         udisks2 \
+        libblockdev-crypto2 \
         iproute2 \
         iw \
         wireless-regdb \

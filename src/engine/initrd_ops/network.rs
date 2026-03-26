@@ -711,12 +711,12 @@ pub fn generate_persist_network_config(interface: &str, mac_address: &str) -> St
     if mac_address.is_empty() || mac_address == "00:00:00:00:00:00" {
         // Fallback to name matching if MAC is unavailable
         format!(
-            "[Match]\nName={}\n\n[Network]\nDHCP=yes\n",
+            "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n",
             interface
         )
     } else {
         format!(
-            "[Match]\nMACAddress={}\n\n[Network]\nDHCP=yes\n",
+            "[Match]\nMACAddress={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n",
             mac_address
         )
     }
@@ -1047,5 +1047,6 @@ subnet_mask=255.255.255.0
         assert!(config.contains("MACAddress=11:22:33:44:55:66"));
         assert!(config.contains("[Network]"));
         assert!(config.contains("DHCP=yes"));
+        assert!(config.contains("MulticastDNS=yes"));
     }
 }
