@@ -134,8 +134,11 @@ pub fn generate_fstab(mount_point: &str, device: &str, fs_type: &str) -> Operati
             cmd_log_append(format!("  remove old symlink warning: {}", e));
         }
     }
+    // Use a relative symlink so it survives pivot_root — the wants dir
+    // is one level below the unit dir, so "../<service>" resolves correctly
+    // regardless of how /etc is mounted (overlay, bind, etc.).
     if let Err(e) = std::os::unix::fs::symlink(
-        format!("/etc/systemd/system/{}", service_name),
+        format!("../{}", service_name),
         &symlink_path,
     ) {
         return OperationResult::Error(format!(
