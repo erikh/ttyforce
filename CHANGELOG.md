@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1 (2026-03-27)
+
+### Features
+
+- Display `/etc/issue` with agetty-style escape substitutions before login in getty mode
+- Enable MulticastDNS (`MulticastDNS=yes`) in all generated networkd `.network` files
+
+### Fixes
+
+- Use relative symlink for mount service enablement (fixes stale `/new_root/` path after pivot_root)
+- Remove automatic serial console logging to `/dev/ttyS0` (was interfering with getty on tty1)
+- Remove all unsafe code from the crate (rewrite syscall.rs to use `ip`/`ping` commands)
+- Remove all `.unwrap()` calls and `let _ = expr;` patterns per CLAUDE.md rules
+
+### Improvements
+
+- Add `libblockdev-crypto2` to integration test container to silence udisksd warning
+
 ## 0.2.1 (2026-03-24)
 
 ### Features

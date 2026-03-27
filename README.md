@@ -60,7 +60,7 @@ ttyforce getty --etc-prefix /mnt/root
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
 | `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location and `--tty` for TTY device selection. |
-| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. Pressing `.` execs into `/bin/login`; agetty respawns ttyforce after the shell exits. `l`/`s` toggle between log and status panels. Supports `--etc-prefix` and `--tty`. |
+| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`; agetty respawns ttyforce after the shell exits. `l`/`s` toggle between log and status panels. Supports `--etc-prefix`, `--tty`, and `--console` (repaint on kernel messages). |
 
 ### Global flags
 
@@ -95,8 +95,6 @@ The installation target mount point defaults to `/town-os`.
 
 The bottom half of the TUI shows a live command output log. Every shell command and syscall operation is logged with its arguments and result. Commands are color-coded: yellow for the command line, green for success, red for errors.
 
-The same log is also written to `/dev/ttyS0` (serial console) for debugging when the TUI is running on a different TTY.
-
 ### Final screen
 
 After installation completes (or is aborted), the final screen offers three choices:
@@ -112,17 +110,19 @@ Two executor backends are available:
 - **Systemd** (default) — Uses systemd dbus interfaces (networkd, resolved, logind) with sysfs/command fallbacks. Suitable for full systemd environments.
 - **Initrd** (`--initrd`) — Uses syscalls and sysfs directly where possible, with minimal external tool dependencies. After a successful install, network configuration (networkd units and wpa_supplicant configs) is persisted to `<mount_point>/@etc/` (overridable via `--etc-prefix`) so the installed system boots with working networking.
 
-  **Syscalls used (no external tools):**
-  - Interface up/down — `ioctl(SIOCSIFFLAGS)`
-  - IP address check — `ioctl(SIOCGIFADDR)`
+  **Safe system access (no unsafe code):**
+  - Interface up/down — `ip link set`
+  - IP address check — `ip -4 -o addr show`
   - Link/carrier check — sysfs `/sys/class/net/<iface>/carrier`
   - Route check — `/proc/net/route`
-  - Internet check — ICMP echo via raw socket (`SOCK_DGRAM/IPPROTO_ICMP`)
+  - Internet check — `ping`
   - DNS resolution — UDP socket to nameserver from `/etc/resolv.conf`
-  - Mount/unmount — `mount(2)` / `umount2(2)`
-  - Reboot — `reboot(2)` syscall
+  - Mount/unmount — `mount(2)` / `umount2(2)` via nix crate
+  - Reboot — `reboot(2)` via nix crate
 
   **Required external tools in initrd:**
+  - `ip` — interface up/down and IP address queries
+  - `ping` — internet reachability check
   - `dhcpcd` — DHCP client
   - `wpa_supplicant` — WPA authentication (CLI mode, no dbus)
   - `wpa_cli` — WPS push-button connection and status polling

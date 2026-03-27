@@ -206,14 +206,13 @@ dbus calls. Two executor backends exist:
 - `InitrdExecutor` (`--initrd`) — uses syscalls and sysfs directly, with
   minimal external tool dependencies
 
-## Syscalls used (no external tools needed):
+## Safe system access (no unsafe code):
 
-- Interface up/down — `ioctl(SIOCSIFFLAGS)` to set/clear `IFF_UP`
-- IP address check — `ioctl(SIOCGIFADDR)` to read IPv4 address
+- Interface up/down — `ip link set <iface> up/down`
+- IP address check — `ip -4 -o addr show <iface>`
 - Link/carrier check — reads sysfs `/sys/class/net/<iface>/carrier`
 - Route/gateway check — parses `/proc/net/route`
-- Internet reachability — ICMP echo via `SOCK_DGRAM/IPPROTO_ICMP` raw
-  socket, with `SOCK_RAW` fallback, with `ping` command final fallback
+- Internet reachability — `ping -c1 -W<timeout> <addr>`
 - DNS resolution — builds DNS A query, sends via `UdpSocket` to
   nameserver from `/etc/resolv.conf`, parses response
 - Mount/unmount — `mount(2)` via `nix::mount::mount()` /
@@ -223,6 +222,8 @@ dbus calls. Two executor backends exist:
 
 ## External tools required in the initrd:
 
+- `ip` — interface up/down and IP address queries
+- `ping` — internet reachability check
 - `dhcpcd` — DHCP client (protocol too complex for inline implementation)
 - `wpa_supplicant` — WPA authentication, CLI mode only, no dbus
   (`wpa_supplicant -B -i <iface> -c <conf>`)
@@ -285,11 +286,6 @@ operations are logged with arguments and results, color-coded:
 - Yellow: command invocation (`$ cmd args`)
 - Green: success (`-> ok`)
 - Red: errors (`-> FAILED`, `error:`)
-
-## Serial console logging:
-
-All command log entries are also written to `/dev/ttyS0` (serial
-console) for debugging when the TUI is running on a different TTY.
 
 ## Internet accessibility:
 
