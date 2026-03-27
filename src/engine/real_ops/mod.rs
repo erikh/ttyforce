@@ -18,16 +18,10 @@ pub fn cmd_log() -> Vec<String> {
     CMD_LOG.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Append a message to the command log and write it to /dev/console.
+/// Append a message to the command log.
 pub fn cmd_log_append(msg: String) {
     if let Ok(mut log) = CMD_LOG.lock() {
-        log.push(msg.clone());
-    }
-    // Best-effort write to serial console for debugging
-    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/ttyS0") {
-        if let Err(e) = writeln!(f, "{}", msg) {
-            eprintln!("ttyS0 write: {}", e);
-        }
+        log.push(msg);
     }
 }
 
