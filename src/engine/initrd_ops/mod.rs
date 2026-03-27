@@ -97,6 +97,12 @@ pub fn execute(op: &Operation) -> OperationResult {
             mac_address,
         } => network::persist_network_config(mount_point, interface, mac_address),
 
+        // SSH keys
+        Operation::ImportSshKeys {
+            etc_prefix,
+            github_username,
+        } => crate::ssh::execute_import_ssh_keys(etc_prefix, github_username),
+
         // System
         Operation::InstallBaseSystem { target } => system::install_base_system(target),
         Operation::Reboot => system::reboot(),

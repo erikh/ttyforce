@@ -9,6 +9,7 @@ inputs = [
     { SelectRaidOption = 2 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
+    "SkipSshKeys",
 ]
 
 expected_operation_types = [

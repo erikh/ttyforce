@@ -9,4 +9,5 @@ pub mod getty;
 pub mod manifest;
 pub mod network;
 pub mod operations;
+pub mod ssh;
 pub mod tui;

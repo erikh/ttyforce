@@ -89,6 +89,7 @@ pub struct App {
     pub state_machine: InstallerStateMachine,
     pub selected_index: usize,
     pub password_input: String,
+    pub ssh_username_input: String,
     pub should_quit: bool,
 }
 
@@ -121,6 +122,7 @@ impl App {
             state_machine,
             selected_index: 0,
             password_input: String::new(),
+            ssh_username_input: String::new(),
             should_quit: false,
         }
     }
@@ -254,6 +256,7 @@ impl App {
             ScreenId::DiskGroupSelect => self.render_disk_select(f, area),
             ScreenId::RaidConfig => self.render_raid_config(f, area),
             ScreenId::Confirm => self.render_confirm(f, area),
+            ScreenId::SshKeyImport => self.render_ssh_key_import(f, area),
             ScreenId::InstallProgress => self.render_install_progress(f, area),
             ScreenId::Reboot => self.render_reboot(f, area),
         }
@@ -781,6 +784,42 @@ impl App {
         f.render_widget(paragraph, center);
     }
 
+    fn render_ssh_key_import(&self, f: &mut ratatui::Frame, area: Rect) {
+        let mut lines = vec![
+            "  Import SSH keys from GitHub".to_string(),
+            String::new(),
+            "  Keys will be written to root's authorized_keys on the".to_string(),
+            "  installed system.".to_string(),
+            String::new(),
+        ];
+
+        if !self.state_machine.github_usernames.is_empty() {
+            lines.push("  Queued users:".to_string());
+            for name in &self.state_machine.github_usernames {
+                lines.push(format!("    - {}", name));
+            }
+            lines.push(String::new());
+        }
+
+        lines.push(format!("  GitHub username: {}_", self.ssh_username_input));
+        lines.push(String::new());
+        lines.push("  Enter: add user  |  blank Enter/q: done  |  Esc: back".to_string());
+
+        let text = lines.join("\n");
+        let line_count = lines.len() as u16 + 2;
+        let height_pct = (line_count * 100 / area.height.max(1)).clamp(30, 70);
+        let center = centered_rect(60, height_pct, area);
+
+        let paragraph = Paragraph::new(text).block(
+            Block::default()
+                .title(" SSH Key Import ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+        f.render_widget(paragraph, center);
+    }
+
     fn render_install_progress(&self, f: &mut ratatui::Frame, area: Rect) {
         let status = format!(
             "  Status:     {:?}\
@@ -860,6 +899,42 @@ impl App {
                 KeyCode::Esc => {
                     self.password_input.clear();
                     self.state_machine.process_input(UserInput::Back, executor);
+                    self.selected_index = 0;
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        // Handle SSH username input
+        if self.state_machine.current_screen == ScreenId::SshKeyImport {
+            match key.code {
+                KeyCode::Enter => {
+                    let username = self.ssh_username_input.trim().to_string();
+                    self.ssh_username_input.clear();
+                    if username.is_empty() || username == "q" {
+                        // Done entering usernames — proceed to install
+                        self.state_machine
+                            .process_input(UserInput::SkipSshKeys, executor);
+                        self.selected_index = 0;
+                    } else {
+                        self.state_machine
+                            .process_input(UserInput::ImportSshKeys(username), executor);
+                    }
+                    return;
+                }
+                KeyCode::Backspace => {
+                    self.ssh_username_input.pop();
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    self.ssh_username_input.push(c);
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.ssh_username_input.clear();
+                    self.state_machine
+                        .process_input(UserInput::Back, executor);
                     self.selected_index = 0;
                     return;
                 }

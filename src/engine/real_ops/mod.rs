@@ -126,6 +126,12 @@ pub fn execute(op: &Operation) -> OperationResult {
         // Persist network config — no-op for systemd executor (config already in place)
         Operation::PersistNetworkConfig { .. } => OperationResult::Success,
 
+        // SSH keys
+        Operation::ImportSshKeys {
+            etc_prefix,
+            github_username,
+        } => crate::ssh::execute_import_ssh_keys(etc_prefix, github_username),
+
         // Cleanup
         Operation::CleanupNetworkConfig { interface } => {
             network::cleanup_network_config(interface)

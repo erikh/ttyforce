@@ -1340,6 +1340,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn test_shell_action_not_executed_by_execute_action() {
         // Shell is handled in the TUI loop (spawn child), not execute_action
         let mut app = test_app();

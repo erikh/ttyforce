@@ -21,6 +21,7 @@ pub enum ScreenId {
     DiskGroupSelect,
     RaidConfig,
     Confirm,
+    SshKeyImport,
     InstallProgress,
     Reboot,
 }
@@ -52,6 +53,10 @@ pub enum UserInput {
     SelectDiskGroup(usize),
     SelectRaidOption(usize),
 
+    // SSH keys
+    ImportSshKeys(String),
+    SkipSshKeys,
+
     // System
     ConfirmInstall,
     RebootSystem,
@@ -81,6 +86,7 @@ pub struct InstallerStateMachine {
     pub etc_prefix: Option<String>,
     connectivity_retries: u32,
     pub wps_start_time: Option<std::time::Instant>,
+    pub github_usernames: Vec<String>,
 }
 
 impl InstallerStateMachine {
@@ -123,6 +129,7 @@ impl InstallerStateMachine {
             etc_prefix: None,
             connectivity_retries: 0,
             wps_start_time: None,
+            github_usernames: Vec::new(),
         }
     }
 
@@ -314,7 +321,8 @@ impl InstallerStateMachine {
 
             // === Confirm ===
             (ScreenId::Confirm, UserInput::ConfirmInstall) => {
-                self.run_install(executor)
+                self.current_screen = ScreenId::SshKeyImport;
+                Some(ScreenId::SshKeyImport)
             }
             (ScreenId::Confirm, UserInput::Back) => {
                 self.current_screen = ScreenId::DiskGroupSelect;
@@ -322,6 +330,23 @@ impl InstallerStateMachine {
             }
             (ScreenId::Confirm, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at confirmation".to_string())
+            }
+
+            // === SSH Key Import ===
+            (ScreenId::SshKeyImport, UserInput::ImportSshKeys(username)) => {
+                self.github_usernames.push(username);
+                Some(ScreenId::SshKeyImport) // stay on screen for more usernames
+            }
+            (ScreenId::SshKeyImport, UserInput::SkipSshKeys) => {
+                self.run_install(executor)
+            }
+            (ScreenId::SshKeyImport, UserInput::Back) => {
+                self.github_usernames.clear();
+                self.current_screen = ScreenId::Confirm;
+                Some(ScreenId::Confirm)
+            }
+            (ScreenId::SshKeyImport, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at SSH key import".to_string())
             }
 
             // === Install Progress ===
@@ -877,6 +902,16 @@ impl InstallerStateMachine {
             let persist_result = executor.execute(&op);
             self.action_manifest
                 .record(op, persist_result.to_outcome());
+        }
+
+        // Import SSH keys from GitHub
+        for username in &self.github_usernames.clone() {
+            let op = Operation::ImportSshKeys {
+                etc_prefix: etc.clone(),
+                github_username: username.clone(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
         }
 
         // Install base system

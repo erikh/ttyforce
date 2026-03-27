@@ -41,6 +41,7 @@ fn map_enter(screen: &ScreenId, selected_index: usize) -> Option<UserInput> {
         ScreenId::DiskGroupSelect => Some(UserInput::SelectDiskGroup(selected_index)),
         ScreenId::RaidConfig => Some(UserInput::SelectRaidOption(selected_index)),
         ScreenId::Confirm => Some(UserInput::ConfirmInstall),
+        ScreenId::SshKeyImport => None, // handled by text input in app.rs
         ScreenId::InstallProgress => Some(UserInput::Confirm),
         ScreenId::Reboot => match selected_index {
             0 => Some(UserInput::RebootSystem),

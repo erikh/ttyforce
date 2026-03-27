@@ -120,6 +120,12 @@ pub enum Operation {
         mac_address: String,
     },
 
+    // Import SSH keys from GitHub
+    ImportSshKeys {
+        etc_prefix: String,
+        github_username: String,
+    },
+
     // Cleanup operations (emitted on abort to revert artifacts)
     CleanupNetworkConfig {
         interface: String,
@@ -264,6 +270,9 @@ impl std::fmt::Display for Operation {
             Operation::PowerOff => write!(f, "Power off"),
             Operation::StopAllContainers => write!(f, "Stop all containers"),
             Operation::WipeDisk { device } => write!(f, "Wipe disk {}", device),
+            Operation::ImportSshKeys {
+                github_username, ..
+            } => write!(f, "Import SSH keys from github.com/{}", github_username),
         }
     }
 }

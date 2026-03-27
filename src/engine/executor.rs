@@ -75,6 +75,7 @@ pub fn operation_type_name(op: &Operation) -> &str {
         Operation::Abort { .. } => "Abort",
         Operation::GenerateFstab { .. } => "GenerateFstab",
         Operation::PersistNetworkConfig { .. } => "PersistNetworkConfig",
+        Operation::ImportSshKeys { .. } => "ImportSshKeys",
         Operation::CleanupNetworkConfig { .. } => "CleanupNetworkConfig",
         Operation::CleanupWpaSupplicant { .. } => "CleanupWpaSupplicant",
         Operation::CleanupUnmount { .. } => "CleanupUnmount",

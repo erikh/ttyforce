@@ -12,6 +12,7 @@ inputs = [
     { SelectRaidOption = 0 },
     { SelectDiskGroup = 0 },
     "ConfirmInstall",
+    "SkipSshKeys",
 ]
 
 expected_screens = [
@@ -22,6 +23,7 @@ expected_screens = [
     "RaidConfig",
     "DiskGroupSelect",
     "Confirm",
+    "SshKeyImport",
     "InstallProgress",
 ]
 
