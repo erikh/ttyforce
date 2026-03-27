@@ -67,8 +67,9 @@ pub struct GettyApp {
     /// Non-blocking reader for /dev/kmsg (only when --console is set).
     kmsg_reader: Option<BufReader<File>>,
     /// When true, show a [q] Shell action that execs $SHELL.
-    /// Enabled by setting TTYFORCE_SHELL=1.
     pub shell_enabled: bool,
+    /// When true, reconfigure uses `initrd` subcommand instead of `run`.
+    pub initrd_mode: bool,
 }
 
 impl GettyApp {
@@ -107,6 +108,7 @@ impl GettyApp {
             journal_max_lines: 200,
             kmsg_reader,
             shell_enabled: false,
+            initrd_mode: false,
         }
     }
 
@@ -547,7 +549,8 @@ impl GettyApp {
             GettyAction::Reconfigure => {
                 let exe = std::env::current_exe()
                     .unwrap_or_else(|_| "ttyforce".into());
-                let mut args: Vec<String> = vec!["run".to_string()];
+                let subcommand = if self.initrd_mode { "initrd" } else { "run" };
+                let mut args: Vec<String> = vec![subcommand.to_string()];
                 if let Some(ref prefix) = self.etc_prefix {
                     args.push("--etc-prefix".to_string());
                     args.push(prefix.clone());
@@ -1285,6 +1288,7 @@ mod tests {
             journal_max_lines: 200,
             kmsg_reader: None,
             shell_enabled: false,
+            initrd_mode: false,
         }
     }
 

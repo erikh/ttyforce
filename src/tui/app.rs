@@ -917,6 +917,8 @@ impl App {
                         self.state_machine
                             .process_input(UserInput::SkipSshKeys, executor);
                         self.selected_index = 0;
+                        // Install ran synchronously — quit the TUI
+                        self.should_quit = true;
                     } else {
                         self.state_machine
                             .process_input(UserInput::ImportSshKeys(username), executor);
@@ -965,10 +967,8 @@ impl App {
                 return;
             }
             let is_exit = matches!(input, UserInput::ExitInstaller);
-            let is_terminal = matches!(
-                input,
-                UserInput::ConfirmInstall | UserInput::AbortInstall
-            ) && self.state_machine.current_screen == ScreenId::Confirm;
+            let is_terminal = matches!(input, UserInput::AbortInstall)
+                && self.state_machine.current_screen == ScreenId::Confirm;
             if self
                 .state_machine
                 .process_input(input, executor)

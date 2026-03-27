@@ -61,6 +61,9 @@ enum Command {
         /// Enable [q] Shell action to drop into $SHELL
         #[arg(long)]
         shell: bool,
+        /// Use initrd mode for reconfigure (no systemd dbus)
+        #[arg(long)]
+        initrd: bool,
     },
 }
 
@@ -90,8 +93,8 @@ fn main() {
                 tty.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, shell } => {
-            run_getty(etc_prefix, tty, console, shell);
+        Command::Getty { etc_prefix, tty, console, shell, initrd } => {
+            run_getty(etc_prefix, tty, console, shell, initrd);
         }
     }
 }
@@ -248,10 +251,11 @@ fn run_installer(
     }
 }
 
-fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, shell: bool) {
+fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, shell: bool, initrd: bool) {
     let tty_clone = tty.clone();
     let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string(), console);
     app.shell_enabled = shell;
+    app.initrd_mode = initrd;
     let mut executor = RealExecutor::new();
 
     if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {
