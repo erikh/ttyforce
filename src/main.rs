@@ -58,6 +58,9 @@ enum Command {
         /// Listen to /dev/kmsg and repaint on kernel messages (use on console TTYs)
         #[arg(long)]
         console: bool,
+        /// Enable [q] Shell action to drop into $SHELL
+        #[arg(long)]
+        shell: bool,
     },
 }
 
@@ -87,8 +90,8 @@ fn main() {
                 tty.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console } => {
-            run_getty(etc_prefix, tty, console);
+        Command::Getty { etc_prefix, tty, console, shell } => {
+            run_getty(etc_prefix, tty, console, shell);
         }
     }
 }
@@ -245,9 +248,10 @@ fn run_installer(
     }
 }
 
-fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool) {
+fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, shell: bool) {
     let tty_clone = tty.clone();
     let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string(), console);
+    app.shell_enabled = shell;
     let mut executor = RealExecutor::new();
 
     if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {
