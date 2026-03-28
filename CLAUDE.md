@@ -69,10 +69,13 @@ The binary has five subcommands and two global flags.
       Stops all podman containers, unmounts /town-os, wipes all btrfs
       member disks, reboots.
 
-    During startup, the log panel is shown automatically with a
-    "Services starting" header. When all services become active, it
-    auto-switches to the status panel. After that, `l` and `s` toggle
-    between the two panels freely.
+    IMPORTANT — startup panel behavior (do not change):
+    At getty startup, if services are NOT all active, the log panel
+    (live `journalctl -f` output) is shown automatically with a
+    "Services starting" header. This continues UNTIL all services
+    become active, at which point it auto-switches to the status
+    panel. After that, `l` and `s` toggle between the two panels
+    freely. This behavior must not be altered.
 
     Service status is fetched from the Town OS API at
     `GET /systemd/units?limit=100` on `localhost:5309`.
@@ -301,14 +304,22 @@ screen. This applies to both systemd and initrd executors.
 
 ## Install operation order:
 
+IMPORTANT: All file operations that configure the machine (writing to
+`etc_prefix`, persisting network config, importing SSH keys, etc.)
+MUST come after filesystem creation (partition, mkfs, mount, subvolume
+creation). The target paths do not exist until the btrfs volume is
+mounted and subvolumes are created. Never reorder config writes before
+filesystem setup.
+
 1. PartitionDisk (each device)
 2. MkfsBtrfs or BtrfsRaidSetup
 3. MountFilesystem (btrfs at /town-os)
 4. CreateBtrfsSubvolume (@etc, @var — Town OS overlay subvolumes)
 5. GenerateFstab (mount service to <etc_prefix>/systemd/system/)
 6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/)
-7. InstallBaseSystem (runs install.sh if present, otherwise no-op)
-8. CleanupUnmount (final unmount so systemd doesn't see stale mount)
+7. ImportSshKeys (fetch from GitHub, write to /root/.ssh/ + persist to <etc_prefix>/)
+8. InstallBaseSystem (runs install.sh if present, otherwise no-op)
+9. CleanupUnmount (final unmount so systemd doesn't see stale mount)
 
 ttyforce does NOT create @, @home, @snapshots subvolumes. It creates
 @etc and @var which Town OS's make-btrfs.sh expects. The actual overlay

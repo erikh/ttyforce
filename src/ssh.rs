@@ -57,15 +57,36 @@ pub fn fetch_github_keys(username: &str) -> Result<String, String> {
     Ok(trimmed)
 }
 
-/// Install SSH keys to `<etc_prefix>/root/.ssh/authorized_keys`,
-/// appending to any existing keys and deduplicating.
+/// Install SSH keys to `/root/.ssh/authorized_keys` on the running system.
+/// Also persists a copy to `<etc_prefix>/ssh/authorized_keys.d/github`
+/// so the keys survive reboots via the etc overlay.
+/// Appends to any existing keys and deduplicates.
 pub fn install_ssh_keys(etc_prefix: &str, keys: &str) -> Result<String, String> {
-    let ssh_dir = format!("{}/root/.ssh", etc_prefix);
+    // Write to the live system so keys work immediately
+    write_authorized_keys("/root/.ssh", keys)?;
+
+    // Persist to the etc overlay for boot-time restoration.
+    // Town OS can pick these up via sshd AuthorizedKeysFile or a systemd
+    // service that copies them to /root/.ssh/ at boot.
+    let persist_dir = format!("{}/ssh/authorized_keys.d", etc_prefix);
+    if std::fs::create_dir_all(&persist_dir).is_ok() {
+        let persist_path = format!("{}/github", persist_dir);
+        if let Err(e) = std::fs::write(&persist_path, keys) {
+            cmd_log_append(format!("  persist warning: write {}: {}", persist_path, e));
+        } else {
+            cmd_log_append(format!("  -> persisted to {}", persist_path));
+        }
+    }
+
+    Ok("/root/.ssh/authorized_keys".to_string())
+}
+
+/// Write keys to an authorized_keys file in the given ssh directory.
+fn write_authorized_keys(ssh_dir: &str, keys: &str) -> Result<(), String> {
     let auth_keys_path = format!("{}/authorized_keys", ssh_dir);
 
-    std::fs::create_dir_all(&ssh_dir).map_err(|e| format!("mkdir {}: {}", ssh_dir, e))?;
-
-    set_permissions(&ssh_dir, 0o700)?;
+    std::fs::create_dir_all(ssh_dir).map_err(|e| format!("mkdir {}: {}", ssh_dir, e))?;
+    set_permissions(ssh_dir, 0o700)?;
 
     // Read existing keys to avoid duplicates
     let existing = std::fs::read_to_string(&auth_keys_path).unwrap_or_default();
@@ -78,7 +99,7 @@ pub fn install_ssh_keys(etc_prefix: &str, keys: &str) -> Result<String, String> 
     }
 
     if new_keys.is_empty() {
-        return Ok(format!("{} (all keys already present)", auth_keys_path));
+        return Ok(());
     }
 
     let mut file = std::fs::OpenOptions::new()
@@ -92,8 +113,7 @@ pub fn install_ssh_keys(etc_prefix: &str, keys: &str) -> Result<String, String> 
     }
 
     set_permissions(&auth_keys_path, 0o600)?;
-
-    Ok(auth_keys_path)
+    Ok(())
 }
 
 /// Set Unix file permissions.
@@ -187,17 +207,17 @@ mod tests {
     }
 
     #[test]
-    fn test_install_ssh_keys_creates_dir_and_file() -> Result<(), String> {
+    fn test_write_authorized_keys_creates_dir_and_file() -> Result<(), String> {
         let tmp = std::env::temp_dir().join("ttyforce-ssh-test");
         let _cleanup = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
 
-        let etc = tmp.to_str().ok_or("invalid path")?;
+        let ssh_dir = tmp.join(".ssh");
+        let ssh_dir_str = ssh_dir.to_str().ok_or("invalid path")?;
         let keys = "ssh-ed25519 AAAAC3test1 user@host\nssh-rsa AAAAB3test2 user@host\n";
-        let path = install_ssh_keys(etc, keys)?;
-        assert!(path.contains("authorized_keys"));
+        write_authorized_keys(ssh_dir_str, keys)?;
 
-        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let content = std::fs::read_to_string(ssh_dir.join("authorized_keys"))
+            .map_err(|e| e.to_string())?;
         assert!(content.contains("ssh-ed25519 AAAAC3test1"));
         assert!(content.contains("ssh-rsa AAAAB3test2"));
 
@@ -206,18 +226,17 @@ mod tests {
     }
 
     #[test]
-    fn test_install_ssh_keys_deduplicates() -> Result<(), String> {
+    fn test_write_authorized_keys_deduplicates() -> Result<(), String> {
         let tmp = std::env::temp_dir().join("ttyforce-ssh-dedup-test");
         let _cleanup = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
 
-        let etc = tmp.to_str().ok_or("invalid path")?;
+        let ssh_dir = tmp.join(".ssh");
+        let ssh_dir_str = ssh_dir.to_str().ok_or("invalid path")?;
         let keys = "ssh-ed25519 AAAAC3test1 user@host\n";
-        install_ssh_keys(etc, keys)?;
-        let result = install_ssh_keys(etc, keys)?;
-        assert!(result.contains("already present"));
+        write_authorized_keys(ssh_dir_str, keys)?;
+        write_authorized_keys(ssh_dir_str, keys)?;
 
-        let content = std::fs::read_to_string(format!("{}/root/.ssh/authorized_keys", etc))
+        let content = std::fs::read_to_string(ssh_dir.join("authorized_keys"))
             .map_err(|e| e.to_string())?;
         let count = content.matches("ssh-ed25519 AAAAC3test1").count();
         assert_eq!(count, 1, "key should appear exactly once");

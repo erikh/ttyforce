@@ -301,12 +301,13 @@ impl GettyApp {
     }
 
     /// Check whether all system services are active (no activating/failed/inactive).
-    /// An empty service list is considered "all active" (nothing to wait for).
-    /// An API error is not — we can't confirm services are ready.
+    /// An empty service list or an API error means we can't confirm readiness.
     pub fn all_services_active(&self) -> bool {
         match &self.system_services {
-            Ok(services) => services.iter().all(|s| s.active_state == "active"),
-            Err(_) => false,
+            Ok(services) if !services.is_empty() => {
+                services.iter().all(|s| s.active_state == "active")
+            }
+            _ => false,
         }
     }
 
@@ -654,10 +655,10 @@ impl GettyApp {
             cmd_log_append(format!("  -> daemon-reload warning: {}", e));
         }
 
-        // Power off — the wipe service runs during shutdown after unmounts
-        let poweroff_op = Operation::PowerOff;
-        let result = executor.execute(&poweroff_op);
-        cmd_log_append(format!("  -> poweroff: {:?}", result));
+        // Reboot — the wipe service runs during shutdown after unmounts
+        let reboot_op = Operation::Reboot;
+        let result = executor.execute(&reboot_op);
+        cmd_log_append(format!("  -> reboot: {:?}", result));
     }
 
     fn render(&self, f: &mut ratatui::Frame) {
@@ -1260,7 +1261,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_sledgehammer_installs_wipe_service_and_powers_off() {
+    fn test_execute_sledgehammer_installs_wipe_service_and_reboots() {
         let mut app = test_app();
         let mut executor = MockExecutor::new(vec![]);
         app.execute_action(&GettyAction::Sledgehammer, &mut executor);
@@ -1339,8 +1340,8 @@ mod tests {
     #[test]
     fn test_all_services_active_empty() {
         let app = test_app();
-        // Empty services list = vacuously all active (nothing to wait for)
-        assert!(app.all_services_active());
+        // Empty services list means we can't confirm readiness
+        assert!(!app.all_services_active());
     }
 
     #[test]
