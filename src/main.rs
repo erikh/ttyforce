@@ -46,6 +46,9 @@ enum Command {
         /// TTY device to use for the TUI (e.g. /dev/tty1, /dev/ttyS0)
         #[arg(long)]
         tty: Option<String>,
+        /// Directory to write SSH authorized_keys into (e.g. /root/.ssh)
+        #[arg(long)]
+        ssh_dir: Option<String>,
     },
     /// Run as getty replacement (system status + login screen)
     Getty {
@@ -64,6 +67,9 @@ enum Command {
         /// Use initrd mode for reconfigure (no systemd dbus)
         #[arg(long)]
         initrd: bool,
+        /// GRUB menu entry for sledgehammer wipe boot (e.g. "2")
+        #[arg(long)]
+        sledgehammer_grub_entry: Option<String>,
     },
 }
 
@@ -82,19 +88,20 @@ fn main() {
             run_output(cli.input.as_deref(), cli.output.as_deref());
         }
         Command::Run => {
-            run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None, None);
+            run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None, None, None);
         }
-        Command::Initrd { etc_prefix, tty } => {
+        Command::Initrd { etc_prefix, tty, ssh_dir } => {
             run_installer(
                 cli.input.as_deref(),
                 cli.output.as_deref(),
                 true,
                 etc_prefix.as_deref(),
                 tty.as_deref(),
+                ssh_dir.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, shell, initrd } => {
-            run_getty(etc_prefix, tty, console, shell, initrd);
+        Command::Getty { etc_prefix, tty, console, shell, initrd, sledgehammer_grub_entry } => {
+            run_getty(etc_prefix, tty, console, shell, initrd, sledgehammer_grub_entry);
         }
     }
 }
@@ -203,6 +210,7 @@ fn run_installer(
     initrd: bool,
     etc_prefix: Option<&str>,
     tty: Option<&str>,
+    ssh_dir: Option<&str>,
 ) {
     let hardware = load_hardware(input, initrd);
 
@@ -214,6 +222,9 @@ fn run_installer(
     let mut state_machine = InstallerStateMachine::new(hardware);
     if let Some(target) = etc_prefix {
         state_machine.etc_prefix = Some(target.to_string());
+    }
+    if let Some(dir) = ssh_dir {
+        state_machine.ssh_dir = Some(dir.to_string());
     }
     let mut app = App::new(state_machine);
 
@@ -251,11 +262,12 @@ fn run_installer(
     }
 }
 
-fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, shell: bool, initrd: bool) {
+fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, shell: bool, initrd: bool, sledgehammer_grub_entry: Option<String>) {
     let tty_clone = tty.clone();
     let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string(), console);
     app.shell_enabled = shell;
     app.initrd_mode = initrd;
+    app.sledgehammer_grub_entry = sledgehammer_grub_entry;
     let mut executor = RealExecutor::new();
 
     if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {

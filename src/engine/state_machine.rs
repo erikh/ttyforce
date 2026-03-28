@@ -87,6 +87,9 @@ pub struct InstallerStateMachine {
     connectivity_retries: u32,
     pub wps_start_time: Option<std::time::Instant>,
     pub github_usernames: Vec<String>,
+    /// Directory to write SSH authorized_keys into (e.g. /root/.ssh).
+    /// If None, defaults to /root/.ssh.
+    pub ssh_dir: Option<String>,
 }
 
 impl InstallerStateMachine {
@@ -130,6 +133,7 @@ impl InstallerStateMachine {
             connectivity_retries: 0,
             wps_start_time: None,
             github_usernames: Vec::new(),
+            ssh_dir: None,
         }
     }
 
@@ -905,9 +909,13 @@ impl InstallerStateMachine {
         }
 
         // Import SSH keys from GitHub
+        let ssh_target = self
+            .ssh_dir
+            .clone()
+            .unwrap_or_else(|| "/root/.ssh".to_string());
         for username in &self.github_usernames.clone() {
             let op = Operation::ImportSshKeys {
-                etc_prefix: etc.clone(),
+                ssh_dir: ssh_target.clone(),
                 github_username: username.clone(),
             };
             let result = executor.execute(&op);

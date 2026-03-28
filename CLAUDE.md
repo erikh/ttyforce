@@ -42,6 +42,8 @@ The binary has five subcommands and two global flags.
       under this path (e.g., `<DIR>/systemd/network/`).
     - `--tty <DEVICE>` — TTY device to use for the TUI (e.g., `/dev/tty1`,
       `/dev/ttyS0`). Redirects stdin/stdout to the specified device.
+    - `--ssh-dir <DIR>` — Directory to write SSH authorized_keys into
+      (e.g., `/root/.ssh`). Defaults to `/root/.ssh`.
 - `getty` — Run as a getty replacement (login screen with system status).
   Designed to be invoked by agetty instead of `/bin/login`. Displays
   machine info, network/mDNS status, system stats (CPU, memory, disk),
@@ -58,6 +60,8 @@ The binary has five subcommands and two global flags.
     - `--shell` — Enable `[q]` Shell action to drop into `/bin/bash`.
     - `--initrd` — Use initrd mode for reconfigure (spawns
       `ttyforce initrd` instead of `ttyforce run`).
+    - `--sledgehammer-grub-entry <N>` — GRUB menu entry number for
+      the sledgehammer wipe boot. Required for `[!]` to work.
 
     Actions (key-triggered):
     - `[.]` Login — clears the screen, displays `/etc/issue` with
@@ -74,9 +78,10 @@ The binary has five subcommands and two global flags.
     - `[R]` Reboot — reboots the machine.
     - `[p]` Power Off — powers off the machine.
     - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
-      Discovers btrfs member devices, installs a systemd service
-      (`ttyforce-sledgehammer.service`) that wipes all disks during
-      shutdown (after all filesystems are unmounted), then reboots.
+      Runs `grub-reboot <entry>` to set a one-time GRUB boot entry
+      (configured via `--sledgehammer-grub-entry`), then reboots.
+      Requires `--sledgehammer-grub-entry` to be set; does nothing
+      without it.
 
     IMPORTANT — startup panel behavior (do not change):
     At getty startup, if services are NOT all active, the log panel
@@ -268,9 +273,8 @@ After a successful install, the `PersistNetworkConfig` operation writes:
 
 If the user provided GitHub usernames, `ImportSshKeys` writes:
 
-- `/root/.ssh/authorized_keys` — SSH keys on the live system (immediate use)
-- `<etc_prefix>/ssh/authorized_keys.d/github` — persisted copy for
-  boot-time restoration via the etc overlay
+- `<ssh_dir>/authorized_keys` — SSH keys written to the directory
+  specified by `--ssh-dir` (defaults to `/root/.ssh`)
 
 The `etc_prefix` is the directory that corresponds to `/etc` on the
 installed system. It defaults to `<mount_point>/@etc` (the Town OS
@@ -337,7 +341,7 @@ filesystem setup.
 4. CreateBtrfsSubvolume (@etc, @var — Town OS overlay subvolumes)
 5. GenerateFstab (mount service to <etc_prefix>/systemd/system/)
 6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/)
-7. ImportSshKeys (fetch from GitHub, write to /root/.ssh/ + persist to <etc_prefix>/)
+7. ImportSshKeys (fetch from GitHub, write to <ssh_dir>/authorized_keys)
 8. InstallBaseSystem (runs install.sh if present, otherwise no-op)
 9. CleanupUnmount (final unmount so systemd doesn't see stale mount)
 
@@ -393,11 +397,9 @@ Files written during install — all go inside the `@etc` btrfs subvolume
 - `<etc_prefix>/systemd/system/local-fs.target.wants/` — enable symlink
 - `<etc_prefix>/systemd/network/20-<iface>.network` — networkd DHCP unit
 - `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — wifi config
-- `<etc_prefix>/ssh/authorized_keys.d/github` — persisted SSH keys
-
 Writes to the running system (not etc_prefix):
 - `/etc/resolv.conf` — DNS resolution during install (overwritten on boot)
-- `/root/.ssh/authorized_keys` — SSH keys for immediate use
+- `<ssh_dir>/authorized_keys` — SSH keys (ssh_dir from `--ssh-dir`, defaults to `/root/.ssh`)
 
 ## TUI layout:
 

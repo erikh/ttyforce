@@ -122,7 +122,7 @@ pub enum Operation {
 
     // Import SSH keys from GitHub
     ImportSshKeys {
-        etc_prefix: String,
+        ssh_dir: String,
         github_username: String,
     },
 
@@ -271,8 +271,9 @@ impl std::fmt::Display for Operation {
             Operation::StopAllContainers => write!(f, "Stop all containers"),
             Operation::WipeDisk { device } => write!(f, "Wipe disk {}", device),
             Operation::ImportSshKeys {
-                github_username, ..
-            } => write!(f, "Import SSH keys from github.com/{}", github_username),
+                ssh_dir,
+                github_username,
+            } => write!(f, "Import SSH keys from github.com/{} to {}", github_username, ssh_dir),
         }
     }
 }

@@ -57,28 +57,11 @@ pub fn fetch_github_keys(username: &str) -> Result<String, String> {
     Ok(trimmed)
 }
 
-/// Install SSH keys to `/root/.ssh/authorized_keys` on the running system.
-/// Also persists a copy to `<etc_prefix>/ssh/authorized_keys.d/github`
-/// so the keys survive reboots via the etc overlay.
+/// Install SSH keys to `<ssh_dir>/authorized_keys`.
 /// Appends to any existing keys and deduplicates.
-pub fn install_ssh_keys(etc_prefix: &str, keys: &str) -> Result<String, String> {
-    // Write to the live system so keys work immediately
-    write_authorized_keys("/root/.ssh", keys)?;
-
-    // Persist to the etc overlay for boot-time restoration.
-    // Town OS can pick these up via sshd AuthorizedKeysFile or a systemd
-    // service that copies them to /root/.ssh/ at boot.
-    let persist_dir = format!("{}/ssh/authorized_keys.d", etc_prefix);
-    if std::fs::create_dir_all(&persist_dir).is_ok() {
-        let persist_path = format!("{}/github", persist_dir);
-        if let Err(e) = std::fs::write(&persist_path, keys) {
-            cmd_log_append(format!("  persist warning: write {}: {}", persist_path, e));
-        } else {
-            cmd_log_append(format!("  -> persisted to {}", persist_path));
-        }
-    }
-
-    Ok("/root/.ssh/authorized_keys".to_string())
+pub fn install_ssh_keys(ssh_dir: &str, keys: &str) -> Result<String, String> {
+    write_authorized_keys(ssh_dir, keys)?;
+    Ok(format!("{}/authorized_keys", ssh_dir))
 }
 
 /// Write keys to an authorized_keys file in the given ssh directory.
@@ -125,12 +108,12 @@ fn set_permissions(path: &str, mode: u32) -> Result<(), String> {
 
 /// Execute the ImportSshKeys operation: fetch keys from GitHub and install them.
 pub fn execute_import_ssh_keys(
-    etc_prefix: &str,
+    ssh_dir: &str,
     github_username: &str,
 ) -> OperationResult {
     cmd_log_append(format!(
-        "$ import SSH keys from github.com/{}",
-        github_username
+        "$ import SSH keys from github.com/{} -> {}",
+        github_username, ssh_dir
     ));
 
     if !is_valid_github_username(github_username) {
@@ -156,7 +139,7 @@ pub fn execute_import_ssh_keys(
     let key_count = keys.lines().filter(|l| !l.trim().is_empty()).count();
     cmd_log_append(format!("  found {} key(s)", key_count));
 
-    match install_ssh_keys(etc_prefix, &keys) {
+    match install_ssh_keys(ssh_dir, &keys) {
         Ok(path) => {
             cmd_log_append(format!("  -> ok: written to {}", path));
             OperationResult::Success
@@ -247,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_execute_import_invalid_username() {
-        let result = execute_import_ssh_keys("/tmp/nonexistent", "-bad-name-");
+        let result = execute_import_ssh_keys("/tmp/nonexistent/.ssh", "-bad-name-");
         assert!(result.is_error());
     }
 }

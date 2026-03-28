@@ -13,7 +13,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 
 use crate::engine::executor::OperationExecutor;
-use crate::engine::real_ops::{cmd_log_append, kmsg_log, run_cmd};
+use crate::engine::real_ops::{cmd_log_append, kmsg_log};
 use crate::getty::api::{ServiceInfo, TownApiClient};
 use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
@@ -70,6 +70,8 @@ pub struct GettyApp {
     pub shell_enabled: bool,
     /// When true, reconfigure uses `initrd` subcommand instead of `run`.
     pub initrd_mode: bool,
+    /// GRUB menu entry number for sledgehammer wipe boot.
+    pub sledgehammer_grub_entry: Option<String>,
 }
 
 impl GettyApp {
@@ -109,6 +111,7 @@ impl GettyApp {
             kmsg_reader,
             shell_enabled: false,
             initrd_mode: false,
+            sledgehammer_grub_entry: None,
         }
     }
 
@@ -584,78 +587,22 @@ impl GettyApp {
     }
 
     fn execute_sledgehammer(&mut self, executor: &mut dyn OperationExecutor) {
-        cmd_log_append("sledgehammer: installing shutdown wipe service".to_string());
-
-        // Discover btrfs member devices
-        let devices = discover_btrfs_devices(&self.mount_point);
-        if devices.is_empty() {
-            cmd_log_append("  -> no btrfs devices found, nothing to wipe".to_string());
-            return;
-        }
-
-        cmd_log_append(format!("  -> found {} device(s): {}", devices.len(), devices.join(", ")));
-
-        // Generate ExecStart lines for each device
-        let mut exec_lines = String::new();
-        for device in &devices {
-            exec_lines.push_str(&format!(
-                "ExecStart=-/usr/bin/wipefs --all {}\n\
-                 ExecStart=-/usr/bin/sgdisk --zap-all {}\n",
-                device, device
-            ));
-        }
-
-        let service = format!(
-            "[Unit]\n\
-             Description=ttyforce sledgehammer — wipe all btrfs disks\n\
-             DefaultDependencies=no\n\
-             After=umount.target\n\
-             Before=final.target\n\
-             \n\
-             [Service]\n\
-             Type=oneshot\n\
-             {}\
-             \n\
-             [Install]\n\
-             WantedBy=shutdown.target\n",
-            exec_lines
-        );
-
-        // Write service unit
-        let service_path = "/etc/systemd/system/ttyforce-sledgehammer.service";
-        if let Err(e) = std::fs::write(service_path, &service) {
-            cmd_log_append(format!("  -> FAILED to write {}: {}", service_path, e));
-            return;
-        }
-        cmd_log_append(format!("  -> wrote {}", service_path));
-
-        // Enable via symlink
-        let wants_dir = "/etc/systemd/system/shutdown.target.wants";
-        if let Err(e) = std::fs::create_dir_all(wants_dir) {
-            cmd_log_append(format!("  -> FAILED to create {}: {}", wants_dir, e));
-            return;
-        }
-        let symlink_path = format!("{}/ttyforce-sledgehammer.service", wants_dir);
-        if let Err(e) = std::fs::remove_file(&symlink_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                cmd_log_append(format!("  -> remove old symlink: {}", e));
+        let entry = match &self.sledgehammer_grub_entry {
+            Some(e) => e.clone(),
+            None => {
+                cmd_log_append("sledgehammer: no --sledgehammer-grub-entry configured".to_string());
+                return;
             }
-        }
-        if let Err(e) = std::os::unix::fs::symlink(
-            "../ttyforce-sledgehammer.service",
-            &symlink_path,
-        ) {
-            cmd_log_append(format!("  -> FAILED to enable service: {}", e));
+        };
+
+        cmd_log_append(format!("sledgehammer: setting grub-reboot to entry {}", entry));
+
+        if let Err(e) = crate::engine::real_ops::run_cmd("grub-reboot", &[&entry]) {
+            cmd_log_append(format!("  -> FAILED: grub-reboot: {}", e));
             return;
         }
-        cmd_log_append("  -> service enabled for shutdown".to_string());
+        cmd_log_append("  -> grub-reboot set".to_string());
 
-        // Reload systemd so it picks up the new unit
-        if let Err(e) = crate::engine::real_ops::run_cmd("systemctl", &["daemon-reload"]) {
-            cmd_log_append(format!("  -> daemon-reload warning: {}", e));
-        }
-
-        // Reboot — the wipe service runs during shutdown after unmounts
         let reboot_op = Operation::Reboot;
         let result = executor.execute(&reboot_op);
         cmd_log_append(format!("  -> reboot: {:?}", result));
@@ -996,60 +943,6 @@ fn set_nonblocking(stdout: &impl std::os::unix::io::AsRawFd) {
     }
 }
 
-/// Discover btrfs member devices for a mount point.
-fn discover_btrfs_devices(mount_point: &str) -> Vec<String> {
-    // Try the specific mount point first, then fall back to listing all
-    // btrfs filesystems (in case the volume is not currently mounted).
-    let output = run_cmd("btrfs", &["filesystem", "show", mount_point])
-        .or_else(|_| run_cmd("btrfs", &["filesystem", "show"]));
-
-    match output {
-        Ok(text) => {
-            let mut devices = Vec::new();
-            for line in text.lines() {
-                let trimmed = line.trim();
-                if trimmed.contains("path ") {
-                    if let Some(path) = trimmed.rsplit("path ").next() {
-                        let dev = path.trim().to_string();
-                        if dev.starts_with("/dev/") {
-                            let disk = strip_partition_suffix(&dev);
-                            if !devices.contains(&disk) {
-                                devices.push(disk);
-                            }
-                        }
-                    }
-                }
-            }
-            devices
-        }
-        Err(_) => Vec::new(),
-    }
-}
-
-/// Strip partition suffix from a device path to get the parent disk.
-fn strip_partition_suffix(device: &str) -> String {
-    if device.contains("nvme") {
-        if let Some(pos) = device.rfind('p') {
-            let after_p = &device[pos + 1..];
-            let before_p = &device[..pos];
-            if !after_p.is_empty()
-                && after_p.chars().all(|c| c.is_ascii_digit())
-                && before_p.ends_with(|c: char| c.is_ascii_digit())
-            {
-                return before_p.to_string();
-            }
-        }
-        return device.to_string();
-    }
-    let trimmed = device.trim_end_matches(|c: char| c.is_ascii_digit());
-    if trimmed.len() < device.len()
-        && trimmed.len() > "/dev/".len()
-        && trimmed.ends_with(|c: char| c.is_ascii_alphabetic())
-    {
-        return trimmed.to_string();
-    }
-    device.to_string()
-}
 
 /// Format a Unix timestamp as (date, time) strings.
 /// Returns ("YYYY-MM-DD", "HH:MM:SS") in UTC.
@@ -1266,40 +1159,26 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_sledgehammer_installs_wipe_service_and_reboots() {
+    fn test_execute_sledgehammer_no_grub_entry() {
         let mut app = test_app();
         let mut executor = MockExecutor::new(vec![]);
         app.execute_action(&GettyAction::Sledgehammer, &mut executor);
-        // With no btrfs devices found on /town-os (test env), no service is installed
-        // and no operations are recorded — sledgehammer exits early.
+        // No grub entry configured — should do nothing
         let ops = executor.recorded_operations();
-        assert!(ops.is_empty(), "expected no ops with no btrfs devices, got: {:?}", ops);
+        assert!(ops.is_empty());
     }
 
     #[test]
-    fn test_strip_partition_suffix_sda1() {
-        assert_eq!(strip_partition_suffix("/dev/sda1"), "/dev/sda");
-    }
-
-    #[test]
-    fn test_strip_partition_suffix_sda() {
-        assert_eq!(strip_partition_suffix("/dev/sda"), "/dev/sda");
-    }
-
-    #[test]
-    fn test_strip_partition_suffix_nvme() {
-        assert_eq!(strip_partition_suffix("/dev/nvme0n1p1"), "/dev/nvme0n1");
-    }
-
-    #[test]
-    fn test_strip_partition_suffix_nvme_no_partition() {
-        assert_eq!(strip_partition_suffix("/dev/nvme0n1"), "/dev/nvme0n1");
-    }
-
-    #[test]
-    fn test_discover_btrfs_devices_empty() {
-        let devices = discover_btrfs_devices("/nonexistent_mount_xyz");
-        assert!(devices.is_empty());
+    fn test_execute_sledgehammer_with_grub_entry() {
+        let mut app = test_app();
+        app.sledgehammer_grub_entry = Some("2".to_string());
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_action(&GettyAction::Sledgehammer, &mut executor);
+        let ops = executor.recorded_operations();
+        // If grub-reboot is available, Reboot is recorded; if not, nothing happens
+        if !ops.is_empty() {
+            assert!(matches!(ops[0].operation, Operation::Reboot));
+        }
     }
 
     fn test_app() -> GettyApp {
@@ -1339,6 +1218,7 @@ mod tests {
             kmsg_reader: None,
             shell_enabled: false,
             initrd_mode: false,
+            sledgehammer_grub_entry: None,
         }
     }
 

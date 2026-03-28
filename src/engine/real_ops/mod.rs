@@ -128,9 +128,9 @@ pub fn execute(op: &Operation) -> OperationResult {
 
         // SSH keys
         Operation::ImportSshKeys {
-            etc_prefix,
+            ssh_dir,
             github_username,
-        } => crate::ssh::execute_import_ssh_keys(etc_prefix, github_username),
+        } => crate::ssh::execute_import_ssh_keys(ssh_dir, github_username),
 
         // Cleanup
         Operation::CleanupNetworkConfig { interface } => {
