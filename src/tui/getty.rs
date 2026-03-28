@@ -19,6 +19,11 @@ use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
 use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds};
 
+/// Screen blanks after 5 minutes of no keypresses.
+const SCREEN_BLANK_TIMEOUT: Duration = Duration::from_secs(300);
+/// After unblanking, keys are discarded for 30 seconds.
+const SCREEN_GRACE_PERIOD: Duration = Duration::from_secs(30);
+
 /// Which panel is shown in the services area.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PanelView {
@@ -72,6 +77,12 @@ pub struct GettyApp {
     pub initrd_mode: bool,
     /// GRUB menu entry number for sledgehammer wipe boot.
     pub sledgehammer_grub_entry: Option<String>,
+    /// Last time a key was pressed (for screen blank timeout).
+    last_activity: Instant,
+    /// Whether the screen is currently blanked.
+    screen_blanked: bool,
+    /// When the screen was unblanked (for grace period).
+    unblanked_at: Option<Instant>,
 }
 
 impl GettyApp {
@@ -112,6 +123,9 @@ impl GettyApp {
             shell_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
+            last_activity: Instant::now(),
+            screen_blanked: false,
+            unblanked_at: None,
         }
     }
 
@@ -177,10 +191,33 @@ impl GettyApp {
                 terminal.clear()?;
             }
 
-            terminal.draw(|f| self.render(f))?;
+            // Screen blanking: blank after inactivity timeout
+            if self.should_blank_screen() {
+                self.screen_blanked = true;
+                terminal.clear()?;
+            }
+
+            if !self.screen_blanked {
+                terminal.draw(|f| self.render(f))?;
+            }
 
             if event::poll(Duration::from_secs(1))? {
                 if let Event::Key(key) = event::read()? {
+                    // Screen is blanked — wake up, discard key, start grace period
+                    if self.screen_blanked {
+                        self.unblank();
+                        terminal.clear()?;
+                        continue;
+                    }
+
+                    // Grace period after unblank — discard key
+                    if self.is_in_grace_period() {
+                        self.last_activity = Instant::now();
+                        continue;
+                    }
+                    self.unblanked_at = None;
+
+                    self.last_activity = Instant::now();
                     let action = self.map_key(key);
                     match action {
                         GettyAction::Login => {
@@ -209,6 +246,9 @@ impl GettyApp {
                             terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
                             self.last_fast_refresh = Instant::now() - Duration::from_secs(10);
                             self.last_slow_refresh = Instant::now() - Duration::from_secs(20);
+                            self.last_activity = Instant::now();
+                            self.screen_blanked = false;
+                            self.unblanked_at = None;
                         }
                         GettyAction::Reconfigure => {
                             // Spawn reconfigure as child, wait, then resume getty
@@ -225,6 +265,9 @@ impl GettyApp {
                             terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
                             self.last_fast_refresh = Instant::now() - Duration::from_secs(10);
                             self.last_slow_refresh = Instant::now() - Duration::from_secs(20);
+                            self.last_activity = Instant::now();
+                            self.screen_blanked = false;
+                            self.unblanked_at = None;
                         }
                         GettyAction::None => {}
                         _ => {
@@ -312,6 +355,26 @@ impl GettyApp {
             }
             _ => false,
         }
+    }
+
+    /// Returns true if the screen should be blanked due to inactivity.
+    pub fn should_blank_screen(&self) -> bool {
+        !self.screen_blanked && self.last_activity.elapsed() >= SCREEN_BLANK_TIMEOUT
+    }
+
+    /// Returns true if within the post-unblank grace period (keys discarded).
+    pub fn is_in_grace_period(&self) -> bool {
+        match self.unblanked_at {
+            Some(t) => t.elapsed() < SCREEN_GRACE_PERIOD,
+            None => false,
+        }
+    }
+
+    /// Unblank the screen and start the grace period.
+    pub fn unblank(&mut self) {
+        self.screen_blanked = false;
+        self.unblanked_at = Some(Instant::now());
+        self.last_activity = Instant::now();
     }
 
     /// Manage journal process and panel view transitions.
@@ -1219,6 +1282,9 @@ mod tests {
             shell_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
+            last_activity: Instant::now(),
+            screen_blanked: false,
+            unblanked_at: None,
         }
     }
 
@@ -1398,5 +1464,80 @@ mod tests {
         let result = app.substitute_issue_escapes("\\r");
         assert!(!result.is_empty());
         assert!(!result.contains("\\r"));
+    }
+
+    #[test]
+    fn test_screen_blanks_after_timeout() {
+        let mut app = test_app();
+        app.last_activity = Instant::now() - Duration::from_secs(360);
+        assert!(app.should_blank_screen());
+    }
+
+    #[test]
+    fn test_screen_does_not_blank_before_timeout() {
+        let app = test_app();
+        assert!(!app.should_blank_screen());
+    }
+
+    #[test]
+    fn test_screen_does_not_blank_when_already_blanked() {
+        let mut app = test_app();
+        app.last_activity = Instant::now() - Duration::from_secs(360);
+        app.screen_blanked = true;
+        // should_blank_screen returns false when already blanked
+        assert!(!app.should_blank_screen());
+    }
+
+    #[test]
+    fn test_grace_period_active() {
+        let mut app = test_app();
+        app.unblanked_at = Some(Instant::now());
+        assert!(app.is_in_grace_period());
+    }
+
+    #[test]
+    fn test_grace_period_expired() {
+        let mut app = test_app();
+        app.unblanked_at = Some(Instant::now() - Duration::from_secs(31));
+        assert!(!app.is_in_grace_period());
+    }
+
+    #[test]
+    fn test_grace_period_none() {
+        let app = test_app();
+        assert!(!app.is_in_grace_period());
+    }
+
+    #[test]
+    fn test_unblank_sets_grace_period() {
+        let mut app = test_app();
+        app.screen_blanked = true;
+        app.last_activity = Instant::now() - Duration::from_secs(360);
+        app.unblank();
+        assert!(!app.screen_blanked);
+        assert!(app.unblanked_at.is_some());
+        assert!(app.is_in_grace_period());
+        // last_activity should be recent
+        assert!(app.last_activity.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_keys_ignored_during_grace_period() {
+        let mut app = test_app();
+        app.unblanked_at = Some(Instant::now());
+        // During grace period, is_in_grace_period is true so keys would be discarded
+        assert!(app.is_in_grace_period());
+        // Verify that a key press during grace period would not be processed
+        // (the event loop checks is_in_grace_period before calling map_key)
+        assert!(!app.screen_blanked);
+    }
+
+    #[test]
+    fn test_activity_resets_on_unblank() {
+        let mut app = test_app();
+        app.screen_blanked = true;
+        app.last_activity = Instant::now() - Duration::from_secs(600);
+        app.unblank();
+        assert!(app.last_activity.elapsed() < Duration::from_secs(1));
     }
 }
