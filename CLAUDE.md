@@ -49,25 +49,34 @@ The binary has five subcommands and two global flags.
   services are starting, shows live `journalctl -f` output. Has its
   own flags:
     - `--etc-prefix <DIR>` — Same as initrd; passed through to
-      `ttyforce run` on reconfigure.
+      reconfigure subprocess.
     - `--tty <DEVICE>` — TTY device to use for the TUI.
     - `--console` — Listen to `/dev/kmsg` and force a full TUI repaint
       whenever kernel messages arrive. Use this when running on a console
       TTY (e.g. `/dev/tty1`) where kernel/systemd messages bleed through
       and corrupt the display.
+    - `--shell` — Enable `[q]` Shell action to drop into `/bin/bash`.
+    - `--initrd` — Use initrd mode for reconfigure (spawns
+      `ttyforce initrd` instead of `ttyforce run`).
 
     Actions (key-triggered):
-    - `[.]` Login — `exec` into `/bin/login`, replacing the ttyforce
-      process. agetty respawns ttyforce after the shell exits.
+    - `[.]` Login — clears the screen, displays `/etc/issue` with
+      agetty-style escape substitutions (\n hostname, \l tty, \d date,
+      \t time, \s OS, \m arch, \r kernel), then `exec`s into
+      `/bin/login`. agetty respawns ttyforce after the shell exits.
+    - `[q]` Shell (only when `--shell` is passed) — spawns `/bin/bash`
+      as a child process, resumes getty when the shell exits.
     - `[l]` Log — show live journalctl output panel.
     - `[s]` Status — show service status panel.
-    - `[r]` Reconfigure — spawns `ttyforce run` as a child process with
-      the same `--etc-prefix`/`--tty` flags, resumes getty when done.
+    - `[r]` Reconfigure — spawns `ttyforce run` (or `ttyforce initrd`
+      when `--initrd` is set) as a child process with the same
+      `--etc-prefix`/`--tty` flags, resumes getty when done.
     - `[R]` Reboot — reboots the machine.
     - `[p]` Power Off — powers off the machine.
     - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
-      Stops all podman containers, unmounts /town-os, wipes all btrfs
-      member disks, reboots.
+      Discovers btrfs member devices, installs a systemd service
+      (`ttyforce-sledgehammer.service`) that wipes all disks during
+      shutdown (after unmounts), then powers off the machine.
 
     IMPORTANT — startup panel behavior (do not change):
     At getty startup, if services are NOT all active, the log panel
@@ -105,6 +114,9 @@ ttyforce run -i hw.toml                  # TUI with mock executor
 ttyforce getty                           # getty replacement (system status + login)
 ttyforce getty --tty /dev/tty1           # getty on specific TTY
 ttyforce getty --etc-prefix /mnt/root    # getty with custom etc prefix
+ttyforce getty --initrd                  # getty with initrd reconfigure mode
+ttyforce getty --shell                   # getty with [q] shell action
+ttyforce getty --console --initrd        # getty on console TTY in initrd mode
 ```
 
 # DESIGN:
@@ -240,6 +252,7 @@ dbus calls. Two executor backends exist:
 - `btrfs` — subvolume management
 - `<mount>/install.sh` — custom install script (optional)
 - `pkill` — cleanup of dhcpcd/wpa_supplicant processes
+- `curl` — fetch SSH public keys from GitHub (`https://github.com/<user>.keys`)
 
 ## Config persistence:
 
@@ -249,8 +262,15 @@ After a successful install, the `PersistNetworkConfig` operation writes:
   matched by MAC address (not interface name) so it works regardless of
   interface naming scheme (initrd may use `eth0` while booted system uses
   `enp3s0`). Falls back to name matching if MAC is unavailable.
+  Includes `MulticastDNS=yes` for mDNS (.local) hostname resolution.
 - `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
   used, copies the wpa_supplicant config from `/tmp/`
+
+If the user provided GitHub usernames, `ImportSshKeys` writes:
+
+- `/root/.ssh/authorized_keys` — SSH keys on the live system (immediate use)
+- `<etc_prefix>/ssh/authorized_keys.d/github` — persisted copy for
+  boot-time restoration via the etc overlay
 
 The `etc_prefix` is the directory that corresponds to `/etc` on the
 installed system. It defaults to `<mount_point>/@etc` (the Town OS
@@ -373,10 +393,11 @@ Files written during install — all go inside the `@etc` btrfs subvolume
 - `<etc_prefix>/systemd/system/local-fs.target.wants/` — enable symlink
 - `<etc_prefix>/systemd/network/20-<iface>.network` — networkd DHCP unit
 - `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — wifi config
+- `<etc_prefix>/ssh/authorized_keys.d/github` — persisted SSH keys
 
-The ONLY write to the running system's /etc during initrd mode is
-`/etc/resolv.conf` — this is necessary for DNS resolution during the
-install process and is overwritten by the installed system on boot.
+Writes to the running system (not etc_prefix):
+- `/etc/resolv.conf` — DNS resolution during install (overwritten on boot)
+- `/root/.ssh/authorized_keys` — SSH keys for immediate use
 
 ## TUI layout:
 

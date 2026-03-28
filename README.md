@@ -50,6 +50,15 @@ ttyforce getty --tty /dev/tty1
 
 # Getty with custom etc prefix (passed through on reconfigure)
 ttyforce getty --etc-prefix /mnt/root
+
+# Getty with initrd reconfigure mode
+ttyforce getty --initrd
+
+# Getty with shell access via [q] key
+ttyforce getty --shell
+
+# Getty on console TTY in initrd mode
+ttyforce getty --console --initrd
 ```
 
 ### Subcommands
@@ -60,7 +69,7 @@ ttyforce getty --etc-prefix /mnt/root
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
 | `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location and `--tty` for TTY device selection. |
-| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`; agetty respawns ttyforce after the shell exits. `l`/`s` toggle between log and status panels. Supports `--etc-prefix`, `--tty`, and `--console` (repaint on kernel messages). |
+| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. At startup, shows live journal output until all services are active, then switches to the status panel. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`. Supports `--etc-prefix`, `--tty`, `--console`, `--shell` (enable `[q]` to drop into bash), and `--initrd` (use initrd mode for reconfigure). |
 
 ### Global flags
 
@@ -134,6 +143,11 @@ Two executor backends are available:
   - `btrfs` — subvolume management
   - `install.sh` — custom install script (optional)
   - `pkill` — cleanup of dhcpcd/wpa_supplicant processes
+  - `curl` — fetch SSH public keys from GitHub
+
+### SSH key import
+
+During installation, after confirming disk setup, ttyforce prompts for GitHub usernames to import SSH keys from. Enter usernames one at a time; press Enter on a blank line or type `q` to finish and proceed with the install. Keys are fetched from `https://github.com/<username>.keys` via `curl` and written to `/root/.ssh/authorized_keys` on the live system. A copy is also persisted to `<etc_prefix>/ssh/authorized_keys.d/github` for boot-time restoration.
 
 ### Hardware detection
 
