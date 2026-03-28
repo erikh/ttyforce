@@ -54,9 +54,6 @@ ttyforce getty --etc-prefix /mnt/root
 # Getty with initrd reconfigure mode
 ttyforce getty --initrd
 
-# Getty with shell access via [q] key
-ttyforce getty --shell
-
 # Getty on console TTY in initrd mode
 ttyforce getty --console --initrd
 ```
@@ -69,7 +66,7 @@ ttyforce getty --console --initrd
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
 | `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location and `--tty` for TTY device selection. |
-| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. At startup, shows live journal output until all services are active, then switches to the status panel. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`. Supports `--etc-prefix`, `--tty`, `--console`, `--shell` (enable `[q]` to drop into bash), and `--initrd` (use initrd mode for reconfigure). |
+| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. At startup, shows live journal output until all services are active, then switches to the status panel. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`. Supports `--etc-prefix`, `--tty`, `--console`, and `--initrd` (use initrd mode for reconfigure). |
 
 ### Global flags
 

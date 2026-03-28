@@ -40,7 +40,6 @@ pub enum PanelView {
 pub enum GettyAction {
     None,
     Login,
-    Shell,
     Reconfigure,
     Reboot,
     PowerOff,
@@ -71,8 +70,6 @@ pub struct GettyApp {
     journal_max_lines: usize,
     /// Non-blocking reader for /dev/kmsg (only when --console is set).
     kmsg_reader: Option<BufReader<File>>,
-    /// When true, show a [q] Shell action that execs $SHELL.
-    pub shell_enabled: bool,
     /// When true, reconfigure uses `initrd` subcommand instead of `run`.
     pub initrd_mode: bool,
     /// GRUB menu entry number for sledgehammer wipe boot.
@@ -120,7 +117,6 @@ impl GettyApp {
             journal_child: None,
             journal_max_lines: 200,
             kmsg_reader,
-            shell_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
             last_activity: Instant::now(),
@@ -233,23 +229,6 @@ impl GettyApp {
                             enable_raw_mode()?;
                             terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
                         }
-                        GettyAction::Shell => {
-                            // Spawn $SHELL as a child, wait, then resume getty.
-                            self.stop_journal();
-                            disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-                            self.run_shell();
-                            // Re-enter TUI after shell exits
-                            let mut new_stdout = io::stdout();
-                            execute!(new_stdout, EnterAlternateScreen)?;
-                            enable_raw_mode()?;
-                            terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
-                            self.last_fast_refresh = Instant::now() - Duration::from_secs(10);
-                            self.last_slow_refresh = Instant::now() - Duration::from_secs(20);
-                            self.last_activity = Instant::now();
-                            self.screen_blanked = false;
-                            self.unblanked_at = None;
-                        }
                         GettyAction::Reconfigure => {
                             // Spawn reconfigure as child, wait, then resume getty
                             self.stop_journal();
@@ -334,7 +313,6 @@ impl GettyApp {
                 self.panel_view = PanelView::Status;
                 GettyAction::None
             }
-            KeyCode::Char('q') if self.shell_enabled => GettyAction::Shell,
             KeyCode::Char('r') => GettyAction::Reconfigure,
             KeyCode::Char('R') => GettyAction::Reboot,
             KeyCode::Char('p') => GettyAction::PowerOff,
@@ -580,21 +558,6 @@ impl GettyApp {
         result
     }
 
-    /// Spawn /bin/bash as a child process and wait for it to exit.
-    fn run_shell(&self) {
-        let shell = "/bin/bash";
-        cmd_log_append(format!("$ {}", shell));
-        match Command::new(shell).status() {
-            Ok(status) => {
-                cmd_log_append(format!("  -> shell exited: {}", status));
-            }
-            Err(e) => {
-                cmd_log_append(format!("  -> failed to run {}: {}", shell, e));
-                eprintln!("failed to run {}: {}", shell, e);
-            }
-        }
-    }
-
     /// Exec into /bin/login, replacing this process entirely.
     /// Only returns if exec fails.
     fn exec_login(&self) {
@@ -612,7 +575,7 @@ impl GettyApp {
         executor: &mut dyn OperationExecutor,
     ) {
         match action {
-            GettyAction::None | GettyAction::Login | GettyAction::Shell => {}
+            GettyAction::None | GettyAction::Login => {}
             GettyAction::Reconfigure => {
                 let exe = std::env::current_exe()
                     .unwrap_or_else(|_| "ttyforce".into());
@@ -930,11 +893,7 @@ impl GettyApp {
     }
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
-        let text = if self.shell_enabled {
-            "  [.] Login   [q] Shell   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe"
-        } else {
-            "  [.] Login   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe"
-        };
+        let text = "  [.] Login   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe";
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::White))
@@ -1279,7 +1238,6 @@ mod tests {
             journal_child: None,
             journal_max_lines: 200,
             kmsg_reader: None,
-            shell_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
             last_activity: Instant::now(),
@@ -1320,34 +1278,6 @@ mod tests {
         let mut app = test_app();
         app.system_services = Err("API unavailable".into());
         assert!(!app.all_services_active());
-    }
-
-    #[test]
-    fn test_key_shell_disabled_by_default() {
-        let mut app = test_app();
-        assert!(!app.shell_enabled);
-        let key = KeyEvent::from(KeyCode::Char('q'));
-        // q should be ignored when shell is disabled
-        assert_eq!(app.map_key(key), GettyAction::None);
-    }
-
-    #[test]
-    fn test_key_shell_enabled() {
-        let mut app = test_app();
-        app.shell_enabled = true;
-        let key = KeyEvent::from(KeyCode::Char('q'));
-        assert_eq!(app.map_key(key), GettyAction::Shell);
-    }
-
-    #[test]
-    #[test]
-    fn test_shell_action_not_executed_by_execute_action() {
-        // Shell is handled in the TUI loop (spawn child), not execute_action
-        let mut app = test_app();
-        let mut executor = MockExecutor::new(vec![]);
-        app.execute_action(&GettyAction::Shell, &mut executor);
-        let ops = executor.recorded_operations();
-        assert!(ops.is_empty());
     }
 
     #[test]

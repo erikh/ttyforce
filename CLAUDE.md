@@ -58,7 +58,6 @@ The binary has five subcommands and two global flags.
       whenever kernel messages arrive. Use this when running on a console
       TTY (e.g. `/dev/tty1`) where kernel/systemd messages bleed through
       and corrupt the display.
-    - `--shell` — Enable `[q]` Shell action to drop into `/bin/bash`.
     - `--initrd` — Use initrd mode for reconfigure (spawns
       `ttyforce initrd` instead of `ttyforce run`).
     - `--sledgehammer-grub-entry <N>` — GRUB menu entry number for
@@ -69,8 +68,6 @@ The binary has five subcommands and two global flags.
       agetty-style escape substitutions (\n hostname, \l tty, \d date,
       \t time, \s OS, \m arch, \r kernel), then `exec`s into
       `/bin/login`. agetty respawns ttyforce after the shell exits.
-    - `[q]` Shell (only when `--shell` is passed) — spawns `/bin/bash`
-      as a child process, resumes getty when the shell exits.
     - `[l]` Log — show live journalctl output panel.
     - `[s]` Status — show service status panel.
     - `[r]` Reconfigure — spawns `ttyforce run` (or `ttyforce initrd`
@@ -121,7 +118,6 @@ ttyforce getty                           # getty replacement (system status + lo
 ttyforce getty --tty /dev/tty1           # getty on specific TTY
 ttyforce getty --etc-prefix /mnt/root    # getty with custom etc prefix
 ttyforce getty --initrd                  # getty with initrd reconfigure mode
-ttyforce getty --shell                   # getty with [q] shell action
 ttyforce getty --console --initrd        # getty on console TTY in initrd mode
 ```
 

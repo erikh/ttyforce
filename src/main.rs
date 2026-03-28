@@ -61,9 +61,6 @@ enum Command {
         /// Listen to /dev/kmsg and repaint on kernel messages (use on console TTYs)
         #[arg(long)]
         console: bool,
-        /// Enable [q] Shell action to drop into $SHELL
-        #[arg(long)]
-        shell: bool,
         /// Use initrd mode for reconfigure (no systemd dbus)
         #[arg(long)]
         initrd: bool,
@@ -100,8 +97,8 @@ fn main() {
                 ssh_user.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, shell, initrd, sledgehammer_grub_entry } => {
-            run_getty(etc_prefix, tty, console, shell, initrd, sledgehammer_grub_entry);
+        Command::Getty { etc_prefix, tty, console, initrd, sledgehammer_grub_entry } => {
+            run_getty(etc_prefix, tty, console, initrd, sledgehammer_grub_entry);
         }
     }
 }
@@ -266,10 +263,9 @@ fn run_installer(
     }
 }
 
-fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, shell: bool, initrd: bool, sledgehammer_grub_entry: Option<String>) {
+fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, initrd: bool, sledgehammer_grub_entry: Option<String>) {
     let tty_clone = tty.clone();
     let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string(), console);
-    app.shell_enabled = shell;
     app.initrd_mode = initrd;
     app.sledgehammer_grub_entry = sledgehammer_grub_entry;
     let mut executor = RealExecutor::new();
