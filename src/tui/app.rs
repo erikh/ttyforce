@@ -785,17 +785,29 @@ impl App {
     }
 
     fn render_ssh_key_import(&self, f: &mut ratatui::Frame, area: Rect) {
+        let current_user = self.state_machine.ssh_users
+            .get(self.state_machine.ssh_current_user_idx)
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        let user_count = self.state_machine.ssh_users.len();
+        let user_num = self.state_machine.ssh_current_user_idx + 1;
+
         let mut lines = vec![
-            "  Import SSH keys from GitHub".to_string(),
+            format!("  Import SSH keys for: {} (user {} of {})", current_user, user_num, user_count),
             String::new(),
-            "  Keys will be written to root's authorized_keys on the".to_string(),
-            "  installed system.".to_string(),
+            format!("  Keys will be written to {}/ssh/authorized_keys/{}", self.state_machine.mount_point, current_user),
             String::new(),
         ];
 
-        if !self.state_machine.github_usernames.is_empty() {
-            lines.push("  Queued users:".to_string());
-            for name in &self.state_machine.github_usernames {
+        let queued = self.state_machine.ssh_keys
+            .get(current_user)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        if !queued.is_empty() {
+            lines.push("  Queued GitHub users:".to_string());
+            for name in queued {
                 lines.push(format!("    - {}", name));
             }
             lines.push(String::new());
@@ -913,12 +925,14 @@ impl App {
                     let username = self.ssh_username_input.trim().to_string();
                     self.ssh_username_input.clear();
                     if username.is_empty() || username == "q" {
-                        // Done entering usernames — proceed to install
+                        // Done entering usernames for this user — skip to next or install
                         self.state_machine
                             .process_input(UserInput::SkipSshKeys, executor);
                         self.selected_index = 0;
-                        // Install ran synchronously — quit the TUI
-                        self.should_quit = true;
+                        // If install ran (no more users), quit the TUI
+                        if self.state_machine.current_screen != ScreenId::SshKeyImport {
+                            self.should_quit = true;
+                        }
                     } else {
                         self.state_machine
                             .process_input(UserInput::ImportSshKeys(username), executor);

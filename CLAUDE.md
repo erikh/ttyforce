@@ -42,8 +42,9 @@ The binary has five subcommands and two global flags.
       under this path (e.g., `<DIR>/systemd/network/`).
     - `--tty <DEVICE>` — TTY device to use for the TUI (e.g., `/dev/tty1`,
       `/dev/ttyS0`). Redirects stdin/stdout to the specified device.
-    - `--ssh-dir <DIR>` — Directory to write SSH authorized_keys into
-      (e.g., `/root/.ssh`). Defaults to `/root/.ssh`.
+    - `--ssh-user <users>` — System users to import SSH keys for
+      (comma-separated, e.g. `root,erikh`). Keys are written to
+      `<mount_point>/ssh/authorized_keys/<username>`.
 - `getty` — Run as a getty replacement (login screen with system status).
   Designed to be invoked by agetty instead of `/bin/login`. Displays
   machine info, network/mDNS status, system stats (CPU, memory, disk),
@@ -271,10 +272,10 @@ After a successful install, the `PersistNetworkConfig` operation writes:
 - `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — if wifi was
   used, copies the wpa_supplicant config from `/tmp/`
 
-If the user provided GitHub usernames, `ImportSshKeys` writes:
+If the user provided GitHub usernames via `--ssh-user`, `ImportSshKeys` writes:
 
-- `<ssh_dir>/authorized_keys` — SSH keys written to the directory
-  specified by `--ssh-dir` (defaults to `/root/.ssh`)
+- `<mount_point>/ssh/authorized_keys/<username>` — SSH keys for each
+  system user, fetched from GitHub
 
 The `etc_prefix` is the directory that corresponds to `/etc` on the
 installed system. It defaults to `<mount_point>/@etc` (the Town OS
@@ -341,7 +342,7 @@ filesystem setup.
 4. CreateBtrfsSubvolume (@etc, @var — Town OS overlay subvolumes)
 5. GenerateFstab (mount service to <etc_prefix>/systemd/system/)
 6. PersistNetworkConfig (networkd unit + wpa config to <etc_prefix>/)
-7. ImportSshKeys (fetch from GitHub, write to <ssh_dir>/authorized_keys)
+7. ImportSshKeys (fetch from GitHub, write to <mount_point>/ssh/authorized_keys/<username>)
 8. InstallBaseSystem (runs install.sh if present, otherwise no-op)
 9. CleanupUnmount (final unmount so systemd doesn't see stale mount)
 
@@ -399,7 +400,7 @@ Files written during install — all go inside the `@etc` btrfs subvolume
 - `<etc_prefix>/wpa_supplicant/wpa_supplicant-<iface>.conf` — wifi config
 Writes to the running system (not etc_prefix):
 - `/etc/resolv.conf` — DNS resolution during install (overwritten on boot)
-- `<ssh_dir>/authorized_keys` — SSH keys (ssh_dir from `--ssh-dir`, defaults to `/root/.ssh`)
+- `<mount_point>/ssh/authorized_keys/<username>` — SSH keys (per system user from `--ssh-user`)
 
 ## TUI layout:
 

@@ -128,9 +128,10 @@ pub fn execute(op: &Operation) -> OperationResult {
 
         // SSH keys
         Operation::ImportSshKeys {
-            ssh_dir,
+            mount_point,
+            system_user,
             github_username,
-        } => crate::ssh::execute_import_ssh_keys(ssh_dir, github_username),
+        } => crate::ssh::execute_import_ssh_keys(mount_point, system_user, github_username),
 
         // Cleanup
         Operation::CleanupNetworkConfig { interface } => {

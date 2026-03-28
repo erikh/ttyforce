@@ -35,10 +35,8 @@ fn run_install(
     sm.process_input(UserInput::SelectDiskGroup(disk_group_idx), executor);
     assert_eq!(sm.current_screen, ScreenId::Confirm);
 
-    // Install (confirm -> ssh key import -> skip -> install)
+    // Install (ssh_users is empty, skips SshKeyImport)
     sm.process_input(UserInput::ConfirmInstall, executor);
-    assert_eq!(sm.current_screen, ScreenId::SshKeyImport);
-    sm.process_input(UserInput::SkipSshKeys, executor);
     assert_eq!(sm.current_screen, ScreenId::InstallProgress);
     assert_eq!(
         sm.action_manifest.final_state,

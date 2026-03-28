@@ -46,9 +46,9 @@ enum Command {
         /// TTY device to use for the TUI (e.g. /dev/tty1, /dev/ttyS0)
         #[arg(long)]
         tty: Option<String>,
-        /// Directory to write SSH authorized_keys into (e.g. /root/.ssh)
+        /// System users to import SSH keys for (comma-separated, e.g. root,erikh)
         #[arg(long)]
-        ssh_dir: Option<String>,
+        ssh_user: Option<String>,
     },
     /// Run as getty replacement (system status + login screen)
     Getty {
@@ -90,14 +90,14 @@ fn main() {
         Command::Run => {
             run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None, None, None);
         }
-        Command::Initrd { etc_prefix, tty, ssh_dir } => {
+        Command::Initrd { etc_prefix, tty, ssh_user } => {
             run_installer(
                 cli.input.as_deref(),
                 cli.output.as_deref(),
                 true,
                 etc_prefix.as_deref(),
                 tty.as_deref(),
-                ssh_dir.as_deref(),
+                ssh_user.as_deref(),
             );
         }
         Command::Getty { etc_prefix, tty, console, shell, initrd, sledgehammer_grub_entry } => {
@@ -210,7 +210,7 @@ fn run_installer(
     initrd: bool,
     etc_prefix: Option<&str>,
     tty: Option<&str>,
-    ssh_dir: Option<&str>,
+    ssh_user: Option<&str>,
 ) {
     let hardware = load_hardware(input, initrd);
 
@@ -223,8 +223,12 @@ fn run_installer(
     if let Some(target) = etc_prefix {
         state_machine.etc_prefix = Some(target.to_string());
     }
-    if let Some(dir) = ssh_dir {
-        state_machine.ssh_dir = Some(dir.to_string());
+    if let Some(users) = ssh_user {
+        state_machine.ssh_users = users
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
     let mut app = App::new(state_machine);
 

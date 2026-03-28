@@ -57,22 +57,23 @@ pub fn fetch_github_keys(username: &str) -> Result<String, String> {
     Ok(trimmed)
 }
 
-/// Install SSH keys to `<ssh_dir>/authorized_keys`.
+/// Install SSH keys to `<mount_point>/ssh/authorized_keys/<system_user>`.
 /// Appends to any existing keys and deduplicates.
-pub fn install_ssh_keys(ssh_dir: &str, keys: &str) -> Result<String, String> {
-    write_authorized_keys(ssh_dir, keys)?;
-    Ok(format!("{}/authorized_keys", ssh_dir))
+pub fn install_ssh_keys(mount_point: &str, system_user: &str, keys: &str) -> Result<String, String> {
+    let dir = format!("{}/ssh/authorized_keys", mount_point);
+    write_authorized_keys(&dir, system_user, keys)?;
+    Ok(format!("{}/{}", dir, system_user))
 }
 
-/// Write keys to an authorized_keys file in the given ssh directory.
-fn write_authorized_keys(ssh_dir: &str, keys: &str) -> Result<(), String> {
-    let auth_keys_path = format!("{}/authorized_keys", ssh_dir);
+/// Write keys to a file named after the user in the given directory.
+fn write_authorized_keys(dir: &str, filename: &str, keys: &str) -> Result<(), String> {
+    let file_path = format!("{}/{}", dir, filename);
 
-    std::fs::create_dir_all(ssh_dir).map_err(|e| format!("mkdir {}: {}", ssh_dir, e))?;
-    set_permissions(ssh_dir, 0o700)?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {}", dir, e))?;
+    set_permissions(dir, 0o755)?;
 
     // Read existing keys to avoid duplicates
-    let existing = std::fs::read_to_string(&auth_keys_path).unwrap_or_default();
+    let existing = std::fs::read_to_string(&file_path).unwrap_or_default();
     let mut new_keys = Vec::new();
     for line in keys.lines() {
         let line = line.trim();
@@ -88,14 +89,14 @@ fn write_authorized_keys(ssh_dir: &str, keys: &str) -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&auth_keys_path)
-        .map_err(|e| format!("open {}: {}", auth_keys_path, e))?;
+        .open(&file_path)
+        .map_err(|e| format!("open {}: {}", file_path, e))?;
 
     for key in &new_keys {
         writeln!(file, "{}", key).map_err(|e| format!("write: {}", e))?;
     }
 
-    set_permissions(&auth_keys_path, 0o600)?;
+    set_permissions(&file_path, 0o644)?;
     Ok(())
 }
 
@@ -108,12 +109,13 @@ fn set_permissions(path: &str, mode: u32) -> Result<(), String> {
 
 /// Execute the ImportSshKeys operation: fetch keys from GitHub and install them.
 pub fn execute_import_ssh_keys(
-    ssh_dir: &str,
+    mount_point: &str,
+    system_user: &str,
     github_username: &str,
 ) -> OperationResult {
     cmd_log_append(format!(
-        "$ import SSH keys from github.com/{} -> {}",
-        github_username, ssh_dir
+        "$ import SSH keys from github.com/{} for {} -> {}",
+        github_username, system_user, mount_point
     ));
 
     if !is_valid_github_username(github_username) {
@@ -139,7 +141,7 @@ pub fn execute_import_ssh_keys(
     let key_count = keys.lines().filter(|l| !l.trim().is_empty()).count();
     cmd_log_append(format!("  found {} key(s)", key_count));
 
-    match install_ssh_keys(ssh_dir, &keys) {
+    match install_ssh_keys(mount_point, system_user, &keys) {
         Ok(path) => {
             cmd_log_append(format!("  -> ok: written to {}", path));
             OperationResult::Success
@@ -194,12 +196,12 @@ mod tests {
         let tmp = std::env::temp_dir().join("ttyforce-ssh-test");
         let _cleanup = std::fs::remove_dir_all(&tmp);
 
-        let ssh_dir = tmp.join(".ssh");
-        let ssh_dir_str = ssh_dir.to_str().ok_or("invalid path")?;
+        let dir = tmp.join("authorized_keys_dir");
+        let dir_str = dir.to_str().ok_or("invalid path")?;
         let keys = "ssh-ed25519 AAAAC3test1 user@host\nssh-rsa AAAAB3test2 user@host\n";
-        write_authorized_keys(ssh_dir_str, keys)?;
+        write_authorized_keys(dir_str, "root", keys)?;
 
-        let content = std::fs::read_to_string(ssh_dir.join("authorized_keys"))
+        let content = std::fs::read_to_string(dir.join("root"))
             .map_err(|e| e.to_string())?;
         assert!(content.contains("ssh-ed25519 AAAAC3test1"));
         assert!(content.contains("ssh-rsa AAAAB3test2"));
@@ -213,13 +215,13 @@ mod tests {
         let tmp = std::env::temp_dir().join("ttyforce-ssh-dedup-test");
         let _cleanup = std::fs::remove_dir_all(&tmp);
 
-        let ssh_dir = tmp.join(".ssh");
-        let ssh_dir_str = ssh_dir.to_str().ok_or("invalid path")?;
+        let dir = tmp.join("authorized_keys_dir");
+        let dir_str = dir.to_str().ok_or("invalid path")?;
         let keys = "ssh-ed25519 AAAAC3test1 user@host\n";
-        write_authorized_keys(ssh_dir_str, keys)?;
-        write_authorized_keys(ssh_dir_str, keys)?;
+        write_authorized_keys(dir_str, "root", keys)?;
+        write_authorized_keys(dir_str, "root", keys)?;
 
-        let content = std::fs::read_to_string(ssh_dir.join("authorized_keys"))
+        let content = std::fs::read_to_string(dir.join("root"))
             .map_err(|e| e.to_string())?;
         let count = content.matches("ssh-ed25519 AAAAC3test1").count();
         assert_eq!(count, 1, "key should appear exactly once");
@@ -230,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_execute_import_invalid_username() {
-        let result = execute_import_ssh_keys("/tmp/nonexistent/.ssh", "-bad-name-");
+        let result = execute_import_ssh_keys("/tmp/nonexistent", "root", "-bad-name-");
         assert!(result.is_error());
     }
 }

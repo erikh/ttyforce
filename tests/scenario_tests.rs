@@ -39,10 +39,8 @@ fn run_ethernet_single_disk_install(
     sm.process_input(UserInput::SelectDiskGroup(0), executor);
     assert_eq!(sm.current_screen, ScreenId::Confirm);
 
-    // Confirm install -> SSH key import -> skip -> install
+    // Confirm install -> install (ssh_users is empty, skips SshKeyImport)
     sm.process_input(UserInput::ConfirmInstall, executor);
-    assert_eq!(sm.current_screen, ScreenId::SshKeyImport);
-    sm.process_input(UserInput::SkipSshKeys, executor);
     assert_eq!(sm.current_screen, ScreenId::InstallProgress);
 
     // Continue to reboot
@@ -299,8 +297,6 @@ fn test_full_install_ethernet_4disk_btrfs_raid5() -> Result<(), String> {
 
     // Install
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    assert_eq!(sm.current_screen, ScreenId::SshKeyImport);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::InstallProgress);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
 
@@ -365,7 +361,6 @@ fn test_full_install_wifi_1disk() -> Result<(), String> {
 
     // Confirm and install
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
     Ok(())
 }
@@ -1110,7 +1105,6 @@ fn test_abort_after_install_unmounts() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::InstallProgress);
 
     // Abort at install progress
@@ -1338,7 +1332,6 @@ fn test_install_never_targets_root_partition() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
 
     // Verify no operation targets "/" or the root filesystem
     for entry in &sm.action_manifest.operations {
@@ -1451,7 +1444,6 @@ fn test_cleanup_unmount_after_successful_install() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
 
     assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
 
@@ -1493,7 +1485,6 @@ fn test_generate_fstab_in_install_flow() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
 
     let op_types: Vec<&str> = sm
         .action_manifest
@@ -1525,7 +1516,6 @@ fn test_btrfs_device_scan_before_mount() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
 
     let mount_ops: Vec<_> = sm
         .action_manifest
@@ -1555,7 +1545,6 @@ fn test_subvolumes_are_etc_and_var() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
 
     let subvol_names: Vec<String> = sm
         .action_manifest
@@ -1698,7 +1687,6 @@ fn test_wps_full_install_flow() -> Result<(), String> {
     sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    sm.process_input(UserInput::SkipSshKeys, &mut executor);
 
     assert_eq!(
         sm.action_manifest.final_state,

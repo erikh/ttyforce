@@ -86,10 +86,9 @@ pub struct InstallerStateMachine {
     pub etc_prefix: Option<String>,
     connectivity_retries: u32,
     pub wps_start_time: Option<std::time::Instant>,
-    pub github_usernames: Vec<String>,
-    /// Directory to write SSH authorized_keys into (e.g. /root/.ssh).
-    /// If None, defaults to /root/.ssh.
-    pub ssh_dir: Option<String>,
+    pub ssh_users: Vec<String>,
+    pub ssh_keys: std::collections::BTreeMap<String, Vec<String>>,
+    pub ssh_current_user_idx: usize,
 }
 
 impl InstallerStateMachine {
@@ -132,8 +131,9 @@ impl InstallerStateMachine {
             etc_prefix: None,
             connectivity_retries: 0,
             wps_start_time: None,
-            github_usernames: Vec::new(),
-            ssh_dir: None,
+            ssh_users: Vec::new(),
+            ssh_keys: std::collections::BTreeMap::new(),
+            ssh_current_user_idx: 0,
         }
     }
 
@@ -325,8 +325,13 @@ impl InstallerStateMachine {
 
             // === Confirm ===
             (ScreenId::Confirm, UserInput::ConfirmInstall) => {
-                self.current_screen = ScreenId::SshKeyImport;
-                Some(ScreenId::SshKeyImport)
+                if self.ssh_users.is_empty() {
+                    self.run_install(executor)
+                } else {
+                    self.ssh_current_user_idx = 0;
+                    self.current_screen = ScreenId::SshKeyImport;
+                    Some(ScreenId::SshKeyImport)
+                }
             }
             (ScreenId::Confirm, UserInput::Back) => {
                 self.current_screen = ScreenId::DiskGroupSelect;
@@ -338,16 +343,28 @@ impl InstallerStateMachine {
 
             // === SSH Key Import ===
             (ScreenId::SshKeyImport, UserInput::ImportSshKeys(username)) => {
-                self.github_usernames.push(username);
+                if let Some(current_user) = self.ssh_users.get(self.ssh_current_user_idx).cloned() {
+                    self.ssh_keys.entry(current_user).or_default().push(username);
+                }
                 Some(ScreenId::SshKeyImport) // stay on screen for more usernames
             }
             (ScreenId::SshKeyImport, UserInput::SkipSshKeys) => {
-                self.run_install(executor)
+                self.ssh_current_user_idx += 1;
+                if self.ssh_current_user_idx >= self.ssh_users.len() {
+                    self.run_install(executor)
+                } else {
+                    Some(ScreenId::SshKeyImport)
+                }
             }
             (ScreenId::SshKeyImport, UserInput::Back) => {
-                self.github_usernames.clear();
-                self.current_screen = ScreenId::Confirm;
-                Some(ScreenId::Confirm)
+                if self.ssh_current_user_idx > 0 {
+                    self.ssh_current_user_idx -= 1;
+                    Some(ScreenId::SshKeyImport)
+                } else {
+                    self.ssh_keys.clear();
+                    self.current_screen = ScreenId::Confirm;
+                    Some(ScreenId::Confirm)
+                }
             }
             (ScreenId::SshKeyImport, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at SSH key import".to_string())
@@ -909,17 +926,16 @@ impl InstallerStateMachine {
         }
 
         // Import SSH keys from GitHub
-        let ssh_target = self
-            .ssh_dir
-            .clone()
-            .unwrap_or_else(|| "/root/.ssh".to_string());
-        for username in &self.github_usernames.clone() {
-            let op = Operation::ImportSshKeys {
-                ssh_dir: ssh_target.clone(),
-                github_username: username.clone(),
-            };
-            let result = executor.execute(&op);
-            self.action_manifest.record(op, result.to_outcome());
+        for (system_user, github_names) in &self.ssh_keys.clone() {
+            for github_name in github_names {
+                let op = Operation::ImportSshKeys {
+                    mount_point: self.mount_point.clone(),
+                    system_user: system_user.clone(),
+                    github_username: github_name.clone(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+            }
         }
 
         // Install base system
