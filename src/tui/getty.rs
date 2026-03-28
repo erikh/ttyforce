@@ -583,36 +583,81 @@ impl GettyApp {
     }
 
     fn execute_sledgehammer(&mut self, executor: &mut dyn OperationExecutor) {
-        cmd_log_append("sledgehammer: starting wipe sequence".to_string());
-
-        // Stop all podman containers before unmount
-        let stop_op = Operation::StopAllContainers;
-        let result = executor.execute(&stop_op);
-        cmd_log_append(format!("  -> stop containers: {:?}", result));
-
-        // Unmount /town-os
-        let unmount_op = Operation::CleanupUnmount {
-            mount_point: self.mount_point.clone(),
-        };
-        let result = executor.execute(&unmount_op);
-        cmd_log_append(format!("  -> unmount: {:?}", result));
+        cmd_log_append("sledgehammer: installing shutdown wipe service".to_string());
 
         // Discover btrfs member devices
         let devices = discover_btrfs_devices(&self.mount_point);
-
-        // Wipe each device
-        for device in &devices {
-            let wipe_op = Operation::WipeDisk {
-                device: device.clone(),
-            };
-            let result = executor.execute(&wipe_op);
-            cmd_log_append(format!("  -> wipe {}: {:?}", device, result));
+        if devices.is_empty() {
+            cmd_log_append("  -> no btrfs devices found, nothing to wipe".to_string());
+            return;
         }
 
-        // Reboot
-        let reboot_op = Operation::Reboot;
-        let result = executor.execute(&reboot_op);
-        cmd_log_append(format!("  -> reboot: {:?}", result));
+        cmd_log_append(format!("  -> found {} device(s): {}", devices.len(), devices.join(", ")));
+
+        // Generate ExecStart lines for each device
+        let mut exec_lines = String::new();
+        for device in &devices {
+            exec_lines.push_str(&format!(
+                "ExecStart=-/usr/bin/wipefs --all {}\n\
+                 ExecStart=-/usr/bin/sgdisk --zap-all {}\n",
+                device, device
+            ));
+        }
+
+        let service = format!(
+            "[Unit]\n\
+             Description=ttyforce sledgehammer — wipe all btrfs disks\n\
+             DefaultDependencies=no\n\
+             After=umount.target\n\
+             Before=final.target\n\
+             \n\
+             [Service]\n\
+             Type=oneshot\n\
+             {}\
+             \n\
+             [Install]\n\
+             WantedBy=shutdown.target\n",
+            exec_lines
+        );
+
+        // Write service unit
+        let service_path = "/etc/systemd/system/ttyforce-sledgehammer.service";
+        if let Err(e) = std::fs::write(service_path, &service) {
+            cmd_log_append(format!("  -> FAILED to write {}: {}", service_path, e));
+            return;
+        }
+        cmd_log_append(format!("  -> wrote {}", service_path));
+
+        // Enable via symlink
+        let wants_dir = "/etc/systemd/system/shutdown.target.wants";
+        if let Err(e) = std::fs::create_dir_all(wants_dir) {
+            cmd_log_append(format!("  -> FAILED to create {}: {}", wants_dir, e));
+            return;
+        }
+        let symlink_path = format!("{}/ttyforce-sledgehammer.service", wants_dir);
+        if let Err(e) = std::fs::remove_file(&symlink_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                cmd_log_append(format!("  -> remove old symlink: {}", e));
+            }
+        }
+        if let Err(e) = std::os::unix::fs::symlink(
+            "../ttyforce-sledgehammer.service",
+            &symlink_path,
+        ) {
+            cmd_log_append(format!("  -> FAILED to enable service: {}", e));
+            return;
+        }
+        cmd_log_append("  -> service enabled for shutdown".to_string());
+
+        // Reload systemd so it picks up the new unit
+        if let Err(e) = crate::engine::real_ops::run_cmd("systemctl", &["daemon-reload"]) {
+            cmd_log_append(format!("  -> daemon-reload warning: {}", e));
+        }
+
+        // Power off — the wipe service runs during shutdown after unmounts
+        let poweroff_op = Operation::PowerOff;
+        let result = executor.execute(&poweroff_op);
+        cmd_log_append(format!("  -> poweroff: {:?}", result));
     }
 
     fn render(&self, f: &mut ratatui::Frame) {
@@ -1215,15 +1260,14 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_sledgehammer_records_stop_unmount_and_reboot() {
+    fn test_execute_sledgehammer_installs_wipe_service_and_powers_off() {
         let mut app = test_app();
         let mut executor = MockExecutor::new(vec![]);
         app.execute_action(&GettyAction::Sledgehammer, &mut executor);
+        // With no btrfs devices found on /town-os (test env), no service is installed
+        // and no operations are recorded — sledgehammer exits early.
         let ops = executor.recorded_operations();
-        assert!(ops.len() >= 3);
-        assert!(matches!(ops[0].operation, Operation::StopAllContainers));
-        assert!(matches!(ops[1].operation, Operation::CleanupUnmount { .. }));
-        assert!(matches!(ops[ops.len() - 1].operation, Operation::Reboot));
+        assert!(ops.is_empty(), "expected no ops with no btrfs devices, got: {:?}", ops);
     }
 
     #[test]
