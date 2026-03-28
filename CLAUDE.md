@@ -92,6 +92,20 @@ The binary has five subcommands and two global flags.
     panel. After that, `l` and `s` toggle between the two panels
     freely. This behavior must not be altered.
 
+    IMPORTANT — screen blanking behavior:
+    The screen blanks after 5 minutes of no keypresses. Any input
+    event unblanks the screen — this includes modifier-only keys
+    (Ctrl, Shift, Alt), mouse events, and resize events, not just
+    regular key presses. After unblanking, there is a 30-second
+    grace period during which all keypresses are discarded to prevent
+    accidental actions from mashing keys to wake the screen.
+
+    IMPORTANT — empty services panel:
+    When no services are found (empty list from the API), the status
+    panel displays a centered message: "No Services Are Running,
+    Please Check the Log for more information". This directs the
+    user to switch to the log panel ([l]) for diagnostic information.
+
     Service status is fetched from the Town OS API at
     `GET /systemd/units?limit=100` on `localhost:5309`.
     Authentication uses a bearer token from `TTYFORCE_API_TOKEN` env

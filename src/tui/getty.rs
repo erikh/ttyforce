@@ -202,14 +202,16 @@ impl GettyApp {
             }
 
             if event::poll(Duration::from_secs(1))? {
-                if let Event::Key(key) = event::read()? {
-                    // Screen is blanked — wake up, discard key, start grace period
-                    if self.screen_blanked {
-                        self.unblank();
-                        terminal.clear()?;
-                        continue;
-                    }
+                let ev = event::read()?;
 
+                // Any event unblanks the screen (modifier-only keys, mouse, resize, etc.)
+                if self.screen_blanked {
+                    self.unblank();
+                    terminal.clear()?;
+                    continue;
+                }
+
+                if let Event::Key(key) = ev {
                     // Grace period after unblank — discard key
                     if self.is_in_grace_period() {
                         self.last_activity = Instant::now();
@@ -801,9 +803,12 @@ impl GettyApp {
 
         match &self.all_services {
             Ok(services) if services.is_empty() => {
-                let paragraph = Paragraph::new("  No services found")
-                    .style(Style::default().fg(Color::DarkGray))
-                    .block(block);
+                let paragraph = Paragraph::new(
+                    "No Services Are Running, Please Check the Log for more information",
+                )
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center)
+                .block(block);
                 f.render_widget(paragraph, area);
             }
             Ok(services) => {
