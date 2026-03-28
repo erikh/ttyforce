@@ -76,7 +76,7 @@ The binary has five subcommands and two global flags.
     - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
       Discovers btrfs member devices, installs a systemd service
       (`ttyforce-sledgehammer.service`) that wipes all disks during
-      shutdown (after unmounts), then powers off the machine.
+      shutdown (after all filesystems are unmounted), then reboots.
 
     IMPORTANT — startup panel behavior (do not change):
     At getty startup, if services are NOT all active, the log panel

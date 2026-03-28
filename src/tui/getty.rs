@@ -998,10 +998,15 @@ fn set_nonblocking(stdout: &impl std::os::unix::io::AsRawFd) {
 
 /// Discover btrfs member devices for a mount point.
 fn discover_btrfs_devices(mount_point: &str) -> Vec<String> {
-    match run_cmd("btrfs", &["filesystem", "show", mount_point]) {
-        Ok(output) => {
+    // Try the specific mount point first, then fall back to listing all
+    // btrfs filesystems (in case the volume is not currently mounted).
+    let output = run_cmd("btrfs", &["filesystem", "show", mount_point])
+        .or_else(|_| run_cmd("btrfs", &["filesystem", "show"]));
+
+    match output {
+        Ok(text) => {
             let mut devices = Vec::new();
-            for line in output.lines() {
+            for line in text.lines() {
                 let trimmed = line.trim();
                 if trimmed.contains("path ") {
                     if let Some(path) = trimmed.rsplit("path ").next() {
