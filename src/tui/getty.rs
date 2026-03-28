@@ -40,6 +40,7 @@ pub enum PanelView {
 pub enum GettyAction {
     None,
     Login,
+    Quit,
     Reconfigure,
     Reboot,
     PowerOff,
@@ -70,6 +71,8 @@ pub struct GettyApp {
     journal_max_lines: usize,
     /// Non-blocking reader for /dev/kmsg (only when --console is set).
     kmsg_reader: Option<BufReader<File>>,
+    /// When true, show a [q] Quit action to exit the getty.
+    pub quit_enabled: bool,
     /// When true, reconfigure uses `initrd` subcommand instead of `run`.
     pub initrd_mode: bool,
     /// GRUB menu entry number for sledgehammer wipe boot.
@@ -117,6 +120,7 @@ impl GettyApp {
             journal_child: None,
             journal_max_lines: 200,
             kmsg_reader,
+            quit_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
             last_activity: Instant::now(),
@@ -229,6 +233,9 @@ impl GettyApp {
                             enable_raw_mode()?;
                             terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
                         }
+                        GettyAction::Quit => {
+                            self.should_quit = true;
+                        }
                         GettyAction::Reconfigure => {
                             // Spawn reconfigure as child, wait, then resume getty
                             self.stop_journal();
@@ -313,6 +320,7 @@ impl GettyApp {
                 self.panel_view = PanelView::Status;
                 GettyAction::None
             }
+            KeyCode::Char('q') if self.quit_enabled => GettyAction::Quit,
             KeyCode::Char('r') => GettyAction::Reconfigure,
             KeyCode::Char('R') => GettyAction::Reboot,
             KeyCode::Char('p') => GettyAction::PowerOff,
@@ -575,7 +583,7 @@ impl GettyApp {
         executor: &mut dyn OperationExecutor,
     ) {
         match action {
-            GettyAction::None | GettyAction::Login => {}
+            GettyAction::None | GettyAction::Login | GettyAction::Quit => {}
             GettyAction::Reconfigure => {
                 let exe = std::env::current_exe()
                     .unwrap_or_else(|_| "ttyforce".into());
@@ -893,7 +901,11 @@ impl GettyApp {
     }
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
-        let text = "  [.] Login   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe";
+        let text = if self.quit_enabled {
+            "  [.] Login   [q] Quit   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe"
+        } else {
+            "  [.] Login   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe"
+        };
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::White))
@@ -1238,6 +1250,7 @@ mod tests {
             journal_child: None,
             journal_max_lines: 200,
             kmsg_reader: None,
+            quit_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
             last_activity: Instant::now(),
@@ -1469,5 +1482,31 @@ mod tests {
         app.last_activity = Instant::now() - Duration::from_secs(600);
         app.unblank();
         assert!(app.last_activity.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_key_quit_disabled_by_default() {
+        let mut app = test_app();
+        assert!(!app.quit_enabled);
+        let key = KeyEvent::from(KeyCode::Char('q'));
+        assert_eq!(app.map_key(key), GettyAction::None);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_key_quit_enabled() {
+        let mut app = test_app();
+        app.quit_enabled = true;
+        let key = KeyEvent::from(KeyCode::Char('q'));
+        assert_eq!(app.map_key(key), GettyAction::Quit);
+    }
+
+    #[test]
+    fn test_quit_action_not_executed_by_execute_action() {
+        let mut app = test_app();
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_action(&GettyAction::Quit, &mut executor);
+        let ops = executor.recorded_operations();
+        assert!(ops.is_empty());
     }
 }
