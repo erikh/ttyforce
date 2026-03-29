@@ -107,6 +107,10 @@ pub struct GettyApp {
     xe_journal_lines: Vec<String>,
     xe_journal_child: Option<Child>,
     xe_journal_max_lines: usize,
+    /// Audit log entries fetched from the Town OS API.
+    audit_lines: Vec<String>,
+    /// When true, show full-screen journal -f log instead of the quad.
+    show_full_log: bool,
     /// Mock mode: don't execute real operations (login, reboot, etc).
     pub mock_mode: bool,
 }
@@ -128,6 +132,8 @@ impl GettyApp {
         } else {
             None
         };
+
+        let audit_lines = api_client.fetch_audit_log().unwrap_or_default();
 
         Self {
             system_info,
@@ -159,6 +165,8 @@ impl GettyApp {
             xe_journal_lines: Vec::new(),
             xe_journal_child: None,
             xe_journal_max_lines: 200,
+            audit_lines,
+            show_full_log: false,
             mock_mode: false,
         }
     }
@@ -214,6 +222,9 @@ impl GettyApp {
                 self.system_info.refresh_network();
                 self.system_services = self.api_client.fetch_system_services();
                 self.all_services = self.api_client.fetch_all_services();
+                if let Ok(lines) = self.api_client.fetch_audit_log() {
+                    self.audit_lines = lines;
+                }
                 self.last_slow_refresh = Instant::now();
             }
 
@@ -437,6 +448,10 @@ impl GettyApp {
         // Normal mode
         match key.code {
             KeyCode::Char('.') => GettyAction::Login,
+            KeyCode::Char('l') => {
+                self.show_full_log = !self.show_full_log;
+                GettyAction::None
+            }
             KeyCode::Char('q') if self.quit_enabled => GettyAction::Quit,
             KeyCode::Char('@') => GettyAction::ReconfigureMenu,
             KeyCode::Char('R') => GettyAction::Reboot,
@@ -891,12 +906,37 @@ impl GettyApp {
     fn render(&self, f: &mut ratatui::Frame) {
         let area = f.area();
 
+        if self.show_full_log {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(5), // Title bar
+                    Constraint::Min(5),   // Full journal -f
+                    Constraint::Length(3), // Action bar
+                ])
+                .split(area);
+
+            self.render_title(f, chunks[0]);
+            self.render_journal(f, chunks[1]);
+
+            if self.ssh_input.is_some() {
+                self.render_ssh_input(f, chunks[2]);
+            } else if self.sledgehammer_input.is_some() {
+                self.render_sledgehammer_confirm(f, chunks[2]);
+            } else if self.reconfigure_menu {
+                self.render_reconfigure_menu(f, chunks[2]);
+            } else {
+                self.render_actions(f, chunks[2]);
+            }
+            return;
+        }
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(5),      // Title bar
                 Constraint::Percentage(50), // Quad top row: services | metrics
-                Constraint::Percentage(50), // Quad bottom row: journal -f | journal -xe
+                Constraint::Percentage(50), // Quad bottom row: audit log | journal -xe
                 Constraint::Length(3),      // Action bar
             ])
             .split(area);
@@ -914,7 +954,7 @@ impl GettyApp {
         self.render_service_status(f, quad_top[0]);
         self.render_system_info(f, quad_top[1]);
 
-        // Quad bottom row: journal -f (left) | journal -xe (right)
+        // Quad bottom row: audit log (left) | journal -xe (right)
         let quad_bottom = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -922,7 +962,7 @@ impl GettyApp {
                 Constraint::Percentage(50),
             ])
             .split(chunks[2]);
-        self.render_journal(f, quad_bottom[0]);
+        self.render_audit_log(f, quad_bottom[0]);
         self.render_xe_journal(f, quad_bottom[1]);
 
         if self.ssh_input.is_some() {
@@ -1132,7 +1172,7 @@ impl GettyApp {
 
     fn render_journal(&self, f: &mut ratatui::Frame, area: Rect) {
         let block = Block::default()
-            .title(" Journal -f ")
+            .title(" Journal -f [l: back] ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
@@ -1150,6 +1190,33 @@ impl GettyApp {
                     Style::default().fg(Color::Red)
                 } else if line.contains("Started") || line.contains("Reached target") {
                     Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(format!("  {}", line), style))
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(visible).block(block);
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_audit_log(&self, f: &mut ratatui::Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Audit Log ")
+            .title_alignment(Alignment::Left)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let start = self.audit_lines.len().saturating_sub(inner_height);
+        let visible: Vec<Line> = self.audit_lines[start..]
+            .iter()
+            .map(|line| {
+                let style = if line.contains("ERROR") || line.contains("FAILED") {
+                    Style::default().fg(Color::Red)
+                } else if line.contains("warn") || line.contains("Warn") {
+                    Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
@@ -1195,9 +1262,9 @@ impl GettyApp {
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
-            "  [.] Login   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [l] Log   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off"
         } else {
-            "  [.] Login   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [l] Log   [@] Reconfigure   [R] Reboot   [p] Power Off"
         };
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
@@ -1641,6 +1708,8 @@ mod tests {
             xe_journal_lines: Vec::new(),
             xe_journal_child: None,
             xe_journal_max_lines: 200,
+            audit_lines: Vec::new(),
+            show_full_log: false,
             mock_mode: false,
         }
     }
