@@ -63,6 +63,9 @@ The binary has five subcommands and two global flags.
       `ttyforce initrd` instead of `ttyforce run`).
     - `--sledgehammer-grub-entry <N>` — GRUB menu entry number for
       the sledgehammer wipe boot. Required for `[!]` to work.
+    - `--ssh-user <users>` — System users to import SSH keys for
+      (comma-separated, e.g. `root,erikh`). Used by the `[@]`
+      reconfigure menu's SSH Keys option.
 
     Actions (key-triggered):
     - `[.]` Login — clears the screen, displays `/etc/issue` with
@@ -73,16 +76,22 @@ The binary has five subcommands and two global flags.
       logging the user out. agetty respawns ttyforce.
     - `[l]` Log — show live journalctl output panel.
     - `[s]` Status — show service status panel.
-    - `[r]` Reconfigure — spawns `ttyforce run` (or `ttyforce initrd`
-      when `--initrd` is set) as a child process with the same
-      `--etc-prefix`/`--tty` flags, resumes getty when done.
+    - `[@]` Reconfigure — opens a submenu with:
+      - `[n]` Network — detects hardware and runs the installer's
+        network setup flow inline (interface selection, DHCP, wifi).
+        When complete, persists the network config to `etc_prefix`.
+        Uses `--initrd` flag to select initrd vs systemd executor.
+      - `[k]` SSH Keys — prompts for a GitHub username for each
+        system user from `--ssh-user`. Fetches public keys and writes
+        them to `<mount_point>/ssh/authorized_keys/<user>`.
+      - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
+        Runs `grub-reboot <entry>` to set a one-time GRUB boot entry
+        (configured via `--sledgehammer-grub-entry`), then reboots.
+        Requires `--sledgehammer-grub-entry` to be set; does nothing
+        without it.
+      - `[Esc]` Back — returns to main getty screen.
     - `[R]` Reboot — reboots the machine.
     - `[p]` Power Off — powers off the machine.
-    - `[!]` Sledgehammer — requires typing "SLEDGEHAMMER" to confirm.
-      Runs `grub-reboot <entry>` to set a one-time GRUB boot entry
-      (configured via `--sledgehammer-grub-entry`), then reboots.
-      Requires `--sledgehammer-grub-entry` to be set; does nothing
-      without it.
 
     IMPORTANT — startup panel behavior (do not change):
     At getty startup, if services are NOT all active, the log panel
@@ -146,6 +155,7 @@ ttyforce getty --etc-prefix /mnt/root    # getty with custom etc prefix
 ttyforce getty --initrd                  # getty with initrd reconfigure mode
 ttyforce getty --quit                    # getty with [q] quit action
 ttyforce getty --console --initrd        # getty on console TTY in initrd mode
+ttyforce getty --ssh-user root,erikh    # getty with SSH key import for users
 ```
 
 # DESIGN:

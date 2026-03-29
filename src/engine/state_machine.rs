@@ -89,6 +89,8 @@ pub struct InstallerStateMachine {
     pub ssh_users: Vec<String>,
     pub ssh_keys: std::collections::BTreeMap<String, Vec<String>>,
     pub ssh_current_user_idx: usize,
+    /// When true, exit after network setup (skip disk/install screens).
+    pub network_only: bool,
 }
 
 impl InstallerStateMachine {
@@ -134,6 +136,7 @@ impl InstallerStateMachine {
             ssh_users: Vec::new(),
             ssh_keys: std::collections::BTreeMap::new(),
             ssh_current_user_idx: 0,
+            network_only: false,
         }
     }
 
@@ -150,6 +153,28 @@ impl InstallerStateMachine {
         match &self.etc_prefix {
             Some(prefix) => prefix.clone(),
             None => format!("{}/@etc", self.mount_point),
+        }
+    }
+
+    /// Persist network config only (for network-only reconfigure mode).
+    /// Writes the networkd unit and wpa config to etc_prefix.
+    pub fn persist_network_only(&mut self, executor: &mut dyn OperationExecutor) {
+        let etc = self.etc_prefix();
+        if let Some(ref iface_name) = self.selected_interface {
+            let mac = self
+                .interfaces
+                .iter()
+                .find(|i| &i.name == iface_name)
+                .map(|i| i.mac.clone())
+                .unwrap_or_default();
+            let op = Operation::PersistNetworkConfig {
+                mount_point: etc,
+                interface: iface_name.clone(),
+                mac_address: mac,
+            };
+            let persist_result = executor.execute(&op);
+            self.action_manifest
+                .record(op, persist_result.to_outcome());
         }
     }
 
@@ -240,8 +265,14 @@ impl InstallerStateMachine {
             // === Network Progress Screen ===
             (ScreenId::NetworkProgress, UserInput::Confirm) => {
                 if self.network_state.is_online() {
-                    self.current_screen = ScreenId::RaidConfig;
-                    Some(ScreenId::RaidConfig)
+                    if self.network_only {
+                        self.persist_network_only(executor);
+                        // Signal completion via ExitInstaller
+                        Some(ScreenId::Reboot)
+                    } else {
+                        self.current_screen = ScreenId::RaidConfig;
+                        Some(ScreenId::RaidConfig)
+                    }
                 } else {
                     self.error_message = Some("Network is not yet online".to_string());
                     None

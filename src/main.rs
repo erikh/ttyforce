@@ -70,6 +70,9 @@ enum Command {
         /// GRUB menu entry for sledgehammer wipe boot (e.g. "2")
         #[arg(long)]
         sledgehammer_grub_entry: Option<String>,
+        /// System users to import SSH keys for (comma-separated, e.g. "root,erikh")
+        #[arg(long)]
+        ssh_user: Option<String>,
     },
 }
 
@@ -100,8 +103,8 @@ fn main() {
                 ssh_user.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry } => {
-            run_getty(etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry);
+        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user } => {
+            run_getty(etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user);
         }
     }
 }
@@ -266,12 +269,19 @@ fn run_installer(
     }
 }
 
-fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, quit: bool, initrd: bool, sledgehammer_grub_entry: Option<String>) {
+fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, quit: bool, initrd: bool, sledgehammer_grub_entry: Option<String>, ssh_user: Option<String>) {
     let tty_clone = tty.clone();
     let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string(), console);
     app.quit_enabled = quit;
     app.initrd_mode = initrd;
     app.sledgehammer_grub_entry = sledgehammer_grub_entry;
+    if let Some(users) = ssh_user {
+        app.ssh_users = users
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
     let mut executor = RealExecutor::new();
 
     if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {

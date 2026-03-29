@@ -14,10 +14,11 @@ use ratatui::widgets::*;
 
 use crate::engine::executor::OperationExecutor;
 use crate::engine::real_ops::{cmd_log_append, kmsg_log};
+use crate::engine::state_machine::InstallerStateMachine;
 use crate::getty::api::{ServiceInfo, TownApiClient};
 use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
-use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds};
+use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds, App};
 use crate::tui::evdev_input::{ActivityResult, EvdevWatcher};
 
 /// Screen blanks after 5 minutes of no keypresses.
@@ -40,10 +41,22 @@ pub enum GettyAction {
     None,
     Login,
     Quit,
-    Reconfigure,
+    ReconfigureMenu,
+    ReconfigureNetwork,
+    ReconfigureSshKeys,
     Reboot,
     PowerOff,
     Sledgehammer,
+}
+
+/// State for the SSH key input prompt within the reconfigure menu.
+struct SshInputState {
+    /// Index into ssh_users for the current user being configured.
+    current_user_idx: usize,
+    /// GitHub username being typed.
+    github_username: String,
+    /// Status message from last operation.
+    status_message: Option<(String, bool)>,
 }
 
 /// The getty TUI application — replaces login on a TTY.
@@ -76,6 +89,12 @@ pub struct GettyApp {
     pub initrd_mode: bool,
     /// GRUB menu entry number for sledgehammer wipe boot.
     pub sledgehammer_grub_entry: Option<String>,
+    /// System users for SSH key import (from --ssh-user).
+    pub ssh_users: Vec<String>,
+    /// Whether the reconfigure submenu is active.
+    reconfigure_menu: bool,
+    /// SSH key input state (active when entering GitHub usernames).
+    ssh_input: Option<SshInputState>,
     /// Last time a key was pressed (for screen blank timeout).
     last_activity: Instant,
     /// Whether the screen is currently blanked.
@@ -124,6 +143,9 @@ impl GettyApp {
             quit_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
+            ssh_users: Vec::new(),
+            reconfigure_menu: false,
+            ssh_input: None,
             last_activity: Instant::now(),
             screen_blanked: false,
             discard_next_key: false,
@@ -256,13 +278,16 @@ impl GettyApp {
                         GettyAction::Quit => {
                             self.should_quit = true;
                         }
-                        GettyAction::Reconfigure => {
-                            // Spawn reconfigure as child, wait, then resume getty
+                        GettyAction::ReconfigureMenu => {
+                            self.reconfigure_menu = true;
+                        }
+                        GettyAction::ReconfigureNetwork => {
+                            self.reconfigure_menu = false;
                             self.stop_journal();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-                            self.execute_action(&action, executor);
+                            self.run_network_reconfigure(executor);
 
                             // Re-enter TUI
                             let mut new_stdout = io::stdout();
@@ -274,6 +299,22 @@ impl GettyApp {
                             self.last_activity = Instant::now();
                             self.screen_blanked = false;
                             self.discard_next_key = false;
+                        }
+                        GettyAction::ReconfigureSshKeys => {
+                            if self.ssh_input.is_some() {
+                                // In SSH input mode: execute import for typed username
+                                self.execute_ssh_key_import(executor);
+                            } else if self.ssh_users.is_empty() {
+                                cmd_log_append("No --ssh-user configured".to_string());
+                            } else {
+                                // Entering SSH input mode from reconfigure menu
+                                self.reconfigure_menu = false;
+                                self.ssh_input = Some(SshInputState {
+                                    current_user_idx: 0,
+                                    github_username: String::new(),
+                                    status_message: None,
+                                });
+                            }
                         }
                         GettyAction::None => {}
                         _ => {
@@ -295,6 +336,38 @@ impl GettyApp {
         // Ctrl+C always quits
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return GettyAction::None;
+        }
+
+        // SSH key input mode
+        if let Some(ref mut ssh_state) = self.ssh_input {
+            match key.code {
+                KeyCode::Esc => {
+                    self.ssh_input = None;
+                }
+                KeyCode::Backspace => {
+                    ssh_state.github_username.pop();
+                    ssh_state.status_message = None;
+                }
+                KeyCode::Enter => {
+                    if ssh_state.github_username.is_empty() {
+                        // Empty enter: skip to next user
+                        ssh_state.current_user_idx += 1;
+                        ssh_state.status_message = None;
+                        if ssh_state.current_user_idx >= self.ssh_users.len() {
+                            self.ssh_input = None;
+                        }
+                    } else {
+                        // Non-empty: signal import (handled in main loop)
+                        return GettyAction::ReconfigureSshKeys;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    ssh_state.github_username.push(c);
+                    ssh_state.status_message = None;
+                }
+                _ => {}
+            }
             return GettyAction::None;
         }
 
@@ -323,6 +396,24 @@ impl GettyApp {
             return GettyAction::None;
         }
 
+        // Reconfigure submenu
+        if self.reconfigure_menu {
+            match key.code {
+                KeyCode::Esc => {
+                    self.reconfigure_menu = false;
+                }
+                KeyCode::Char('n') => return GettyAction::ReconfigureNetwork,
+                KeyCode::Char('k') => {
+                    return GettyAction::ReconfigureSshKeys;
+                }
+                KeyCode::Char('!') => {
+                    self.sledgehammer_input = Some(String::new());
+                }
+                _ => {}
+            }
+            return GettyAction::None;
+        }
+
         // Normal mode
         match key.code {
             KeyCode::Char('.') => GettyAction::Login,
@@ -341,13 +432,9 @@ impl GettyApp {
                 GettyAction::None
             }
             KeyCode::Char('q') if self.quit_enabled => GettyAction::Quit,
-            KeyCode::Char('r') => GettyAction::Reconfigure,
+            KeyCode::Char('@') => GettyAction::ReconfigureMenu,
             KeyCode::Char('R') => GettyAction::Reboot,
             KeyCode::Char('p') => GettyAction::PowerOff,
-            KeyCode::Char('!') => {
-                self.sledgehammer_input = Some(String::new());
-                GettyAction::None
-            }
             _ => GettyAction::None,
         }
     }
@@ -605,26 +692,13 @@ impl GettyApp {
         executor: &mut dyn OperationExecutor,
     ) {
         match action {
-            GettyAction::None | GettyAction::Login | GettyAction::Quit => {}
-            GettyAction::Reconfigure => {
-                let exe = std::env::current_exe()
-                    .unwrap_or_else(|_| "ttyforce".into());
-                let subcommand = if self.initrd_mode { "initrd" } else { "run" };
-                let mut args: Vec<String> = vec![subcommand.to_string()];
-                if let Some(ref prefix) = self.etc_prefix {
-                    args.push("--etc-prefix".to_string());
-                    args.push(prefix.clone());
-                }
-                if let Some(ref tty) = self.tty {
-                    args.push("--tty".to_string());
-                    args.push(tty.clone());
-                }
-                cmd_log_append(format!("$ {} {}", exe.display(), args.join(" ")));
-                let status = std::process::Command::new(&exe).args(&args).status();
-                match status {
-                    Ok(s) => cmd_log_append(format!("  -> reconfigure exited ({})", s)),
-                    Err(e) => cmd_log_append(format!("  -> reconfigure failed: {}", e)),
-                }
+            GettyAction::None
+            | GettyAction::Login
+            | GettyAction::Quit
+            | GettyAction::ReconfigureMenu
+            | GettyAction::ReconfigureNetwork => {}
+            GettyAction::ReconfigureSshKeys => {
+                self.execute_ssh_key_import(executor);
             }
             GettyAction::Reboot => {
                 let op = Operation::Reboot;
@@ -664,6 +738,92 @@ impl GettyApp {
         cmd_log_append(format!("  -> reboot: {:?}", result));
     }
 
+    /// Run the network reconfigure flow inline using the installer TUI.
+    fn run_network_reconfigure(&mut self, executor: &mut dyn OperationExecutor) {
+        cmd_log_append("reconfigure: detecting hardware...".to_string());
+        let detect_result = if self.initrd_mode {
+            crate::detect::detect_hardware_initrd()
+        } else {
+            crate::detect::detect_hardware()
+        };
+
+        let hardware = match detect_result {
+            Ok(h) => h,
+            Err(e) => {
+                cmd_log_append(format!("reconfigure: hardware detection failed: {}", e));
+                return;
+            }
+        };
+
+        cmd_log_append(format!(
+            "reconfigure: found {} interface(s)",
+            hardware.network.interfaces.len()
+        ));
+
+        let mut state_machine = InstallerStateMachine::new(hardware);
+        state_machine.network_only = true;
+        if let Some(ref prefix) = self.etc_prefix {
+            state_machine.etc_prefix = Some(prefix.clone());
+        }
+        let mut app = App::new(state_machine);
+        if let Err(e) = app.run(executor, self.tty.as_deref()) {
+            cmd_log_append(format!("reconfigure: {}", e));
+        } else {
+            cmd_log_append("reconfigure: network setup complete".to_string());
+        }
+    }
+
+    /// Execute SSH key import for the current user in the SSH input state.
+    fn execute_ssh_key_import(&mut self, executor: &mut dyn OperationExecutor) {
+        let ssh_state = match self.ssh_input.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let system_user = match self.ssh_users.get(ssh_state.current_user_idx) {
+            Some(u) => u.clone(),
+            None => return,
+        };
+        let github_username = ssh_state.github_username.clone();
+
+        if github_username.is_empty() {
+            return;
+        }
+
+        if !crate::ssh::is_valid_github_username(&github_username) {
+            ssh_state.status_message = Some((
+                format!("Invalid GitHub username: {}", github_username),
+                false,
+            ));
+            ssh_state.github_username.clear();
+            return;
+        }
+
+        let op = Operation::ImportSshKeys {
+            mount_point: self.mount_point.clone(),
+            system_user: system_user.clone(),
+            github_username: github_username.clone(),
+        };
+        let result = executor.execute(&op);
+        let success = result.is_success();
+        cmd_log_append(format!(
+            "ssh-keys: {} -> {}: {:?}",
+            github_username, system_user, result
+        ));
+        if success {
+            ssh_state.status_message = Some((
+                format!("Imported keys for {} -> {}", github_username, system_user),
+                true,
+            ));
+        } else {
+            ssh_state.status_message = Some((
+                format!("Failed to import keys for {}", github_username),
+                false,
+            ));
+        }
+        ssh_state.github_username.clear();
+    }
+
     fn render(&self, f: &mut ratatui::Frame) {
         let area = f.area();
 
@@ -683,8 +843,12 @@ impl GettyApp {
         self.render_services(f, chunks[2]);
         render_cmd_log(f, chunks[3]);
 
-        if self.sledgehammer_input.is_some() {
+        if self.ssh_input.is_some() {
+            self.render_ssh_input(f, chunks[4]);
+        } else if self.sledgehammer_input.is_some() {
             self.render_sledgehammer_confirm(f, chunks[4]);
+        } else if self.reconfigure_menu {
+            self.render_reconfigure_menu(f, chunks[4]);
         } else {
             self.render_actions(f, chunks[4]);
         }
@@ -931,9 +1095,9 @@ impl GettyApp {
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
-            "  [.] Login   [q] Quit   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe"
+            "  [.] Login   [q] Quit   [l] Log   [s] Status   [@] Reconfigure   [R] Reboot   [p] Power Off"
         } else {
-            "  [.] Login   [l] Log   [s] Status   [r] Reconfigure   [R] Reboot   [p] Power Off   [!] Wipe"
+            "  [.] Login   [l] Log   [s] Status   [@] Reconfigure   [R] Reboot   [p] Power Off"
         };
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
@@ -944,6 +1108,64 @@ impl GettyApp {
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
         f.render_widget(actions, area);
+    }
+
+    fn render_reconfigure_menu(&self, f: &mut ratatui::Frame, area: Rect) {
+        let text = "  [@] Reconfigure:   [n] Network   [k] SSH Keys   [!] Wipe   [Esc] Back";
+        let actions = Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            );
+        f.render_widget(actions, area);
+    }
+
+    fn render_ssh_input(&self, f: &mut ratatui::Frame, area: Rect) {
+        let ssh_state = match &self.ssh_input {
+            Some(s) => s,
+            None => return,
+        };
+        let user = self
+            .ssh_users
+            .get(ssh_state.current_user_idx)
+            .map(|s| s.as_str())
+            .unwrap_or("?");
+        let progress = format!(
+            "({}/{})",
+            ssh_state.current_user_idx + 1,
+            self.ssh_users.len()
+        );
+        let status = match &ssh_state.status_message {
+            Some((msg, true)) => format!("  ✓ {}", msg),
+            Some((msg, false)) => format!("  ✗ {}", msg),
+            None => String::new(),
+        };
+        let text = format!(
+            "  SSH keys for {user} {progress}: {username}_   (Enter: import, empty Enter: skip, Esc: cancel){status}",
+            user = user,
+            progress = progress,
+            username = ssh_state.github_username,
+            status = status,
+        );
+        let paragraph = Paragraph::new(text)
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            );
+        f.render_widget(paragraph, area);
     }
 
     fn render_sledgehammer_confirm(&self, f: &mut ratatui::Frame, area: Rect) {
@@ -1109,10 +1331,53 @@ mod tests {
     }
 
     #[test]
-    fn test_key_reconfigure() {
+    fn test_key_reconfigure_menu() {
         let mut app = test_app();
-        let key = KeyEvent::from(KeyCode::Char('r'));
-        assert_eq!(app.map_key(key), GettyAction::Reconfigure);
+        let key = KeyEvent::from(KeyCode::Char('@'));
+        assert_eq!(app.map_key(key), GettyAction::ReconfigureMenu);
+    }
+
+    #[test]
+    fn test_reconfigure_menu_network() {
+        let mut app = test_app();
+        app.reconfigure_menu = true;
+        let key = KeyEvent::from(KeyCode::Char('n'));
+        assert_eq!(app.map_key(key), GettyAction::ReconfigureNetwork);
+    }
+
+    #[test]
+    fn test_reconfigure_menu_ssh_keys() {
+        let mut app = test_app();
+        app.reconfigure_menu = true;
+        let key = KeyEvent::from(KeyCode::Char('k'));
+        assert_eq!(app.map_key(key), GettyAction::ReconfigureSshKeys);
+    }
+
+    #[test]
+    fn test_reconfigure_menu_sledgehammer() {
+        let mut app = test_app();
+        app.reconfigure_menu = true;
+        let key = KeyEvent::from(KeyCode::Char('!'));
+        app.map_key(key);
+        assert!(app.sledgehammer_input.is_some());
+    }
+
+    #[test]
+    fn test_reconfigure_menu_esc() {
+        let mut app = test_app();
+        app.reconfigure_menu = true;
+        let key = KeyEvent::from(KeyCode::Esc);
+        app.map_key(key);
+        assert!(!app.reconfigure_menu);
+    }
+
+    #[test]
+    fn test_reconfigure_menu_blocks_normal_keys() {
+        let mut app = test_app();
+        app.reconfigure_menu = true;
+        // 'R' should not trigger reboot from reconfigure menu
+        let key = KeyEvent::from(KeyCode::Char('R'));
+        assert_eq!(app.map_key(key), GettyAction::None);
     }
 
     #[test]
@@ -1132,6 +1397,7 @@ mod tests {
     #[test]
     fn test_key_sledgehammer_enter_mode() {
         let mut app = test_app();
+        app.reconfigure_menu = true;
         let key = KeyEvent::from(KeyCode::Char('!'));
         assert_eq!(app.map_key(key), GettyAction::None);
         assert!(app.sledgehammer_input.is_some());
@@ -1282,6 +1548,9 @@ mod tests {
             quit_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
+            ssh_users: Vec::new(),
+            reconfigure_menu: false,
+            ssh_input: None,
             last_activity: Instant::now(),
             screen_blanked: false,
             discard_next_key: false,
@@ -1541,5 +1810,85 @@ mod tests {
         app.execute_action(&GettyAction::Quit, &mut executor);
         let ops = executor.recorded_operations();
         assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_ssh_input_enter_empty_skips_user() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string(), "erikh".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: String::new(),
+            status_message: None,
+        });
+        let key = KeyEvent::from(KeyCode::Enter);
+        app.map_key(key);
+        // Should advance to next user
+        assert_eq!(app.ssh_input.as_ref().map(|s| s.current_user_idx), Some(1));
+    }
+
+    #[test]
+    fn test_ssh_input_enter_empty_last_user_exits() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: String::new(),
+            status_message: None,
+        });
+        let key = KeyEvent::from(KeyCode::Enter);
+        app.map_key(key);
+        // Only one user, empty enter should exit SSH mode
+        assert!(app.ssh_input.is_none());
+    }
+
+    #[test]
+    fn test_ssh_input_esc_exits() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: String::new(),
+            status_message: None,
+        });
+        let key = KeyEvent::from(KeyCode::Esc);
+        app.map_key(key);
+        assert!(app.ssh_input.is_none());
+    }
+
+    #[test]
+    fn test_ssh_input_typing() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: String::new(),
+            status_message: None,
+        });
+        app.map_key(KeyEvent::from(KeyCode::Char('a')));
+        app.map_key(KeyEvent::from(KeyCode::Char('b')));
+        assert_eq!(app.ssh_input.as_ref().map(|s| s.github_username.as_str()), Some("ab"));
+        app.map_key(KeyEvent::from(KeyCode::Backspace));
+        assert_eq!(app.ssh_input.as_ref().map(|s| s.github_username.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn test_ssh_input_enter_with_username_returns_action() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: "testuser".to_string(),
+            status_message: None,
+        });
+        let key = KeyEvent::from(KeyCode::Enter);
+        assert_eq!(app.map_key(key), GettyAction::ReconfigureSshKeys);
+    }
+
+    #[test]
+    fn test_old_r_key_does_nothing() {
+        let mut app = test_app();
+        let key = KeyEvent::from(KeyCode::Char('r'));
+        assert_eq!(app.map_key(key), GettyAction::None);
     }
 }

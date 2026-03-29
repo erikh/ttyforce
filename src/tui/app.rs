@@ -993,6 +993,12 @@ impl App {
             if is_exit || is_terminal {
                 self.should_quit = true;
             }
+            // Network-only mode: quit after network config is persisted
+            if self.state_machine.network_only
+                && self.state_machine.current_screen == ScreenId::Reboot
+            {
+                self.should_quit = true;
+            }
         }
     }
 }
