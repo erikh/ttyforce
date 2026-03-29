@@ -71,7 +71,7 @@ impl TownApiClient {
     /// Fetch audit log entries from the Town OS API.
     /// Returns a list of log lines (most recent last).
     pub fn fetch_audit_log(&self) -> Result<Vec<String>, String> {
-        let body = self.http_get("/audit-log?limit=200")?;
+        let body = self.http_post("/audit/log", r#"{"limit":200}"#)?;
         parse_audit_log_json(&body)
     }
 
@@ -112,6 +112,56 @@ impl TownApiClient {
         let body = &response[body_start..];
 
         // Check for HTTP error status
+        if let Some(status_line) = response.lines().next() {
+            if let Some(code_str) = status_line.split_whitespace().nth(1) {
+                if let Ok(code) = code_str.parse::<u16>() {
+                    if code >= 400 {
+                        return Err(format!("API returned HTTP {}", code));
+                    }
+                }
+            }
+        }
+
+        Ok(body.to_string())
+    }
+
+    /// Perform an HTTP POST request to the Town OS API.
+    fn http_post(&self, path: &str, json_body: &str) -> Result<String, String> {
+        let addr = "127.0.0.1:5309"
+            .parse()
+            .map_err(|e| format!("bad address: {}", e))?;
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
+            .map_err(|e| format!("API unavailable: {}", e))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set timeout: {}", e))?;
+
+        let mut request = format!(
+            "POST {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            path,
+            json_body.len()
+        );
+        if let Some(ref token) = self.token {
+            request.push_str(&format!("Authorization: Bearer {}\r\n", token));
+        }
+        request.push_str("\r\n");
+        request.push_str(json_body);
+
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("write failed: {}", e))?;
+
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .map_err(|e| format!("read failed: {}", e))?;
+
+        let body_start = response
+            .find("\r\n\r\n")
+            .map(|i| i + 4)
+            .unwrap_or(0);
+        let body = &response[body_start..];
+
         if let Some(status_line) = response.lines().next() {
             if let Some(code_str) = status_line.split_whitespace().nth(1) {
                 if let Ok(code) = code_str.parse::<u16>() {
@@ -172,9 +222,9 @@ pub fn parse_units_json(body: &str) -> Result<Vec<ServiceInfo>, String> {
     Ok(services)
 }
 
-/// Parse the JSON response from the /audit-log endpoint into log lines.
-/// Handles both paginated format `{ "entries": [...] }` and bare array `[...]`.
-/// Each entry should have a "message" (or "msg") field, and optionally a "timestamp" field.
+/// Parse the JSON response from the POST /audit/log endpoint into log lines.
+/// Response format: `{ "entries": [...], "has_more": bool, ... }`
+/// Each entry has: action, detail, success, error, created_at, account.
 pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("JSON parse error: {}", e))?;
@@ -187,25 +237,53 @@ pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
 
     let mut lines = Vec::new();
     for item in arr {
-        let msg = item
-            .get("message")
-            .or_else(|| item.get("msg"))
+        let action = item
+            .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if msg.is_empty() {
+        if action.is_empty() {
             continue;
         }
 
-        let timestamp = item
-            .get("timestamp")
-            .or_else(|| item.get("time"))
-            .and_then(|v| v.as_str());
+        let detail = item.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+        let success = item.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
+        let error_msg = item.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
 
-        let line = match timestamp {
-            Some(ts) => format!("{} {}", ts, msg),
-            None => msg.to_string(),
+        // Format timestamp: strip sub-second precision and timezone suffix for brevity
+        let ts = if let Some(t_pos) = created_at.find('T') {
+            let date = &created_at[..t_pos];
+            let time_part = &created_at[t_pos + 1..];
+            // Take HH:MM:SS, drop fractional seconds and timezone
+            let time_end = time_part
+                .find('.')
+                .or_else(|| time_part.find('Z'))
+                .or_else(|| time_part.find('+'))
+                .unwrap_or(time_part.len());
+            format!("{} {}", date, &time_part[..time_end])
+        } else if !created_at.is_empty() {
+            created_at.to_string()
+        } else {
+            String::new()
         };
+
+        let mut line = if ts.is_empty() {
+            action.to_string()
+        } else {
+            format!("{} {}", ts, action)
+        };
+
+        if !detail.is_empty() {
+            line.push_str(&format!(": {}", detail));
+        }
+
+        if !success && !error_msg.is_empty() {
+            line.push_str(&format!(" [ERROR: {}]", error_msg));
+        } else if !success {
+            line.push_str(" [FAILED]");
+        }
+
         lines.push(line);
     }
 
@@ -324,32 +402,44 @@ mod tests {
 
     #[test]
     fn test_parse_audit_log_basic() -> Result<(), String> {
-        let json = r#"[
-            {"timestamp": "2024-01-15T12:00:00Z", "message": "User logged in"},
-            {"timestamp": "2024-01-15T12:01:00Z", "message": "Config changed"}
-        ]"#;
+        let json = r#"{"entries": [
+            {"action": "Install package", "detail": "caddy", "success": true, "error": "", "created_at": "2024-01-15T12:00:00Z", "account": "admin"},
+            {"action": "Create account", "detail": "user1", "success": true, "error": "", "created_at": "2024-01-15T12:01:00.123Z", "account": "admin"}
+        ]}"#;
         let lines = parse_audit_log_json(json)?;
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "2024-01-15T12:00:00Z User logged in");
-        assert_eq!(lines[1], "2024-01-15T12:01:00Z Config changed");
+        assert_eq!(lines[0], "2024-01-15 12:00:00 Install package: caddy");
+        assert_eq!(lines[1], "2024-01-15 12:01:00 Create account: user1");
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_no_timestamp() -> Result<(), String> {
-        let json = r#"[{"message": "something happened"}]"#;
+        let json = r#"[{"action": "Something happened", "success": true}]"#;
         let lines = parse_audit_log_json(json)?;
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "something happened");
+        assert_eq!(lines[0], "Something happened");
         Ok(())
     }
 
     #[test]
-    fn test_parse_audit_log_alt_fields() -> Result<(), String> {
-        let json = r#"[{"time": "12:00", "msg": "event"}]"#;
+    fn test_parse_audit_log_failure_with_error() -> Result<(), String> {
+        let json = r#"[{"action": "Install package", "detail": "bad-pkg", "success": false, "error": "not found", "created_at": "2024-01-15T12:00:00Z"}]"#;
         let lines = parse_audit_log_json(json)?;
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "12:00 event");
+        assert_eq!(
+            lines[0],
+            "2024-01-15 12:00:00 Install package: bad-pkg [ERROR: not found]"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_failure_no_error_msg() -> Result<(), String> {
+        let json = r#"[{"action": "Install package", "success": false, "error": ""}]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "Install package [FAILED]");
         Ok(())
     }
 
@@ -361,17 +451,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_audit_log_skips_empty_message() -> Result<(), String> {
-        let json = r#"[{"message": ""}, {"message": "real entry"}]"#;
+    fn test_parse_audit_log_skips_empty_action() -> Result<(), String> {
+        let json = r#"[{"action": "", "success": true}, {"action": "Real entry", "success": true}]"#;
         let lines = parse_audit_log_json(json)?;
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "real entry");
+        assert_eq!(lines[0], "Real entry");
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_paginated() -> Result<(), String> {
-        let json = r#"{"entries": [{"message": "entry one"}, {"message": "entry two"}]}"#;
+        let json = r#"{"entries": [{"action": "entry one", "success": true}, {"action": "entry two", "success": true}], "has_more": false, "total_count": 2}"#;
         let lines = parse_audit_log_json(json)?;
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "entry one");
@@ -389,5 +479,13 @@ mod tests {
     fn test_parse_audit_log_not_array() {
         let result = parse_audit_log_json(r#"{"key": "value"}"#);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_audit_log_timestamp_with_timezone_offset() -> Result<(), String> {
+        let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00+05:00", "success": true}]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines[0], "2024-01-15 12:00:00 test");
+        Ok(())
     }
 }

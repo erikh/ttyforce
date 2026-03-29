@@ -2093,11 +2093,11 @@ mod tests {
     fn test_audit_lines_populated() {
         let mut app = test_app();
         app.audit_lines = vec![
-            "2024-01-15T12:00:00Z User logged in".to_string(),
-            "2024-01-15T12:01:00Z Config changed".to_string(),
+            "2024-01-15 12:00:00 Install package: caddy".to_string(),
+            "2024-01-15 12:01:00 Create account: user1".to_string(),
         ];
         assert_eq!(app.audit_lines.len(), 2);
-        assert!(app.audit_lines[0].contains("User logged in"));
+        assert!(app.audit_lines[0].contains("Install package"));
     }
 
     #[test]
