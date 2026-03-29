@@ -107,8 +107,6 @@ pub struct GettyApp {
     xe_journal_lines: Vec<String>,
     xe_journal_child: Option<Child>,
     xe_journal_max_lines: usize,
-    /// Audit log entries fetched from the Town OS API for the bottom-right pane.
-    audit_lines: Vec<String>,
     /// Mock mode: don't execute real operations (login, reboot, etc).
     pub mock_mode: bool,
 }
@@ -130,8 +128,6 @@ impl GettyApp {
         } else {
             None
         };
-
-        let audit_lines = api_client.fetch_audit_log().unwrap_or_default();
 
         Self {
             system_info,
@@ -163,7 +159,6 @@ impl GettyApp {
             xe_journal_lines: Vec::new(),
             xe_journal_child: None,
             xe_journal_max_lines: 200,
-            audit_lines,
             mock_mode: false,
         }
     }
@@ -219,9 +214,6 @@ impl GettyApp {
                 self.system_info.refresh_network();
                 self.system_services = self.api_client.fetch_system_services();
                 self.all_services = self.api_client.fetch_all_services();
-                if let Ok(lines) = self.api_client.fetch_audit_log() {
-                    self.audit_lines = lines;
-                }
                 self.last_slow_refresh = Instant::now();
             }
 
@@ -902,16 +894,14 @@ impl GettyApp {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Title bar
-                Constraint::Min(5),    // Audit log (full-width)
-                Constraint::Length(8), // Quad top row: services | metrics
-                Constraint::Length(8), // Quad bottom row: journal -f | journal -xe
-                Constraint::Length(3), // Action bar
+                Constraint::Length(5),      // Title bar
+                Constraint::Percentage(50), // Quad top row: services | metrics
+                Constraint::Percentage(50), // Quad bottom row: journal -f | journal -xe
+                Constraint::Length(3),      // Action bar
             ])
             .split(area);
 
         self.render_title(f, chunks[0]);
-        self.render_audit_log(f, chunks[1]);
 
         // Quad top row: service status (left) | system metrics (right)
         let quad_top = Layout::default()
@@ -920,7 +910,7 @@ impl GettyApp {
                 Constraint::Percentage(50),
                 Constraint::Percentage(50),
             ])
-            .split(chunks[2]);
+            .split(chunks[1]);
         self.render_service_status(f, quad_top[0]);
         self.render_system_info(f, quad_top[1]);
 
@@ -931,18 +921,18 @@ impl GettyApp {
                 Constraint::Percentage(50),
                 Constraint::Percentage(50),
             ])
-            .split(chunks[3]);
+            .split(chunks[2]);
         self.render_journal(f, quad_bottom[0]);
         self.render_xe_journal(f, quad_bottom[1]);
 
         if self.ssh_input.is_some() {
-            self.render_ssh_input(f, chunks[4]);
+            self.render_ssh_input(f, chunks[3]);
         } else if self.sledgehammer_input.is_some() {
-            self.render_sledgehammer_confirm(f, chunks[4]);
+            self.render_sledgehammer_confirm(f, chunks[3]);
         } else if self.reconfigure_menu {
-            self.render_reconfigure_menu(f, chunks[4]);
+            self.render_reconfigure_menu(f, chunks[3]);
         } else {
-            self.render_actions(f, chunks[4]);
+            self.render_actions(f, chunks[3]);
         }
     }
 
@@ -976,8 +966,14 @@ impl GettyApp {
             Span::styled(format!("Town OS {}", version), Style::default().fg(Color::DarkGray))
         };
 
-        let line = Line::from(vec![
-            Span::raw("  "),
+        let hostname_line = Line::from(vec![
+            Span::styled(
+                &self.system_info.hostname,
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+
+        let detail_line = Line::from(vec![
             Span::styled(&url, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             api_status,
@@ -985,7 +981,11 @@ impl GettyApp {
             version_span,
         ]);
 
-        let title = Paragraph::new(line)
+        let title = Paragraph::new(vec![
+            Line::from(""),
+            hostname_line,
+            detail_line,
+        ])
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, area);
@@ -1192,36 +1192,6 @@ impl GettyApp {
         f.render_widget(paragraph, area);
     }
 
-    fn render_audit_log(&self, f: &mut ratatui::Frame, area: Rect) {
-        let block = Block::default()
-            .title(" Audit Log ")
-            .title_alignment(Alignment::Left)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
-        let inner_height = area.height.saturating_sub(2) as usize;
-        let start = self.audit_lines.len().saturating_sub(inner_height);
-        let visible: Vec<Line> = self.audit_lines[start..]
-            .iter()
-            .map(|line| {
-                let style = if line.contains("error")
-                    || line.contains("Error")
-                    || line.contains("FAILED")
-                    || line.contains("failed")
-                {
-                    Style::default().fg(Color::Red)
-                } else if line.contains("warn") || line.contains("Warn") {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                Line::from(Span::styled(format!("  {}", line), style))
-            })
-            .collect();
-
-        let paragraph = Paragraph::new(visible).block(block);
-        f.render_widget(paragraph, area);
-    }
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
@@ -1671,7 +1641,6 @@ mod tests {
             xe_journal_lines: Vec::new(),
             xe_journal_child: None,
             xe_journal_max_lines: 200,
-            audit_lines: Vec::new(),
             mock_mode: false,
         }
     }
@@ -2026,23 +1995,6 @@ mod tests {
     fn test_xe_journal_max_lines_default() {
         let app = test_app();
         assert_eq!(app.xe_journal_max_lines, 200);
-    }
-
-    #[test]
-    fn test_audit_lines_initially_empty() {
-        let app = test_app();
-        assert!(app.audit_lines.is_empty());
-    }
-
-    #[test]
-    fn test_audit_lines_populated() {
-        let mut app = test_app();
-        app.audit_lines = vec![
-            "2024-01-15 12:00:00 Install package: caddy".to_string(),
-            "2024-01-15 12:01:00 Create account: user1".to_string(),
-        ];
-        assert_eq!(app.audit_lines.len(), 2);
-        assert!(app.audit_lines[0].contains("Install package"));
     }
 
     #[test]

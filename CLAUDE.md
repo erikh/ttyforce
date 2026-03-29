@@ -125,8 +125,7 @@ The binary has five subcommands and two global flags.
 
     Service status is fetched from the Town OS API at
     `GET /systemd/units?limit=100` on `localhost:5309`.
-    Audit log is fetched from `POST /audit/log` with body
-    `{"limit":200}` on the same API. Authentication uses a bearer token from
+    Authentication uses a bearer token from
     `TTYFORCE_API_TOKEN` env var or `<etc_prefix>/ttyforce/api-token`
     file.
 
@@ -454,9 +453,8 @@ groups and other selections are always visible.
 
 ### Getty TUI:
 
-- Title bar (3 lines) — hostname, mDNS URL, API status, Town OS version
-- Audit log pane (flexible, full-width) — system log from Town OS API
-- Quad panes (2×2):
+- Title bar (5 lines) — hostname, mDNS URL, API status, Town OS version
+- Quad panes (2×2, fills remaining space):
   - Top-left: Service status — list of services with state
   - Top-right: System metrics — kernel, CPU, load, memory, disk, network
   - Bottom-left: `journalctl -f` output (live, color-coded)
@@ -467,14 +465,6 @@ All four quad panes are always visible. There is no panel toggle.
 
 Both journal panes run continuously as subprocesses, using
 non-blocking I/O with 200-line circular buffers.
-
-The audit log pane fetches entries from the Town OS API on the slow
-refresh cycle (every 15s) via `POST /audit/log` with body
-`{"limit":200}`. Each entry has `action`, `detail`, `success`,
-`error`, and `created_at` fields. Lines are formatted as
-`YYYY-MM-DD HH:MM:SS action: detail` and color-coded: red for
-errors/failures, yellow for warnings, dark gray otherwise. Degrades
-gracefully if the endpoint is unavailable.
 
 ## Disk detection:
 
