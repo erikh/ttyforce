@@ -107,7 +107,7 @@ fn run_dry_run(hardware: HardwareManifest, output_file: Option<&str>) {
     let mut app = App::new(state_machine);
     let mut executor = TestExecutor::new(vec![]);
 
-    if let Err(e) = app.run(&mut executor) {
+    if let Err(e) = app.run(&mut executor, None) {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
