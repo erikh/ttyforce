@@ -255,11 +255,15 @@ pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
         let ts = if let Some(t_pos) = created_at.find('T') {
             let date = &created_at[..t_pos];
             let time_part = &created_at[t_pos + 1..];
-            // Take HH:MM:SS, drop fractional seconds and timezone
+            // Take HH:MM:SS, drop fractional seconds and timezone.
+            // Search for '.', 'Z', '+' anywhere, and '-' only after position 8
+            // (to avoid matching the '-' inside a negative offset like HH:MM:SS-05:00
+            // vs the colons in HH:MM:SS which occupy positions 0-7).
             let time_end = time_part
                 .find('.')
                 .or_else(|| time_part.find('Z'))
                 .or_else(|| time_part.find('+'))
+                .or_else(|| time_part[8..].find('-').map(|i| i + 8))
                 .unwrap_or(time_part.len());
             format!("{} {}", date, &time_part[..time_end])
         } else if !created_at.is_empty() {
@@ -484,6 +488,14 @@ mod tests {
     #[test]
     fn test_parse_audit_log_timestamp_with_timezone_offset() -> Result<(), String> {
         let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00+05:00", "success": true}]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines[0], "2024-01-15 12:00:00 test");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_timestamp_with_negative_timezone_offset() -> Result<(), String> {
+        let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00-05:00", "success": true}]"#;
         let lines = parse_audit_log_json(json)?;
         assert_eq!(lines[0], "2024-01-15 12:00:00 test");
         Ok(())

@@ -449,7 +449,11 @@ impl GettyApp {
         match key.code {
             KeyCode::Char('.') => GettyAction::Login,
             KeyCode::Char('l') => {
-                self.show_full_log = !self.show_full_log;
+                self.show_full_log = true;
+                GettyAction::None
+            }
+            KeyCode::Char('s') => {
+                self.show_full_log = false;
                 GettyAction::None
             }
             KeyCode::Char('q') if self.quit_enabled => GettyAction::Quit,
@@ -1172,7 +1176,7 @@ impl GettyApp {
 
     fn render_journal(&self, f: &mut ratatui::Frame, area: Rect) {
         let block = Block::default()
-            .title(" Journal -f [l: back] ")
+            .title(" Journal -f [s: status] ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
@@ -1208,6 +1212,21 @@ impl GettyApp {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
+        if self.audit_lines.is_empty() {
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "No audit log entries",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .alignment(Alignment::Center);
+            f.render_widget(paragraph, area);
+            return;
+        }
+
         let inner_height = area.height.saturating_sub(2) as usize;
         let start = self.audit_lines.len().saturating_sub(inner_height);
         let visible: Vec<Line> = self.audit_lines[start..]
@@ -1218,7 +1237,7 @@ impl GettyApp {
                 } else if line.contains("warn") || line.contains("Warn") {
                     Style::default().fg(Color::Yellow)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::Gray)
                 };
                 Line::from(Span::styled(format!("  {}", line), style))
             })
@@ -1262,9 +1281,9 @@ impl GettyApp {
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
-            "  [.] Login   [l] Log   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [s] Status   [l] Log   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off"
         } else {
-            "  [.] Login   [l] Log   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [s] Status   [l] Log   [@] Reconfigure   [R] Reboot   [p] Power Off"
         };
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
@@ -2166,5 +2185,47 @@ mod tests {
         assert!(has_child || has_error);
         // Clean up
         app.stop_xe_journal();
+    }
+
+    #[test]
+    fn test_key_l_switches_to_log() {
+        let mut app = test_app();
+        assert!(!app.show_full_log);
+        let key = KeyEvent::from(KeyCode::Char('l'));
+        assert_eq!(app.map_key(key), GettyAction::None);
+        assert!(app.show_full_log);
+        // Pressing 'l' again stays on log (not a toggle)
+        let key = KeyEvent::from(KeyCode::Char('l'));
+        app.map_key(key);
+        assert!(app.show_full_log);
+    }
+
+    #[test]
+    fn test_key_s_switches_to_status() {
+        let mut app = test_app();
+        app.show_full_log = true;
+        let key = KeyEvent::from(KeyCode::Char('s'));
+        assert_eq!(app.map_key(key), GettyAction::None);
+        assert!(!app.show_full_log);
+        // Pressing 's' again stays on status (not a toggle)
+        let key = KeyEvent::from(KeyCode::Char('s'));
+        app.map_key(key);
+        assert!(!app.show_full_log);
+    }
+
+    #[test]
+    fn test_key_l_then_s_round_trip() {
+        let mut app = test_app();
+        assert!(!app.show_full_log);
+        app.map_key(KeyEvent::from(KeyCode::Char('l')));
+        assert!(app.show_full_log);
+        app.map_key(KeyEvent::from(KeyCode::Char('s')));
+        assert!(!app.show_full_log);
+    }
+
+    #[test]
+    fn test_audit_lines_initially_empty() {
+        let app = test_app();
+        assert!(app.audit_lines.is_empty());
     }
 }
