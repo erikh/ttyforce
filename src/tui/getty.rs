@@ -15,7 +15,7 @@ use ratatui::widgets::*;
 use crate::engine::executor::OperationExecutor;
 use crate::engine::real_ops::{cmd_log_append, kmsg_log};
 use crate::engine::state_machine::InstallerStateMachine;
-use crate::getty::api::{ServiceInfo, TownApiClient};
+use crate::getty::api::{AuditEntry, ServiceInfo, TownApiClient};
 use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
 use crate::tui::app::{redirect_to_tty, restore_fds, App};
@@ -108,7 +108,7 @@ pub struct GettyApp {
     xe_journal_child: Option<Child>,
     xe_journal_max_lines: usize,
     /// Audit log entries fetched from the Town OS API.
-    audit_lines: Vec<String>,
+    audit_entries: Vec<AuditEntry>,
     /// When true, show full-screen journal -f log instead of the quad.
     show_full_log: bool,
     /// Mock mode: don't execute real operations (login, reboot, etc).
@@ -133,7 +133,7 @@ impl GettyApp {
             None
         };
 
-        let audit_lines = api_client.fetch_audit_log().unwrap_or_default();
+        let audit_entries = api_client.fetch_audit_log().unwrap_or_default();
 
         Self {
             system_info,
@@ -165,7 +165,7 @@ impl GettyApp {
             xe_journal_lines: Vec::new(),
             xe_journal_child: None,
             xe_journal_max_lines: 200,
-            audit_lines,
+            audit_entries,
             show_full_log: false,
             mock_mode: false,
         }
@@ -222,8 +222,8 @@ impl GettyApp {
                 self.system_info.refresh_network();
                 self.system_services = self.api_client.fetch_system_services();
                 self.all_services = self.api_client.fetch_all_services();
-                if let Ok(lines) = self.api_client.fetch_audit_log() {
-                    self.audit_lines = lines;
+                if let Ok(entries) = self.api_client.fetch_audit_log() {
+                    self.audit_entries = entries;
                 }
                 self.last_slow_refresh = Instant::now();
             }
@@ -1212,7 +1212,7 @@ impl GettyApp {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        if self.audit_lines.is_empty() {
+        if self.audit_entries.is_empty() {
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
@@ -1227,19 +1227,96 @@ impl GettyApp {
             return;
         }
 
+        // inner width = total area minus 2 for borders
+        let inner_width = area.width.saturating_sub(2) as usize;
         let inner_height = area.height.saturating_sub(2) as usize;
-        let start = self.audit_lines.len().saturating_sub(inner_height);
-        let visible: Vec<Line> = self.audit_lines[start..]
+        let start = self.audit_entries.len().saturating_sub(inner_height);
+
+        // Column layout: " OK /path/here  action  key=val key=val  12:30:45 "
+        // Status: 3 chars, Path: 30% of width, Action: 15%, Time: 9 chars, Detail: rest
+        let status_w = 3;
+        let time_w = 9; // " HH:MM:SS"
+        let separators = 4; // spaces between columns
+        let fixed = status_w + time_w + separators;
+        let flexible = inner_width.saturating_sub(fixed);
+        let path_w = flexible * 35 / 100;
+        let action_w = flexible * 20 / 100;
+        let detail_w = flexible.saturating_sub(path_w + action_w);
+
+        let visible: Vec<Line> = self.audit_entries[start..]
             .iter()
-            .map(|line| {
-                let style = if line.contains("ERROR") || line.contains("FAILED") {
-                    Style::default().fg(Color::Red)
-                } else if line.contains("warn") || line.contains("Warn") {
-                    Style::default().fg(Color::Yellow)
+            .map(|entry| {
+                let mut spans = Vec::new();
+
+                // Status column
+                if entry.success {
+                    spans.push(Span::styled(
+                        "OK ",
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ));
                 } else {
-                    Style::default().fg(Color::Gray)
+                    spans.push(Span::styled(
+                        "ERR",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ));
+                }
+
+                spans.push(Span::raw(" "));
+
+                // Path column — prominent, cyan
+                let path_display = truncate_str(&entry.path, path_w);
+                let path_padded = format!("{:<width$}", path_display, width = path_w);
+                spans.push(Span::styled(
+                    path_padded,
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ));
+
+                spans.push(Span::raw(" "));
+
+                // Action column
+                let action_display = truncate_str(&entry.action, action_w);
+                let action_padded = format!("{:<width$}", action_display, width = action_w);
+                spans.push(Span::styled(
+                    action_padded,
+                    Style::default().fg(Color::White),
+                ));
+
+                spans.push(Span::raw(" "));
+
+                // Detail column — key=value pairs with highlighted keys
+                if !entry.detail.is_empty() {
+                    let detail_display = truncate_str(&entry.detail, detail_w);
+                    let detail_spans = highlight_key_value_pairs(&detail_display, detail_w);
+                    spans.extend(detail_spans);
+                } else if !entry.error.is_empty() {
+                    let err_display = truncate_str(&entry.error, detail_w);
+                    spans.push(Span::styled(
+                        format!("{:<width$}", err_display, width = detail_w),
+                        Style::default().fg(Color::Red),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        " ".repeat(detail_w),
+                        Style::default(),
+                    ));
+                }
+
+                spans.push(Span::raw(" "));
+
+                // Time column — HH:MM:SS only, dimmed
+                let time_display = if entry.timestamp.len() >= 19 {
+                    &entry.timestamp[11..19]
+                } else if !entry.timestamp.is_empty() {
+                    &entry.timestamp
+                } else {
+                    "        "
                 };
-                Line::from(Span::styled(format!("  {}", line), style))
+                spans.push(Span::styled(
+                    format!("{:>8}", time_display),
+                    Style::default().fg(Color::DarkGray),
+                ));
+
+                Line::from(spans)
             })
             .collect();
 
@@ -1376,6 +1453,75 @@ impl GettyApp {
             );
         f.render_widget(paragraph, area);
     }
+}
+
+/// Truncate a string to fit within `max_width` characters.
+/// Appends "…" if truncated (counts as 1 char of width).
+fn truncate_str(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if s.len() <= max_width {
+        return s.to_string();
+    }
+    let mut result: String = s.chars().take(max_width.saturating_sub(1)).collect();
+    result.push('\u{2026}'); // …
+    result
+}
+
+/// Parse "key=val key2=val2" into spans with highlighted keys (yellow) and values (white).
+/// Truncates to fit within `max_width` total characters.
+fn highlight_key_value_pairs(s: &str, max_width: usize) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut chars_used = 0;
+
+    for (i, token) in s.split_whitespace().enumerate() {
+        if chars_used >= max_width {
+            break;
+        }
+        if i > 0 {
+            spans.push(Span::raw(" ".to_string()));
+            chars_used += 1;
+        }
+        if let Some(eq_pos) = token.find('=') {
+            let key = &token[..eq_pos + 1]; // includes '='
+            let val = &token[eq_pos + 1..];
+            let remaining = max_width.saturating_sub(chars_used);
+            if key.len() + val.len() > remaining {
+                let trunc = truncate_str(token, remaining);
+                spans.push(Span::styled(
+                    trunc.clone(),
+                    Style::default().fg(Color::Yellow),
+                ));
+                chars_used += trunc.len();
+            } else {
+                spans.push(Span::styled(
+                    key.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ));
+                spans.push(Span::styled(
+                    val.to_string(),
+                    Style::default().fg(Color::White),
+                ));
+                chars_used += key.len() + val.len();
+            }
+        } else {
+            let remaining = max_width.saturating_sub(chars_used);
+            let display = truncate_str(token, remaining);
+            spans.push(Span::styled(
+                display.clone(),
+                Style::default().fg(Color::White),
+            ));
+            chars_used += display.len();
+        }
+    }
+
+    // Pad remaining space
+    if chars_used < max_width {
+        spans.push(Span::raw(" ".repeat(max_width - chars_used)));
+    }
+
+    spans
 }
 
 /// Open /dev/kmsg for non-blocking reading, seeked to the end
@@ -1727,7 +1873,7 @@ mod tests {
             xe_journal_lines: Vec::new(),
             xe_journal_child: None,
             xe_journal_max_lines: 200,
-            audit_lines: Vec::new(),
+            audit_entries: Vec::new(),
             show_full_log: false,
             mock_mode: false,
         }
@@ -2224,8 +2370,77 @@ mod tests {
     }
 
     #[test]
-    fn test_audit_lines_initially_empty() {
+    fn test_audit_entries_initially_empty() {
         let app = test_app();
-        assert!(app.audit_lines.is_empty());
+        assert!(app.audit_entries.is_empty());
+    }
+
+    #[test]
+    fn test_audit_entries_can_be_populated() {
+        let mut app = test_app();
+        app.audit_entries = vec![
+            AuditEntry {
+                timestamp: "2024-01-15 12:00:00".to_string(),
+                success: true,
+                path: "/account/authenticate".to_string(),
+                action: "authenticate".to_string(),
+                detail: "username=erikh".to_string(),
+                error: String::new(),
+            },
+            AuditEntry {
+                timestamp: "2024-01-15 12:01:00".to_string(),
+                success: false,
+                path: "/packages/install".to_string(),
+                action: "install package".to_string(),
+                detail: "name=bad-pkg".to_string(),
+                error: "not found".to_string(),
+            },
+        ];
+        assert_eq!(app.audit_entries.len(), 2);
+        assert!(app.audit_entries[0].success);
+        assert!(!app.audit_entries[1].success);
+        assert_eq!(app.audit_entries[0].path, "/account/authenticate");
+        assert_eq!(app.audit_entries[1].error, "not found");
+    }
+
+    #[test]
+    fn test_truncate_str_no_truncation() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact_fit() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_truncated() {
+        let result = truncate_str("hello world", 6);
+        assert_eq!(result, "hello\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_str_zero_width() {
+        assert_eq!(truncate_str("hello", 0), "");
+    }
+
+    #[test]
+    fn test_highlight_key_value_pairs_basic() {
+        let spans = highlight_key_value_pairs("username=erikh", 20);
+        // Should have key span (yellow), value span (white), and padding
+        assert!(spans.len() >= 2);
+    }
+
+    #[test]
+    fn test_highlight_key_value_pairs_multiple() {
+        let spans = highlight_key_value_pairs("admin=true email=e@x.com", 30);
+        // Multiple key=value pairs should produce multiple colored spans
+        assert!(spans.len() >= 4);
+    }
+
+    #[test]
+    fn test_highlight_key_value_pairs_no_equals() {
+        let spans = highlight_key_value_pairs("plaintext", 20);
+        assert!(!spans.is_empty());
     }
 }

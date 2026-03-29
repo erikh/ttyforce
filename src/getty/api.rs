@@ -42,6 +42,8 @@ struct RawAuditEntry {
     #[serde(default)]
     action: String,
     #[serde(default)]
+    path: String,
+    #[serde(default)]
     detail: String,
     #[serde(default = "default_true")]
     success: bool,
@@ -59,6 +61,17 @@ fn default_true() -> bool {
 #[derive(Deserialize)]
 struct PaginatedAuditLog {
     entries: Vec<RawAuditEntry>,
+}
+
+/// Structured audit log entry for tabular display.
+#[derive(Debug, Clone)]
+pub struct AuditEntry {
+    pub timestamp: String,
+    pub success: bool,
+    pub path: String,
+    pub action: String,
+    pub detail: String,
+    pub error: String,
 }
 
 /// Minimal HTTP client for the Town OS API at localhost:5309.
@@ -120,8 +133,8 @@ impl TownApiClient {
     }
 
     /// Fetch audit log entries from the Town OS API.
-    /// Returns a list of log lines (most recent last).
-    pub fn fetch_audit_log(&self) -> Result<Vec<String>, String> {
+    /// Returns structured entries (most recent last).
+    pub fn fetch_audit_log(&self) -> Result<Vec<AuditEntry>, String> {
         let body = self.http_post("/audit/log", r#"{"limit":200}"#)?;
         parse_audit_log_json(&body)
     }
@@ -282,10 +295,37 @@ fn format_timestamp(created_at: &str) -> String {
     created_at.to_string()
 }
 
-/// Parse the JSON response from the POST /audit/log endpoint into log lines.
+/// Format a JSON detail string into key=value pairs for tabular display.
+/// e.g. `{"username":"erikh","admin":true}` → `username=erikh admin=true`
+/// Non-JSON strings are returned as-is.
+pub fn format_detail_json(detail: &str) -> String {
+    if detail.is_empty() {
+        return String::new();
+    }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(detail) {
+        let pairs: Vec<String> = map
+            .iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Null => "null".to_string(),
+                    other => other.to_string(),
+                };
+                format!("{}={}", k, val)
+            })
+            .collect();
+        pairs.join(" ")
+    } else {
+        detail.to_string()
+    }
+}
+
+/// Parse the JSON response from the POST /audit/log endpoint into structured entries.
 /// Response format: `{ "entries": [...], "has_more": bool, ... }`
-/// Each entry has: action, detail, success, error, created_at, account.
-pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
+/// Each entry has: action, path, detail, success, error, created_at, account.
+pub fn parse_audit_log_json(body: &str) -> Result<Vec<AuditEntry>, String> {
     let entries: Vec<RawAuditEntry> = if let Ok(paginated) =
         serde_json::from_str::<PaginatedAuditLog>(body)
     {
@@ -300,33 +340,20 @@ pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
         })?
     };
 
-    let lines = entries
+    let result = entries
         .into_iter()
         .filter(|e| !e.action.is_empty())
-        .map(|e| {
-            let ts = format_timestamp(&e.created_at);
-
-            let mut line = if ts.is_empty() {
-                e.action.clone()
-            } else {
-                format!("{} {}", ts, e.action)
-            };
-
-            if !e.detail.is_empty() {
-                line.push_str(&format!(": {}", e.detail));
-            }
-
-            if !e.success && !e.error.is_empty() {
-                line.push_str(&format!(" [ERROR: {}]", e.error));
-            } else if !e.success {
-                line.push_str(" [FAILED]");
-            }
-
-            line
+        .map(|e| AuditEntry {
+            timestamp: format_timestamp(&e.created_at),
+            success: e.success,
+            path: e.path,
+            action: e.action,
+            detail: format_detail_json(&e.detail),
+            error: e.error,
         })
         .collect();
 
-    Ok(lines)
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -442,69 +469,77 @@ mod tests {
     #[test]
     fn test_parse_audit_log_basic() -> Result<(), String> {
         let json = r#"{"entries": [
-            {"action": "Install package", "detail": "caddy", "success": true, "error": "", "created_at": "2024-01-15T12:00:00Z", "account": "admin"},
-            {"action": "Create account", "detail": "user1", "success": true, "error": "", "created_at": "2024-01-15T12:01:00.123Z", "account": "admin"}
+            {"action": "Install package", "path": "/packages/install", "detail": "caddy", "success": true, "error": "", "created_at": "2024-01-15T12:00:00Z", "account": "admin"},
+            {"action": "Create account", "path": "/account/create", "detail": "{\"username\":\"user1\"}", "success": true, "error": "", "created_at": "2024-01-15T12:01:00.123Z", "account": "admin"}
         ]}"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "2024-01-15 12:00:00 Install package: caddy");
-        assert_eq!(lines[1], "2024-01-15 12:01:00 Create account: user1");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].action, "Install package");
+        assert_eq!(entries[0].path, "/packages/install");
+        assert_eq!(entries[0].detail, "caddy");
+        assert_eq!(entries[0].timestamp, "2024-01-15 12:00:00");
+        assert!(entries[0].success);
+        assert_eq!(entries[1].action, "Create account");
+        assert_eq!(entries[1].path, "/account/create");
+        assert_eq!(entries[1].detail, "username=user1");
+        assert_eq!(entries[1].timestamp, "2024-01-15 12:01:00");
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_no_timestamp() -> Result<(), String> {
         let json = r#"[{"action": "Something happened", "success": true}]"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "Something happened");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "Something happened");
+        assert!(entries[0].timestamp.is_empty());
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_failure_with_error() -> Result<(), String> {
-        let json = r#"[{"action": "Install package", "detail": "bad-pkg", "success": false, "error": "not found", "created_at": "2024-01-15T12:00:00Z"}]"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines.len(), 1);
-        assert_eq!(
-            lines[0],
-            "2024-01-15 12:00:00 Install package: bad-pkg [ERROR: not found]"
-        );
+        let json = r#"[{"action": "Install package", "path": "/packages/install", "detail": "bad-pkg", "success": false, "error": "not found", "created_at": "2024-01-15T12:00:00Z"}]"#;
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].success);
+        assert_eq!(entries[0].error, "not found");
+        assert_eq!(entries[0].path, "/packages/install");
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_failure_no_error_msg() -> Result<(), String> {
         let json = r#"[{"action": "Install package", "success": false, "error": ""}]"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "Install package [FAILED]");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].success);
+        assert!(entries[0].error.is_empty());
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_empty_array() -> Result<(), String> {
-        let lines = parse_audit_log_json("[]")?;
-        assert!(lines.is_empty());
+        let entries = parse_audit_log_json("[]")?;
+        assert!(entries.is_empty());
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_skips_empty_action() -> Result<(), String> {
         let json = r#"[{"action": "", "success": true}, {"action": "Real entry", "success": true}]"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "Real entry");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "Real entry");
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_paginated() -> Result<(), String> {
         let json = r#"{"entries": [{"action": "entry one", "success": true}, {"action": "entry two", "success": true}], "has_more": false, "total_count": 2}"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "entry one");
-        assert_eq!(lines[1], "entry two");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].action, "entry one");
+        assert_eq!(entries[1].action, "entry two");
         Ok(())
     }
 
@@ -523,16 +558,75 @@ mod tests {
     #[test]
     fn test_parse_audit_log_timestamp_with_timezone_offset() -> Result<(), String> {
         let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00+05:00", "success": true}]"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines[0], "2024-01-15 12:00:00 test");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries[0].timestamp, "2024-01-15 12:00:00");
+        assert_eq!(entries[0].action, "test");
         Ok(())
     }
 
     #[test]
     fn test_parse_audit_log_timestamp_with_negative_timezone_offset() -> Result<(), String> {
         let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00-05:00", "success": true}]"#;
-        let lines = parse_audit_log_json(json)?;
-        assert_eq!(lines[0], "2024-01-15 12:00:00 test");
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries[0].timestamp, "2024-01-15 12:00:00");
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_with_path_field() -> Result<(), String> {
+        let json = r#"[{"action": "authenticate", "path": "/account/authenticate", "detail": "{\"username\":\"erikh\"}", "success": true, "created_at": "2026-03-29T19:12:46Z"}]"#;
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "/account/authenticate");
+        assert_eq!(entries[0].action, "authenticate");
+        assert_eq!(entries[0].detail, "username=erikh");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_json_detail_multiple_fields() -> Result<(), String> {
+        let json = r#"[{"action": "create account", "path": "/account/create", "detail": "{\"admin\":true,\"email\":\"e@x.com\",\"username\":\"erikh\"}", "success": true}]"#;
+        let entries = parse_audit_log_json(json)?;
+        assert_eq!(entries[0].detail, "admin=true email=e@x.com username=erikh");
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_detail_json_object() {
+        let detail = r#"{"username":"erikh","admin":true}"#;
+        let result = format_detail_json(detail);
+        assert!(result.contains("username=erikh"));
+        assert!(result.contains("admin=true"));
+    }
+
+    #[test]
+    fn test_format_detail_json_empty() {
+        assert_eq!(format_detail_json(""), "");
+    }
+
+    #[test]
+    fn test_format_detail_json_plain_string() {
+        assert_eq!(format_detail_json("caddy"), "caddy");
+    }
+
+    #[test]
+    fn test_format_detail_json_nested_object() {
+        let detail = r#"{"name":"test","config":{"port":8080}}"#;
+        let result = format_detail_json(detail);
+        assert!(result.contains("name=test"));
+        // Nested objects get JSON representation
+        assert!(result.contains("config="));
+    }
+
+    #[test]
+    fn test_format_detail_json_null_value() {
+        let detail = r#"{"key":null}"#;
+        assert_eq!(format_detail_json(detail), "key=null");
+    }
+
+    #[test]
+    fn test_format_detail_json_number_value() {
+        let detail = r#"{"port":8080}"#;
+        assert_eq!(format_detail_json(detail), "port=8080");
     }
 }
