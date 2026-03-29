@@ -109,6 +109,8 @@ pub struct GettyApp {
     xe_journal_max_lines: usize,
     /// Audit log entries fetched from the Town OS API for the bottom-right pane.
     audit_lines: Vec<String>,
+    /// Mock mode: don't execute real operations (login, reboot, etc).
+    pub mock_mode: bool,
 }
 
 impl GettyApp {
@@ -162,6 +164,7 @@ impl GettyApp {
             xe_journal_child: None,
             xe_journal_max_lines: 200,
             audit_lines,
+            mock_mode: false,
         }
     }
 
@@ -281,18 +284,22 @@ impl GettyApp {
                     let action = self.map_key(key);
                     match action {
                         GettyAction::Login => {
-                            // exec into /bin/login — cede control entirely.
-                            // agetty will respawn us after the shell exits.
-                            self.stop_journal();
-                            self.stop_xe_journal();
-                            disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-                            self.exec_login();
-                            // exec_login only returns on failure — recover TUI
-                            let mut new_stdout = io::stdout();
-                            execute!(new_stdout, EnterAlternateScreen)?;
-                            enable_raw_mode()?;
-                            terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
+                            if self.mock_mode {
+                                cmd_log_append("mock: exec /bin/login (skipped)".to_string());
+                            } else {
+                                // exec into /bin/login — cede control entirely.
+                                // agetty will respawn us after the shell exits.
+                                self.stop_journal();
+                                self.stop_xe_journal();
+                                disable_raw_mode()?;
+                                execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                                self.exec_login();
+                                // exec_login only returns on failure — recover TUI
+                                let mut new_stdout = io::stdout();
+                                execute!(new_stdout, EnterAlternateScreen)?;
+                                enable_raw_mode()?;
+                                terminal = Terminal::new(CrosstermBackend::new(new_stdout))?;
+                            }
                         }
                         GettyAction::Quit => {
                             self.should_quit = true;
@@ -438,20 +445,6 @@ impl GettyApp {
         // Normal mode
         match key.code {
             KeyCode::Char('.') => GettyAction::Login,
-            KeyCode::Char('l') => {
-                if self.panel_view != PanelView::Log {
-                    self.panel_view = PanelView::Log;
-                    // Restart journal if not running
-                    if self.journal_child.is_none() {
-                        self.start_journal();
-                    }
-                }
-                GettyAction::None
-            }
-            KeyCode::Char('s') => {
-                self.panel_view = PanelView::Status;
-                GettyAction::None
-            }
             KeyCode::Char('q') if self.quit_enabled => GettyAction::Quit,
             KeyCode::Char('@') => GettyAction::ReconfigureMenu,
             KeyCode::Char('R') => GettyAction::Reboot,
@@ -495,34 +488,16 @@ impl GettyApp {
 
     /// Manage journal process and panel view transitions.
     fn manage_journal(&mut self) {
-        let all_active = self.all_services_active();
-
-        // Auto mode: switch to Status when all services are green
-        if self.panel_view == PanelView::Auto && all_active {
+        // Auto mode: mark as Status when all services are green (for title indicator)
+        if self.panel_view == PanelView::Auto && self.all_services_active() {
             self.panel_view = PanelView::Status;
         }
 
-        // Journal should run when in Auto (starting) or Log mode
-        let need_journal = matches!(self.panel_view, PanelView::Auto | PanelView::Log);
-
-        if need_journal {
-            if self.journal_child.is_none() {
-                self.start_journal();
-            }
-            self.drain_journal_lines();
-        } else {
-            // Status mode with all services active — stop journal
-            if all_active {
-                self.stop_journal();
-            } else {
-                // Status mode but services not all active — keep draining
-                // so we have data if user switches to log
-                if self.journal_child.is_none() {
-                    self.start_journal();
-                }
-                self.drain_journal_lines();
-            }
+        // Journal always runs — the pane is always visible
+        if self.journal_child.is_none() {
+            self.start_journal();
         }
+        self.drain_journal_lines();
     }
 
     fn start_journal(&mut self) {
@@ -928,27 +903,37 @@ impl GettyApp {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // Title bar
-                Constraint::Length(8),  // System info
-                Constraint::Min(5),    // Services/Log panel
-                Constraint::Length(12), // Bottom panes (journal -xe + audit log)
-                Constraint::Length(3),  // Action bar
+                Constraint::Min(5),    // Audit log (full-width)
+                Constraint::Length(8), // Quad top row: services | metrics
+                Constraint::Length(8), // Quad bottom row: journal -f | journal -xe
+                Constraint::Length(3), // Action bar
             ])
             .split(area);
 
         self.render_title(f, chunks[0]);
-        self.render_system_info(f, chunks[1]);
-        self.render_services(f, chunks[2]);
+        self.render_audit_log(f, chunks[1]);
 
-        // Two side-by-side panes: journalctl -xe (left) and audit log (right)
-        let bottom_panes = Layout::default()
+        // Quad top row: service status (left) | system metrics (right)
+        let quad_top = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(chunks[2]);
+        self.render_service_status(f, quad_top[0]);
+        self.render_system_info(f, quad_top[1]);
+
+        // Quad bottom row: journal -f (left) | journal -xe (right)
+        let quad_bottom = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(50),
                 Constraint::Percentage(50),
             ])
             .split(chunks[3]);
-        self.render_xe_journal(f, bottom_panes[0]);
-        self.render_audit_log(f, bottom_panes[1]);
+        self.render_journal(f, quad_bottom[0]);
+        self.render_xe_journal(f, quad_bottom[1]);
 
         if self.ssh_input.is_some() {
             self.render_ssh_input(f, chunks[4]);
@@ -1070,37 +1055,27 @@ impl GettyApp {
         f.render_widget(paragraph, area);
     }
 
-    fn render_services(&self, f: &mut ratatui::Frame, area: Rect) {
-        match self.panel_view {
-            PanelView::Auto => {
-                // Startup: show journal with "services starting" header
-                self.render_journal(f, area);
-                return;
-            }
-            PanelView::Log => {
-                self.render_journal(f, area);
-                return;
-            }
-            PanelView::Status => {
-                // Fall through to render service list
-            }
-        }
-
+    fn render_service_status(&self, f: &mut ratatui::Frame, area: Rect) {
+        let title = if self.panel_view == PanelView::Auto {
+            " Services (starting…) "
+        } else {
+            " Services "
+        };
         let block = Block::default()
-            .title(" Services [l: log] ")
+            .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
         match &self.all_services {
             Ok(services) if services.is_empty() => {
-                let inner_height = area.height.saturating_sub(2) as usize;
-                let top_pad = inner_height / 2;
-                let mut lines = vec![Line::from(""); top_pad];
-                lines.push(Line::from(Span::styled(
-                    "No Services Are Running, Please Check the Log for more information",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                let lines = vec![
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "No services running",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ];
                 let paragraph = Paragraph::new(lines)
                     .alignment(Alignment::Center)
                     .block(block);
@@ -1129,14 +1104,10 @@ impl GettyApp {
                         };
 
                         let line = Line::from(vec![
-                            Span::raw(format!("  {:<width$} ", svc.name, width = name_width)),
+                            Span::raw(format!(" {:<width$} ", svc.name, width = name_width)),
                             Span::styled(
-                                format!("{:<12}", svc.active_state),
+                                svc.active_state.clone(),
                                 state_style,
-                            ),
-                            Span::styled(
-                                svc.description.clone(),
-                                Style::default().fg(Color::DarkGray),
                             ),
                         ]);
                         ListItem::new(line)
@@ -1152,11 +1123,6 @@ impl GettyApp {
                         format!("  {}", err),
                         Style::default().fg(Color::Yellow),
                     )),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "  Services may still be starting...",
-                        Style::default().fg(Color::DarkGray),
-                    )),
                 ];
                 let paragraph = Paragraph::new(lines).block(block);
                 f.render_widget(paragraph, area);
@@ -1165,16 +1131,11 @@ impl GettyApp {
     }
 
     fn render_journal(&self, f: &mut ratatui::Frame, area: Rect) {
-        let (title, border_color) = if self.panel_view == PanelView::Auto {
-            (" Services starting — live journal [s: status] ", Color::Yellow)
-        } else {
-            (" Journal [s: status] ", Color::DarkGray)
-        };
         let block = Block::default()
-            .title(title)
+            .title(" Journal -f ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(Style::default().fg(Color::DarkGray));
 
         let inner_height = area.height.saturating_sub(2) as usize;
         let start = self.journal_lines.len().saturating_sub(inner_height);
@@ -1264,9 +1225,9 @@ impl GettyApp {
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
-            "  [.] Login   [q] Quit   [l] Log   [s] Status   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off"
         } else {
-            "  [.] Login   [l] Log   [s] Status   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [@] Reconfigure   [R] Reboot   [p] Power Off"
         };
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
@@ -1458,23 +1419,6 @@ mod tests {
         let mut app = test_app();
         let key = KeyEvent::from(KeyCode::Char('.'));
         assert_eq!(app.map_key(key), GettyAction::Login);
-    }
-
-    #[test]
-    fn test_key_log_panel() {
-        let mut app = test_app();
-        let key = KeyEvent::from(KeyCode::Char('l'));
-        assert_eq!(app.map_key(key), GettyAction::None);
-        assert_eq!(app.panel_view, PanelView::Log);
-    }
-
-    #[test]
-    fn test_key_status_panel() {
-        let mut app = test_app();
-        app.panel_view = PanelView::Log;
-        let key = KeyEvent::from(KeyCode::Char('s'));
-        assert_eq!(app.map_key(key), GettyAction::None);
-        assert_eq!(app.panel_view, PanelView::Status);
     }
 
     #[test]
@@ -1728,6 +1672,7 @@ mod tests {
             xe_journal_child: None,
             xe_journal_max_lines: 200,
             audit_lines: Vec::new(),
+            mock_mode: false,
         }
     }
 

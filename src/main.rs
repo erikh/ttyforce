@@ -73,6 +73,9 @@ enum Command {
         /// System users to import SSH keys for (comma-separated, e.g. "root,erikh")
         #[arg(long)]
         ssh_user: Option<String>,
+        /// Mock mode: run the TUI without executing any real operations
+        #[arg(long)]
+        mock: bool,
     },
 }
 
@@ -103,8 +106,10 @@ fn main() {
                 ssh_user.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user } => {
-            run_getty(etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user);
+        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock } => {
+            run_getty(GettyConfig {
+                etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock,
+            });
         }
     }
 }
@@ -269,24 +274,44 @@ fn run_installer(
     }
 }
 
-fn run_getty(etc_prefix: Option<String>, tty: Option<String>, console: bool, quit: bool, initrd: bool, sledgehammer_grub_entry: Option<String>, ssh_user: Option<String>) {
-    let tty_clone = tty.clone();
-    let mut app = GettyApp::new(etc_prefix, tty, "/town-os".to_string(), console);
-    app.quit_enabled = quit;
-    app.initrd_mode = initrd;
-    app.sledgehammer_grub_entry = sledgehammer_grub_entry;
-    if let Some(users) = ssh_user {
+struct GettyConfig {
+    etc_prefix: Option<String>,
+    tty: Option<String>,
+    console: bool,
+    quit: bool,
+    initrd: bool,
+    sledgehammer_grub_entry: Option<String>,
+    ssh_user: Option<String>,
+    mock: bool,
+}
+
+fn run_getty(cfg: GettyConfig) {
+    let tty_clone = cfg.tty.clone();
+    let mut app = GettyApp::new(cfg.etc_prefix, cfg.tty, "/town-os".to_string(), cfg.console);
+    app.quit_enabled = cfg.quit;
+    app.initrd_mode = cfg.initrd;
+    app.sledgehammer_grub_entry = cfg.sledgehammer_grub_entry;
+    app.mock_mode = cfg.mock;
+    if let Some(users) = cfg.ssh_user {
         app.ssh_users = users
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
     }
-    let mut executor = RealExecutor::new();
 
-    if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {
-        eprintln!("Getty error: {}", e);
-        process::exit(1);
+    if cfg.mock {
+        let mut executor = TestExecutor::new(vec![]);
+        if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {
+            eprintln!("Getty error: {}", e);
+            process::exit(1);
+        }
+    } else {
+        let mut executor = RealExecutor::new();
+        if let Err(e) = app.run(&mut executor, tty_clone.as_deref()) {
+            eprintln!("Getty error: {}", e);
+            process::exit(1);
+        }
     }
 }
 

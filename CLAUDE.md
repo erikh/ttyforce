@@ -66,6 +66,10 @@ The binary has five subcommands and two global flags.
     - `--ssh-user <users>` — System users to import SSH keys for
       (comma-separated, e.g. `root,erikh`). Used by the `[@]`
       reconfigure menu's SSH Keys option.
+    - `--mock` — Mock mode: run the full TUI without executing any
+      real operations. Uses a test executor that records but does not
+      perform operations. Login, reboot, power off, network config,
+      and SSH import are all no-ops. Useful for development and testing.
 
     Actions (key-triggered):
     - `[.]` Login — clears the screen, displays `/etc/issue` with
@@ -74,8 +78,6 @@ The binary has five subcommands and two global flags.
       `/bin/login`. agetty respawns ttyforce after the shell exits.
     - `[q]` Quit (only when `--quit` is passed) — exits the getty,
       logging the user out. agetty respawns ttyforce.
-    - `[l]` Log — show live journalctl output panel.
-    - `[s]` Status — show service status panel.
     - `[@]` Reconfigure — opens a submenu with:
       - `[n]` Network — detects hardware and runs the installer's
         network setup flow inline (interface selection, DHCP, wifi).
@@ -94,12 +96,10 @@ The binary has five subcommands and two global flags.
     - `[p]` Power Off — powers off the machine.
 
     IMPORTANT — startup panel behavior (do not change):
-    At getty startup, if services are NOT all active, the log panel
-    (live `journalctl -f` output) is shown automatically with a
-    "Services starting" header. This continues UNTIL all services
-    become active, at which point it auto-switches to the status
-    panel. After that, `l` and `s` toggle between the two panels
-    freely. This behavior must not be altered.
+    At getty startup, if services are NOT all active, the services
+    pane title shows "Services (starting…)". This continues UNTIL
+    all services become active, at which point it switches to
+    "Services". All four quad panes are always visible.
 
     IMPORTANT — screen blanking behavior (do not change):
     The screen blanks after 5 minutes of no keypresses. Keyboard
@@ -119,10 +119,9 @@ The binary has five subcommands and two global flags.
     `/dev/input/` is inaccessible, only crossterm is used.
 
     IMPORTANT — empty services panel:
-    When no services are found (empty list from the API), the status
-    panel displays a centered message: "No Services Are Running,
-    Please Check the Log for more information". This directs the
-    user to switch to the log panel ([l]) for diagnostic information.
+    When no services are found (empty list from the API), the services
+    pane displays a centered message: "No services running". The
+    journal panes are always visible alongside for diagnostics.
 
     Service status is fetched from the Town OS API at
     `GET /systemd/units?limit=100` on `localhost:5309`.
@@ -158,6 +157,7 @@ ttyforce getty --initrd                  # getty with initrd reconfigure mode
 ttyforce getty --quit                    # getty with [q] quit action
 ttyforce getty --console --initrd        # getty on console TTY in initrd mode
 ttyforce getty --ssh-user root,erikh    # getty with SSH key import for users
+ttyforce getty --mock --quit            # getty in mock mode (no real operations)
 ```
 
 # DESIGN:
@@ -455,19 +455,18 @@ groups and other selections are always visible.
 ### Getty TUI:
 
 - Title bar (3 lines) — hostname, mDNS URL, API status, Town OS version
-- System info (8 lines) — kernel, CPU, load, memory, disk, network
-- Services/Log panel (flexible) — live journal or service status list
-- Bottom panes (12 lines) — two side-by-side panes:
-  - Left: `journalctl -xe` output (live, color-coded)
-  - Right: Audit log from Town OS API (`GET /audit-log?limit=200`)
+- Audit log pane (flexible, full-width) — system log from Town OS API
+- Quad panes (2×2):
+  - Top-left: Service status — list of services with state
+  - Top-right: System metrics — kernel, CPU, load, memory, disk, network
+  - Bottom-left: `journalctl -f` output (live, color-coded)
+  - Bottom-right: `journalctl -xe` output (live, color-coded)
 - Action bar (3 lines) — keyboard shortcuts
 
-The services panel has priority over the bottom panes.
+All four quad panes are always visible. There is no panel toggle.
 
-The `journalctl -xe` pane runs continuously as a subprocess, using
-non-blocking I/O with a 200-line circular buffer (same approach as
-the services journal). It is independent from the services panel
-journal (`journalctl -f`).
+Both journal panes run continuously as subprocesses, using
+non-blocking I/O with 200-line circular buffers.
 
 The audit log pane fetches entries from the Town OS API on the slow
 refresh cycle (every 15s) via `POST /audit/log` with body
