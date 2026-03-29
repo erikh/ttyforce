@@ -1,3 +1,5 @@
+use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -8,6 +10,55 @@ pub struct ServiceInfo {
     pub name: String,
     pub active_state: String,
     pub description: String,
+}
+
+/// Raw JSON representation of a service/unit from the API.
+/// Supports both PascalCase (systemd style) and snake_case field names.
+#[derive(Deserialize)]
+struct RawUnit {
+    #[serde(alias = "name")]
+    #[serde(default)]
+    #[serde(rename = "Name")]
+    name: Option<String>,
+    #[serde(alias = "active_state")]
+    #[serde(default)]
+    #[serde(rename = "ActiveState")]
+    active_state: Option<String>,
+    #[serde(alias = "description")]
+    #[serde(default)]
+    #[serde(rename = "Description")]
+    description: Option<String>,
+}
+
+/// Paginated wrapper for unit responses.
+#[derive(Deserialize)]
+struct PaginatedUnits {
+    entries: Vec<RawUnit>,
+}
+
+/// Raw JSON representation of an audit log entry.
+#[derive(Deserialize)]
+struct RawAuditEntry {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    detail: String,
+    #[serde(default = "default_true")]
+    success: bool,
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    created_at: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Paginated wrapper for audit log responses.
+#[derive(Deserialize)]
+struct PaginatedAuditLog {
+    entries: Vec<RawAuditEntry>,
 }
 
 /// Minimal HTTP client for the Town OS API at localhost:5309.
@@ -179,117 +230,101 @@ impl TownApiClient {
 /// Parse the JSON response from the /systemd/units endpoint into ServiceInfo structs.
 /// Handles both paginated format `{ "entries": [...] }` and bare array `[...]`.
 pub fn parse_units_json(body: &str) -> Result<Vec<ServiceInfo>, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("JSON parse error: {}", e))?;
+    let units: Vec<RawUnit> = if let Ok(paginated) =
+        serde_json::from_str::<PaginatedUnits>(body)
+    {
+        paginated.entries
+    } else {
+        serde_json::from_str::<Vec<RawUnit>>(body).map_err(|e| {
+            if serde_json::from_str::<serde_json::Value>(body).is_ok() {
+                "expected entries array or JSON array".to_string()
+            } else {
+                format!("JSON parse error: {}", e)
+            }
+        })?
+    };
 
-    // Try paginated format first: { "entries": [...] }
-    let arr = value
-        .get("entries")
-        .and_then(|v| v.as_array())
-        .or_else(|| value.as_array())
-        .ok_or_else(|| "expected entries array or JSON array".to_string())?;
-
-    let mut services = Vec::new();
-    for item in arr {
-        let name = item
-            .get("Name")
-            .or_else(|| item.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let active_state = item
-            .get("ActiveState")
-            .or_else(|| item.get("active_state"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let description = item
-            .get("Description")
-            .or_else(|| item.get("description"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if !name.is_empty() {
-            services.push(ServiceInfo {
+    let services = units
+        .into_iter()
+        .filter_map(|u| {
+            let name = u.name.unwrap_or_default();
+            if name.is_empty() {
+                return None;
+            }
+            Some(ServiceInfo {
                 name,
-                active_state,
-                description,
-            });
-        }
-    }
+                active_state: u.active_state.unwrap_or_else(|| "unknown".to_string()),
+                description: u.description.unwrap_or_default(),
+            })
+        })
+        .collect();
 
     Ok(services)
+}
+
+/// Format an ISO 8601 timestamp string to "YYYY-MM-DD HH:MM:SS" for display.
+fn format_timestamp(created_at: &str) -> String {
+    if created_at.is_empty() {
+        return String::new();
+    }
+    // Try parsing as DateTime with timezone offset (e.g. 2024-01-15T12:00:00+05:00)
+    if let Ok(dt) = DateTime::<FixedOffset>::parse_from_rfc3339(created_at) {
+        return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    // Try parsing as naive datetime (e.g. 2024-01-15T12:00:00)
+    if let Ok(dt) = NaiveDateTime::parse_from_str(created_at, "%Y-%m-%dT%H:%M:%S") {
+        return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    // Try with fractional seconds (e.g. 2024-01-15T12:00:00.123)
+    if let Ok(dt) = NaiveDateTime::parse_from_str(created_at, "%Y-%m-%dT%H:%M:%S%.f") {
+        return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    created_at.to_string()
 }
 
 /// Parse the JSON response from the POST /audit/log endpoint into log lines.
 /// Response format: `{ "entries": [...], "has_more": bool, ... }`
 /// Each entry has: action, detail, success, error, created_at, account.
 pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("JSON parse error: {}", e))?;
+    let entries: Vec<RawAuditEntry> = if let Ok(paginated) =
+        serde_json::from_str::<PaginatedAuditLog>(body)
+    {
+        paginated.entries
+    } else {
+        serde_json::from_str::<Vec<RawAuditEntry>>(body).map_err(|e| {
+            if serde_json::from_str::<serde_json::Value>(body).is_ok() {
+                "expected entries array or JSON array".to_string()
+            } else {
+                format!("JSON parse error: {}", e)
+            }
+        })?
+    };
 
-    let arr = value
-        .get("entries")
-        .and_then(|v| v.as_array())
-        .or_else(|| value.as_array())
-        .ok_or_else(|| "expected entries array or JSON array".to_string())?;
+    let lines = entries
+        .into_iter()
+        .filter(|e| !e.action.is_empty())
+        .map(|e| {
+            let ts = format_timestamp(&e.created_at);
 
-    let mut lines = Vec::new();
-    for item in arr {
-        let action = item
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+            let mut line = if ts.is_empty() {
+                e.action.clone()
+            } else {
+                format!("{} {}", ts, e.action)
+            };
 
-        if action.is_empty() {
-            continue;
-        }
+            if !e.detail.is_empty() {
+                line.push_str(&format!(": {}", e.detail));
+            }
 
-        let detail = item.get("detail").and_then(|v| v.as_str()).unwrap_or("");
-        let success = item.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-        let error_msg = item.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+            if !e.success && !e.error.is_empty() {
+                line.push_str(&format!(" [ERROR: {}]", e.error));
+            } else if !e.success {
+                line.push_str(" [FAILED]");
+            }
 
-        // Format timestamp: strip sub-second precision and timezone suffix for brevity
-        let ts = if let Some(t_pos) = created_at.find('T') {
-            let date = &created_at[..t_pos];
-            let time_part = &created_at[t_pos + 1..];
-            // Take HH:MM:SS, drop fractional seconds and timezone.
-            // Search for '.', 'Z', '+' anywhere, and '-' only after position 8
-            // (to avoid matching the '-' inside a negative offset like HH:MM:SS-05:00
-            // vs the colons in HH:MM:SS which occupy positions 0-7).
-            let time_end = time_part
-                .find('.')
-                .or_else(|| time_part.find('Z'))
-                .or_else(|| time_part.find('+'))
-                .or_else(|| time_part[8..].find('-').map(|i| i + 8))
-                .unwrap_or(time_part.len());
-            format!("{} {}", date, &time_part[..time_end])
-        } else if !created_at.is_empty() {
-            created_at.to_string()
-        } else {
-            String::new()
-        };
-
-        let mut line = if ts.is_empty() {
-            action.to_string()
-        } else {
-            format!("{} {}", ts, action)
-        };
-
-        if !detail.is_empty() {
-            line.push_str(&format!(": {}", detail));
-        }
-
-        if !success && !error_msg.is_empty() {
-            line.push_str(&format!(" [ERROR: {}]", error_msg));
-        } else if !success {
-            line.push_str(" [FAILED]");
-        }
-
-        lines.push(line);
-    }
+            line
+        })
+        .collect();
 
     Ok(lines)
 }
