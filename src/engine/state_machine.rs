@@ -268,6 +268,7 @@ impl InstallerStateMachine {
                     if self.network_only {
                         self.persist_network_only(executor);
                         // Signal completion via ExitInstaller
+                        self.current_screen = ScreenId::Reboot;
                         Some(ScreenId::Reboot)
                     } else {
                         self.current_screen = ScreenId::RaidConfig;

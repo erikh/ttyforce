@@ -1704,3 +1704,52 @@ fn test_wps_full_install_flow() -> Result<(), String> {
     assert!(op_types.contains(&"WpsPbcStatus"), "manifest should contain WpsPbcStatus");
     Ok(())
 }
+
+// === Network-Only Mode (Reconfigure) ===
+
+#[test]
+fn test_network_only_returns_to_reboot_screen_on_completion() -> Result<(), String> {
+    let hw = load_hardware("ethernet_4disk_same")?;
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.network_only = true;
+
+    // Auto-detect network (connected ethernet)
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+
+    // Advance connectivity until online
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+
+    // Confirm network config — in network_only mode this should persist
+    // config and transition to Reboot (signaling completion)
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(
+        sm.current_screen,
+        ScreenId::Reboot,
+        "network_only mode must set current_screen to Reboot after persisting config"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_network_only_abort_returns_to_reboot_screen() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = success_executor();
+
+    sm.network_only = true;
+
+    // Abort from the initial network config screen
+    sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(
+        sm.current_screen,
+        ScreenId::Reboot,
+        "aborting in network_only mode must reach Reboot screen"
+    );
+
+    Ok(())
+}

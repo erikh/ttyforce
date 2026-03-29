@@ -907,13 +907,18 @@ impl GettyApp {
                 format!("Imported keys for {} -> {}", github_username, system_user),
                 true,
             ));
+            ssh_state.github_username.clear();
+            ssh_state.current_user_idx += 1;
+            if ssh_state.current_user_idx >= self.ssh_users.len() {
+                self.ssh_input = None;
+            }
         } else {
             ssh_state.status_message = Some((
                 format!("Failed to import keys for {}", github_username),
                 false,
             ));
+            ssh_state.github_username.clear();
         }
-        ssh_state.github_username.clear();
     }
 
     fn render(&self, f: &mut ratatui::Frame) {
@@ -2125,6 +2130,63 @@ mod tests {
         // Should not panic when no child exists
         app.drain_xe_journal_lines();
         assert!(app.xe_journal_lines.is_empty());
+    }
+
+    #[test]
+    fn test_ssh_import_success_advances_to_next_user() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string(), "erikh".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: "validuser".to_string(),
+            status_message: None,
+        });
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_ssh_key_import(&mut executor);
+        // Should advance to next user after success
+        let ssh_state = app.ssh_input.as_ref().expect("ssh_input should still exist");
+        assert_eq!(ssh_state.current_user_idx, 1);
+        assert!(ssh_state.github_username.is_empty());
+    }
+
+    #[test]
+    fn test_ssh_import_success_last_user_exits() {
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: "validuser".to_string(),
+            status_message: None,
+        });
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_ssh_key_import(&mut executor);
+        // Last user done — should exit SSH input mode
+        assert!(app.ssh_input.is_none());
+    }
+
+    #[test]
+    fn test_ssh_import_failure_stays_on_same_user() {
+        use crate::engine::executor::{OperationMatcher, SimulatedResponse};
+        use crate::engine::feedback::OperationResult;
+        let mut app = test_app();
+        app.ssh_users = vec!["root".to_string(), "erikh".to_string()];
+        app.ssh_input = Some(SshInputState {
+            current_user_idx: 0,
+            github_username: "validuser".to_string(),
+            status_message: None,
+        });
+        let mut executor = MockExecutor::new(vec![SimulatedResponse {
+            operation_match: OperationMatcher::ByType("ImportSshKeys".to_string()),
+            result: OperationResult::Error("fetch failed".to_string()),
+            consume: false,
+        }]);
+        app.execute_ssh_key_import(&mut executor);
+        // Should stay on same user after failure
+        let ssh_state = app.ssh_input.as_ref().expect("ssh_input should still exist");
+        assert_eq!(ssh_state.current_user_idx, 0);
+        assert!(ssh_state.status_message.is_some());
+        let (_, success) = ssh_state.status_message.as_ref().unwrap();
+        assert!(!success);
     }
 
     #[test]
