@@ -39,6 +39,9 @@ ttyforce initrd --etc-prefix /mnt/root
 # Initrd mode on a specific TTY device
 ttyforce initrd --tty /dev/tty1
 
+# Initrd mode with SSH key import for system users
+ttyforce initrd --ssh-user root,erikh
+
 # Launch the real installer with hardware from a file (mock executor)
 ttyforce run -i fixtures/hardware/ethernet_1disk.toml
 
@@ -56,6 +59,15 @@ ttyforce getty --initrd
 
 # Getty on console TTY in initrd mode
 ttyforce getty --console --initrd
+
+# Getty with SSH key import for system users
+ttyforce getty --ssh-user root,erikh
+
+# Getty in mock mode (no real operations)
+ttyforce getty --mock --quit
+
+# Getty with sledgehammer wipe boot entry
+ttyforce getty --sledgehammer-grub-entry 2
 ```
 
 ### Subcommands
@@ -65,8 +77,8 @@ ttyforce getty --console --initrd
 | `detect` | Detect hardware and print the hardware manifest. With `--fixture`, runs a scripted scenario and prints the resulting operations manifest instead. |
 | `output` | Detect real hardware (or load via `-i`), run the full TUI with a mock executor so no real changes are made, then print the operations that would have been performed. |
 | `run` | Detect hardware (or load via `-i`) and launch the real installer using systemd. Uses the real executor when auto-detecting, mock executor when loading from file. |
-| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location and `--tty` for TTY device selection. |
-| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. At startup, shows live journal output until all services are active, then switches to the status panel. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`. Supports `--etc-prefix`, `--tty`, `--console`, `--quit` (enable `[q]` to quit and log out), and `--initrd` (use initrd mode for reconfigure). |
+| `initrd` | Run installer in initrd mode using syscalls (no systemd dbus). Supports `--etc-prefix` for custom config file location, `--tty` for TTY device selection, and `--ssh-user` for SSH key import. |
+| `getty` | Run as a getty replacement (login screen with system status). Shows machine info, service health, and mDNS URL. At startup, shows live journal output until all services are active, then switches to the status panel. Pressing `.` clears the screen, displays `/etc/issue`, and execs into `/bin/login`. Supports `--etc-prefix`, `--tty`, `--console`, `--quit` (enable `[q]` to quit and log out), `--initrd` (use initrd mode for reconfigure), `--ssh-user` (SSH key import users), `--mock` (dry-run mode), and `--sledgehammer-grub-entry` (GRUB entry for sledgehammer wipe boot). |
 
 ### Global flags
 
