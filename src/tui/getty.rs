@@ -18,7 +18,7 @@ use crate::engine::state_machine::InstallerStateMachine;
 use crate::getty::api::{ServiceInfo, TownApiClient};
 use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
-use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds, App};
+use crate::tui::app::{redirect_to_tty, restore_fds, App};
 use crate::tui::evdev_input::{ActivityResult, EvdevWatcher};
 
 /// Screen blanks after 5 minutes of no keypresses.
@@ -103,6 +103,12 @@ pub struct GettyApp {
     discard_next_key: bool,
     /// evdev keyboard watcher for detecting bare modifier keypresses.
     evdev_watcher: Option<EvdevWatcher>,
+    /// Live `journalctl -xe` output for the bottom-left pane.
+    xe_journal_lines: Vec<String>,
+    xe_journal_child: Option<Child>,
+    xe_journal_max_lines: usize,
+    /// Audit log entries fetched from the Town OS API for the bottom-right pane.
+    audit_lines: Vec<String>,
 }
 
 impl GettyApp {
@@ -122,6 +128,8 @@ impl GettyApp {
         } else {
             None
         };
+
+        let audit_lines = api_client.fetch_audit_log().unwrap_or_default();
 
         Self {
             system_info,
@@ -150,6 +158,10 @@ impl GettyApp {
             screen_blanked: false,
             discard_next_key: false,
             evdev_watcher: Some(EvdevWatcher::open()),
+            xe_journal_lines: Vec::new(),
+            xe_journal_child: None,
+            xe_journal_max_lines: 200,
+            audit_lines,
         }
     }
 
@@ -204,11 +216,17 @@ impl GettyApp {
                 self.system_info.refresh_network();
                 self.system_services = self.api_client.fetch_system_services();
                 self.all_services = self.api_client.fetch_all_services();
+                if let Ok(lines) = self.api_client.fetch_audit_log() {
+                    self.audit_lines = lines;
+                }
                 self.last_slow_refresh = Instant::now();
             }
 
             // Manage journal process: start if services starting, drain lines, stop when ready
             self.manage_journal();
+
+            // Manage journalctl -xe subprocess for the bottom-left pane
+            self.manage_xe_journal();
 
             // In console mode, detect kernel messages and force full repaint
             if self.drain_kmsg() {
@@ -266,6 +284,7 @@ impl GettyApp {
                             // exec into /bin/login — cede control entirely.
                             // agetty will respawn us after the shell exits.
                             self.stop_journal();
+                            self.stop_xe_journal();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
                             self.exec_login();
@@ -284,6 +303,7 @@ impl GettyApp {
                         GettyAction::ReconfigureNetwork => {
                             self.reconfigure_menu = false;
                             self.stop_journal();
+                            self.stop_xe_journal();
                             disable_raw_mode()?;
                             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
@@ -326,6 +346,7 @@ impl GettyApp {
         }
 
         self.stop_journal();
+        self.stop_xe_journal();
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
@@ -595,6 +616,77 @@ impl GettyApp {
         got_output
     }
 
+    /// Manage the journalctl -xe subprocess for the bottom-left pane.
+    fn manage_xe_journal(&mut self) {
+        if self.xe_journal_child.is_none() {
+            self.start_xe_journal();
+        }
+        self.drain_xe_journal_lines();
+    }
+
+    fn start_xe_journal(&mut self) {
+        let child = Command::new("journalctl")
+            .args(["-xe", "--no-pager", "-n", "50", "-o", "short-iso", "-f"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match child {
+            Ok(c) => {
+                if let Some(ref stdout) = c.stdout {
+                    set_nonblocking(stdout);
+                }
+                self.xe_journal_child = Some(c);
+            }
+            Err(e) => {
+                self.xe_journal_lines
+                    .push(format!("Failed to start journalctl -xe: {}", e));
+            }
+        }
+    }
+
+    fn stop_xe_journal(&mut self) {
+        if let Some(mut child) = self.xe_journal_child.take() {
+            if let Err(e) = child.kill() {
+                eprintln!("kill xe journal child: {}", e);
+            }
+            if let Err(e) = child.wait() {
+                eprintln!("wait xe journal child: {}", e);
+            }
+        }
+    }
+
+    fn drain_xe_journal_lines(&mut self) {
+        let Some(ref mut child) = self.xe_journal_child else {
+            return;
+        };
+        let Some(ref mut stdout) = child.stdout else {
+            return;
+        };
+
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim_end().to_string();
+                    if !trimmed.is_empty() {
+                        self.xe_journal_lines.push(trimmed);
+                    }
+                    if self.xe_journal_lines.len() > self.xe_journal_max_lines {
+                        let excess = self.xe_journal_lines.len() - self.xe_journal_max_lines;
+                        self.xe_journal_lines.drain(..excess);
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+    }
+
     /// Clear the screen and display /etc/issue like agetty does before login.
     fn display_issue(&self) {
         use std::io::Write;
@@ -832,8 +924,8 @@ impl GettyApp {
             .constraints([
                 Constraint::Length(3),  // Title bar
                 Constraint::Length(8),  // System info
-                Constraint::Min(5),    // Services
-                Constraint::Length(10), // Command log
+                Constraint::Min(5),    // Services/Log panel
+                Constraint::Length(12), // Bottom panes (journal -xe + audit log)
                 Constraint::Length(3),  // Action bar
             ])
             .split(area);
@@ -841,7 +933,17 @@ impl GettyApp {
         self.render_title(f, chunks[0]);
         self.render_system_info(f, chunks[1]);
         self.render_services(f, chunks[2]);
-        render_cmd_log(f, chunks[3]);
+
+        // Two side-by-side panes: journalctl -xe (left) and audit log (right)
+        let bottom_panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(chunks[3]);
+        self.render_xe_journal(f, bottom_panes[0]);
+        self.render_audit_log(f, bottom_panes[1]);
 
         if self.ssh_input.is_some() {
             self.render_ssh_input(f, chunks[4]);
@@ -1082,6 +1184,68 @@ impl GettyApp {
                     Style::default().fg(Color::Red)
                 } else if line.contains("Started") || line.contains("Reached target") {
                     Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(format!("  {}", line), style))
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(visible).block(block);
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_xe_journal(&self, f: &mut ratatui::Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Journal -xe ")
+            .title_alignment(Alignment::Left)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let start = self.xe_journal_lines.len().saturating_sub(inner_height);
+        let visible: Vec<Line> = self.xe_journal_lines[start..]
+            .iter()
+            .map(|line| {
+                let style = if line.contains("error")
+                    || line.contains("Error")
+                    || line.contains("FAILED")
+                    || line.contains("failed")
+                {
+                    Style::default().fg(Color::Red)
+                } else if line.contains("Started") || line.contains("Reached target") {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(format!("  {}", line), style))
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(visible).block(block);
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_audit_log(&self, f: &mut ratatui::Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Audit Log ")
+            .title_alignment(Alignment::Left)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let start = self.audit_lines.len().saturating_sub(inner_height);
+        let visible: Vec<Line> = self.audit_lines[start..]
+            .iter()
+            .map(|line| {
+                let style = if line.contains("error")
+                    || line.contains("Error")
+                    || line.contains("FAILED")
+                    || line.contains("failed")
+                {
+                    Style::default().fg(Color::Red)
+                } else if line.contains("warn") || line.contains("Warn") {
+                    Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
@@ -1555,6 +1719,10 @@ mod tests {
             screen_blanked: false,
             discard_next_key: false,
             evdev_watcher: None,
+            xe_journal_lines: Vec::new(),
+            xe_journal_child: None,
+            xe_journal_max_lines: 200,
+            audit_lines: Vec::new(),
         }
     }
 
@@ -1890,5 +2058,85 @@ mod tests {
         let mut app = test_app();
         let key = KeyEvent::from(KeyCode::Char('r'));
         assert_eq!(app.map_key(key), GettyAction::None);
+    }
+
+    #[test]
+    fn test_xe_journal_lines_initially_empty() {
+        let app = test_app();
+        assert!(app.xe_journal_lines.is_empty());
+    }
+
+    #[test]
+    fn test_xe_journal_child_initially_none() {
+        let app = test_app();
+        assert!(app.xe_journal_child.is_none());
+    }
+
+    #[test]
+    fn test_xe_journal_max_lines_default() {
+        let app = test_app();
+        assert_eq!(app.xe_journal_max_lines, 200);
+    }
+
+    #[test]
+    fn test_audit_lines_initially_empty() {
+        let app = test_app();
+        assert!(app.audit_lines.is_empty());
+    }
+
+    #[test]
+    fn test_audit_lines_populated() {
+        let mut app = test_app();
+        app.audit_lines = vec![
+            "2024-01-15T12:00:00Z User logged in".to_string(),
+            "2024-01-15T12:01:00Z Config changed".to_string(),
+        ];
+        assert_eq!(app.audit_lines.len(), 2);
+        assert!(app.audit_lines[0].contains("User logged in"));
+    }
+
+    #[test]
+    fn test_xe_journal_buffer_cap() {
+        let mut app = test_app();
+        app.xe_journal_max_lines = 5;
+        for i in 0..10 {
+            app.xe_journal_lines.push(format!("line {}", i));
+            if app.xe_journal_lines.len() > app.xe_journal_max_lines {
+                let excess = app.xe_journal_lines.len() - app.xe_journal_max_lines;
+                app.xe_journal_lines.drain(..excess);
+            }
+        }
+        assert_eq!(app.xe_journal_lines.len(), 5);
+        assert_eq!(app.xe_journal_lines[0], "line 5");
+        assert_eq!(app.xe_journal_lines[4], "line 9");
+    }
+
+    #[test]
+    fn test_stop_xe_journal_when_no_child() {
+        let mut app = test_app();
+        // Should not panic when no child exists
+        app.stop_xe_journal();
+        assert!(app.xe_journal_child.is_none());
+    }
+
+    #[test]
+    fn test_drain_xe_journal_lines_no_child() {
+        let mut app = test_app();
+        // Should not panic when no child exists
+        app.drain_xe_journal_lines();
+        assert!(app.xe_journal_lines.is_empty());
+    }
+
+    #[test]
+    fn test_manage_xe_journal_starts_child() {
+        let mut app = test_app();
+        app.manage_xe_journal();
+        // On a system with journalctl, a child should be spawned.
+        // On CI or containers without journalctl, an error line is added instead.
+        let has_child = app.xe_journal_child.is_some();
+        let has_error = app.xe_journal_lines.iter().any(|l| l.contains("Failed to start"));
+        assert!(has_child || has_error);
+        // Clean up
+        app.stop_xe_journal();
     }
 }

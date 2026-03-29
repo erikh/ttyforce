@@ -68,6 +68,13 @@ impl TownApiClient {
         Ok(all)
     }
 
+    /// Fetch audit log entries from the Town OS API.
+    /// Returns a list of log lines (most recent last).
+    pub fn fetch_audit_log(&self) -> Result<Vec<String>, String> {
+        let body = self.http_get("/audit-log?limit=200")?;
+        parse_audit_log_json(&body)
+    }
+
     /// Perform an HTTP GET request to the Town OS API.
     fn http_get(&self, path: &str) -> Result<String, String> {
         let addr = "127.0.0.1:5309"
@@ -163,6 +170,46 @@ pub fn parse_units_json(body: &str) -> Result<Vec<ServiceInfo>, String> {
     }
 
     Ok(services)
+}
+
+/// Parse the JSON response from the /audit-log endpoint into log lines.
+/// Handles both paginated format `{ "entries": [...] }` and bare array `[...]`.
+/// Each entry should have a "message" (or "msg") field, and optionally a "timestamp" field.
+pub fn parse_audit_log_json(body: &str) -> Result<Vec<String>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("JSON parse error: {}", e))?;
+
+    let arr = value
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .or_else(|| value.as_array())
+        .ok_or_else(|| "expected entries array or JSON array".to_string())?;
+
+    let mut lines = Vec::new();
+    for item in arr {
+        let msg = item
+            .get("message")
+            .or_else(|| item.get("msg"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if msg.is_empty() {
+            continue;
+        }
+
+        let timestamp = item
+            .get("timestamp")
+            .or_else(|| item.get("time"))
+            .and_then(|v| v.as_str());
+
+        let line = match timestamp {
+            Some(ts) => format!("{} {}", ts, msg),
+            None => msg.to_string(),
+        };
+        lines.push(line);
+    }
+
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -273,5 +320,74 @@ mod tests {
     fn test_api_client_no_token() {
         let client = TownApiClient::new(None);
         assert!(client.token.is_none());
+    }
+
+    #[test]
+    fn test_parse_audit_log_basic() -> Result<(), String> {
+        let json = r#"[
+            {"timestamp": "2024-01-15T12:00:00Z", "message": "User logged in"},
+            {"timestamp": "2024-01-15T12:01:00Z", "message": "Config changed"}
+        ]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "2024-01-15T12:00:00Z User logged in");
+        assert_eq!(lines[1], "2024-01-15T12:01:00Z Config changed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_no_timestamp() -> Result<(), String> {
+        let json = r#"[{"message": "something happened"}]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "something happened");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_alt_fields() -> Result<(), String> {
+        let json = r#"[{"time": "12:00", "msg": "event"}]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "12:00 event");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_empty_array() -> Result<(), String> {
+        let lines = parse_audit_log_json("[]")?;
+        assert!(lines.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_skips_empty_message() -> Result<(), String> {
+        let json = r#"[{"message": ""}, {"message": "real entry"}]"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "real entry");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_paginated() -> Result<(), String> {
+        let json = r#"{"entries": [{"message": "entry one"}, {"message": "entry two"}]}"#;
+        let lines = parse_audit_log_json(json)?;
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "entry one");
+        assert_eq!(lines[1], "entry two");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_audit_log_malformed() {
+        let result = parse_audit_log_json("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_audit_log_not_array() {
+        let result = parse_audit_log_json(r#"{"key": "value"}"#);
+        assert!(result.is_err());
     }
 }

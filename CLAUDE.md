@@ -126,8 +126,10 @@ The binary has five subcommands and two global flags.
 
     Service status is fetched from the Town OS API at
     `GET /systemd/units?limit=100` on `localhost:5309`.
-    Authentication uses a bearer token from `TTYFORCE_API_TOKEN` env
-    var or `<etc_prefix>/ttyforce/api-token` file.
+    Audit log is fetched from `GET /audit-log?limit=200` on the
+    same API. Authentication uses a bearer token from
+    `TTYFORCE_API_TOKEN` env var or `<etc_prefix>/ttyforce/api-token`
+    file.
 
 ## Global flags
 
@@ -338,15 +340,18 @@ the lease data using this fallback chain:
 This is necessary because initrd environments often lack dhcpcd's
 hook scripts that normally manage resolv.conf.
 
-## Command output pane:
+## Command output pane (installer TUI):
 
-The TUI has a persistent command log pane in the bottom half of the
-screen, visible on every screen. All shell commands and syscall
+The installer TUI has a persistent command log pane in the bottom half
+of the screen, visible on every screen. All shell commands and syscall
 operations are logged with arguments and results, color-coded:
 
 - Yellow: command invocation (`$ cmd args`)
 - Green: success (`-> ok`)
 - Red: errors (`-> FAILED`, `error:`)
+
+The getty TUI replaces this with two side-by-side bottom panes
+(journalctl -xe and audit log) — see the TUI layout section.
 
 ## Internet accessibility:
 
@@ -437,7 +442,7 @@ Writes to the running system (not etc_prefix):
 
 ## TUI layout:
 
-The TUI has three main sections:
+### Installer TUI:
 
 - Title bar (3 lines)
 - Content area (flexible, gets all remaining space)
@@ -446,6 +451,31 @@ The TUI has three main sections:
 
 The content area has priority over the command pane to ensure disk
 groups and other selections are always visible.
+
+### Getty TUI:
+
+- Title bar (3 lines) — hostname, mDNS URL, API status, Town OS version
+- System info (8 lines) — kernel, CPU, load, memory, disk, network
+- Services/Log panel (flexible) — live journal or service status list
+- Bottom panes (12 lines) — two side-by-side panes:
+  - Left: `journalctl -xe` output (live, color-coded)
+  - Right: Audit log from Town OS API (`GET /audit-log?limit=200`)
+- Action bar (3 lines) — keyboard shortcuts
+
+The services panel has priority over the bottom panes.
+
+The `journalctl -xe` pane runs continuously as a subprocess, using
+non-blocking I/O with a 200-line circular buffer (same approach as
+the services journal). It is independent from the services panel
+journal (`journalctl -f`).
+
+The audit log pane fetches entries from the Town OS API on the slow
+refresh cycle (every 15s). Each entry has a `message` (or `msg`)
+field and an optional `timestamp` (or `time`) field. Both paginated
+(`{ "entries": [...] }`) and bare array (`[...]`) response formats
+are supported. Lines are color-coded: red for errors, yellow for
+warnings, dark gray otherwise. Degrades gracefully if the endpoint
+is unavailable.
 
 ## Disk detection:
 
