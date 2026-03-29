@@ -23,6 +23,7 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.29", features = ["net", "ioctl", "mount", "reboot", "socket", "fs", "feature"] }
 qrcode = "0.14"
+evdev = "0.12"
 
 [[bin]]
 name = "ttyforce"

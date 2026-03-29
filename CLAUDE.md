@@ -92,13 +92,22 @@ The binary has five subcommands and two global flags.
     panel. After that, `l` and `s` toggle between the two panels
     freely. This behavior must not be altered.
 
-    IMPORTANT — screen blanking behavior:
-    The screen blanks after 5 minutes of no keypresses. Any input
-    event unblanks the screen — this includes modifier-only keys
-    (Ctrl, Shift, Alt), mouse events, and resize events, not just
-    regular key presses. After unblanking, there is a 30-second
-    grace period during which all keypresses are discarded to prevent
-    accidental actions from mashing keys to wake the screen.
+    IMPORTANT — screen blanking behavior (do not change):
+    The screen blanks after 5 minutes of no keypresses. Keyboard
+    activity is detected via evdev (`/dev/input/event*`), which sees
+    ALL keypresses including bare modifiers (Ctrl, Shift, Alt alone)
+    that terminals cannot transmit. Crossterm serves as a fallback
+    for environments without evdev (SSH, containers).
+
+    After unblanking, exactly one crossterm key event is discarded
+    (the wake key that triggered both evdev and crossterm). A second
+    keypress executes the action immediately — no time-based grace
+    period. If only a bare modifier was pressed (evdev-only, crossterm
+    sees nothing), the next real keypress works immediately without
+    being discarded.
+
+    evdev degrades gracefully: if no keyboard devices are found or
+    `/dev/input/` is inaccessible, only crossterm is used.
 
     IMPORTANT — empty services panel:
     When no services are found (empty list from the API), the status

@@ -18,11 +18,10 @@ use crate::getty::api::{ServiceInfo, TownApiClient};
 use crate::getty::sysinfo::SystemInfo;
 use crate::operations::Operation;
 use crate::tui::app::{redirect_to_tty, render_cmd_log, restore_fds};
+use crate::tui::evdev_input::{ActivityResult, EvdevWatcher};
 
 /// Screen blanks after 5 minutes of no keypresses.
 const SCREEN_BLANK_TIMEOUT: Duration = Duration::from_secs(300);
-/// After unblanking, keys are discarded for 30 seconds.
-const SCREEN_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
 /// Which panel is shown in the services area.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,8 +80,10 @@ pub struct GettyApp {
     last_activity: Instant,
     /// Whether the screen is currently blanked.
     screen_blanked: bool,
-    /// When the screen was unblanked (for grace period).
-    unblanked_at: Option<Instant>,
+    /// When true, the next crossterm key event is discarded (it's the wake key).
+    discard_next_key: bool,
+    /// evdev keyboard watcher for detecting bare modifier keypresses.
+    evdev_watcher: Option<EvdevWatcher>,
 }
 
 impl GettyApp {
@@ -125,7 +126,8 @@ impl GettyApp {
             sledgehammer_grub_entry: None,
             last_activity: Instant::now(),
             screen_blanked: false,
-            unblanked_at: None,
+            discard_next_key: false,
+            evdev_watcher: Some(EvdevWatcher::open()),
         }
     }
 
@@ -191,9 +193,24 @@ impl GettyApp {
                 terminal.clear()?;
             }
 
+            // Drain evdev events for keyboard activity detection
+            let evdev_activity = self.drain_evdev();
+            if evdev_activity.any_activity {
+                self.last_activity = Instant::now();
+            }
+
             // Screen blanking: blank after inactivity timeout
             if self.should_blank_screen() {
                 self.screen_blanked = true;
+                terminal.clear()?;
+            }
+
+            // evdev activity while blanked: unblank immediately
+            if evdev_activity.any_activity && self.screen_blanked {
+                self.unblank();
+                // Only discard next crossterm key if a non-modifier was pressed,
+                // since crossterm won't see bare modifier presses.
+                self.discard_next_key = evdev_activity.has_non_modifier;
                 terminal.clear()?;
             }
 
@@ -204,20 +221,21 @@ impl GettyApp {
             if event::poll(Duration::from_secs(1))? {
                 let ev = event::read()?;
 
-                // Any event unblanks the screen (modifier-only keys, mouse, resize, etc.)
+                // Crossterm fallback: unblank on any event (for SSH / no evdev)
                 if self.screen_blanked {
                     self.unblank();
+                    self.discard_next_key = true;
                     terminal.clear()?;
                     continue;
                 }
 
                 if let Event::Key(key) = ev {
-                    // Grace period after unblank — discard key
-                    if self.is_in_grace_period() {
+                    // Discard exactly one key after unblank (the wake key)
+                    if self.discard_next_key {
+                        self.discard_next_key = false;
                         self.last_activity = Instant::now();
                         continue;
                     }
-                    self.unblanked_at = None;
 
                     self.last_activity = Instant::now();
                     let action = self.map_key(key);
@@ -255,7 +273,7 @@ impl GettyApp {
                             self.last_slow_refresh = Instant::now() - Duration::from_secs(20);
                             self.last_activity = Instant::now();
                             self.screen_blanked = false;
-                            self.unblanked_at = None;
+                            self.discard_next_key = false;
                         }
                         GettyAction::None => {}
                         _ => {
@@ -350,19 +368,21 @@ impl GettyApp {
         !self.screen_blanked && self.last_activity.elapsed() >= SCREEN_BLANK_TIMEOUT
     }
 
-    /// Returns true if within the post-unblank grace period (keys discarded).
-    pub fn is_in_grace_period(&self) -> bool {
-        match self.unblanked_at {
-            Some(t) => t.elapsed() < SCREEN_GRACE_PERIOD,
-            None => false,
-        }
-    }
-
-    /// Unblank the screen and start the grace period.
+    /// Unblank the screen. Caller sets `discard_next_key` based on context.
     pub fn unblank(&mut self) {
         self.screen_blanked = false;
-        self.unblanked_at = Some(Instant::now());
         self.last_activity = Instant::now();
+    }
+
+    /// Drain evdev events and return activity result.
+    fn drain_evdev(&mut self) -> ActivityResult {
+        match self.evdev_watcher {
+            Some(ref mut watcher) => watcher.has_activity(),
+            None => ActivityResult {
+                any_activity: false,
+                has_non_modifier: false,
+            },
+        }
     }
 
     /// Manage journal process and panel view transitions.
@@ -803,12 +823,16 @@ impl GettyApp {
 
         match &self.all_services {
             Ok(services) if services.is_empty() => {
-                let paragraph = Paragraph::new(
+                let inner_height = area.height.saturating_sub(2) as usize;
+                let top_pad = inner_height / 2;
+                let mut lines = vec![Line::from(""); top_pad];
+                lines.push(Line::from(Span::styled(
                     "No Services Are Running, Please Check the Log for more information",
-                )
-                .style(Style::default().fg(Color::DarkGray))
-                .alignment(Alignment::Center)
-                .block(block);
+                    Style::default().fg(Color::DarkGray),
+                )));
+                let paragraph = Paragraph::new(lines)
+                    .alignment(Alignment::Center)
+                    .block(block);
                 f.render_widget(paragraph, area);
             }
             Ok(services) => {
@@ -1260,7 +1284,8 @@ mod tests {
             sledgehammer_grub_entry: None,
             last_activity: Instant::now(),
             screen_blanked: false,
-            unblanked_at: None,
+            discard_next_key: false,
+            evdev_watcher: None,
         }
     }
 
@@ -1437,47 +1462,42 @@ mod tests {
     }
 
     #[test]
-    fn test_grace_period_active() {
-        let mut app = test_app();
-        app.unblanked_at = Some(Instant::now());
-        assert!(app.is_in_grace_period());
-    }
-
-    #[test]
-    fn test_grace_period_expired() {
-        let mut app = test_app();
-        app.unblanked_at = Some(Instant::now() - Duration::from_secs(31));
-        assert!(!app.is_in_grace_period());
-    }
-
-    #[test]
-    fn test_grace_period_none() {
-        let app = test_app();
-        assert!(!app.is_in_grace_period());
-    }
-
-    #[test]
-    fn test_unblank_sets_grace_period() {
+    fn test_unblank_clears_blanked_state() {
         let mut app = test_app();
         app.screen_blanked = true;
         app.last_activity = Instant::now() - Duration::from_secs(360);
         app.unblank();
         assert!(!app.screen_blanked);
-        assert!(app.unblanked_at.is_some());
-        assert!(app.is_in_grace_period());
-        // last_activity should be recent
         assert!(app.last_activity.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
-    fn test_keys_ignored_during_grace_period() {
+    fn test_discard_next_key_starts_false() {
+        let app = test_app();
+        assert!(!app.discard_next_key);
+    }
+
+    #[test]
+    fn test_discard_next_key_set_on_non_modifier_wake() {
         let mut app = test_app();
-        app.unblanked_at = Some(Instant::now());
-        // During grace period, is_in_grace_period is true so keys would be discarded
-        assert!(app.is_in_grace_period());
-        // Verify that a key press during grace period would not be processed
-        // (the event loop checks is_in_grace_period before calling map_key)
-        assert!(!app.screen_blanked);
+        app.screen_blanked = true;
+        app.unblank();
+        // Caller sets discard_next_key for non-modifier wake keys
+        app.discard_next_key = true;
+        assert!(app.discard_next_key);
+        // Simulating the second key: discard_next_key is cleared
+        app.discard_next_key = false;
+        assert!(!app.discard_next_key);
+    }
+
+    #[test]
+    fn test_discard_next_key_not_set_for_modifier_only() {
+        let mut app = test_app();
+        app.screen_blanked = true;
+        app.unblank();
+        // Modifier-only wake: crossterm won't see it, so don't discard
+        app.discard_next_key = false;
+        assert!(!app.discard_next_key);
     }
 
     #[test]
@@ -1487,6 +1507,14 @@ mod tests {
         app.last_activity = Instant::now() - Duration::from_secs(600);
         app.unblank();
         assert!(app.last_activity.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_drain_evdev_none_returns_no_activity() {
+        let mut app = test_app();
+        let result = app.drain_evdev();
+        assert!(!result.any_activity);
+        assert!(!result.has_non_modifier);
     }
 
     #[test]
