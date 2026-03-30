@@ -1060,7 +1060,7 @@ impl GettyApp {
 
         let lines = vec![
             Line::from(vec![
-                Span::styled("  Kernel: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Kernel: ", Style::default().fg(Color::DarkGray)),
                 Span::raw(format!(
                     "{} {}",
                     info.kernel_version, info.architecture
@@ -1069,7 +1069,7 @@ impl GettyApp {
                 Span::raw(format!("{} ({} cores)", info.cpu_model, info.cpu_cores)),
             ]),
             Line::from(vec![
-                Span::styled("  Load:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Load:   ", Style::default().fg(Color::DarkGray)),
                 Span::raw(format!("{:.2}", info.load_average)),
                 Span::styled("              Memory: ", Style::default().fg(Color::DarkGray)),
                 Span::raw(format!(
@@ -1078,14 +1078,14 @@ impl GettyApp {
                 )),
             ]),
             Line::from(vec![
-                Span::styled("  Disk:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Disk:   ", Style::default().fg(Color::DarkGray)),
                 Span::raw(format!(
                     "{:.1} / {:.1} GB available on {}",
                     info.disk_available_gb, info.disk_total_gb, self.mount_point
                 )),
             ]),
             Line::from(vec![
-                Span::styled("  Network: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Network: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(network_line, network_style),
             ]),
         ];
@@ -1094,7 +1094,8 @@ impl GettyApp {
             .title(" System ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(Color::DarkGray))
+            .padding(Padding::uniform(1));
         let paragraph = Paragraph::new(lines).block(block);
         f.render_widget(paragraph, area);
     }
@@ -1109,7 +1110,8 @@ impl GettyApp {
             .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(Color::DarkGray))
+            .padding(Padding::uniform(1));
 
         match &self.all_services {
             Ok(services) if services.is_empty() => {
@@ -1126,7 +1128,7 @@ impl GettyApp {
                 f.render_widget(paragraph, area);
             }
             Ok(services) => {
-                let inner_height = area.height.saturating_sub(2) as usize;
+                let inner_height = area.height.saturating_sub(4) as usize;
                 let visible: Vec<_> = services.iter().take(inner_height).collect();
 
                 let name_width = visible
@@ -1148,7 +1150,7 @@ impl GettyApp {
                         };
 
                         let line = Line::from(vec![
-                            Span::raw(format!(" {:<width$} ", svc.name, width = name_width)),
+                            Span::raw(format!("{:<width$} ", svc.name, width = name_width)),
                             Span::styled(
                                 svc.active_state.clone(),
                                 state_style,
@@ -1164,7 +1166,7 @@ impl GettyApp {
             Err(err) => {
                 let lines = vec![
                     Line::from(Span::styled(
-                        format!("  {}", err),
+                        err.to_string(),
                         Style::default().fg(Color::Yellow),
                     )),
                 ];
@@ -1179,9 +1181,10 @@ impl GettyApp {
             .title(" Journal -f [s: status] ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(Color::DarkGray))
+            .padding(Padding::uniform(1));
 
-        let inner_height = area.height.saturating_sub(2) as usize;
+        let inner_height = area.height.saturating_sub(4) as usize;
         let start = self.journal_lines.len().saturating_sub(inner_height);
         let visible: Vec<Line> = self.journal_lines[start..]
             .iter()
@@ -1197,7 +1200,7 @@ impl GettyApp {
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                Line::from(Span::styled(format!("  {}", line), style))
+                Line::from(Span::styled(line.as_str(), style))
             })
             .collect();
 
@@ -1210,7 +1213,8 @@ impl GettyApp {
             .title(" Audit Log ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(Color::DarkGray))
+            .padding(Padding::uniform(1));
 
         if self.audit_entries.is_empty() {
             let lines = vec![
@@ -1227,9 +1231,9 @@ impl GettyApp {
             return;
         }
 
-        // inner width = total area minus 2 for borders
-        let inner_width = area.width.saturating_sub(2) as usize;
-        let inner_height = area.height.saturating_sub(2) as usize;
+        // inner width = total area minus 2 for borders minus 2 for padding
+        let inner_width = area.width.saturating_sub(4) as usize;
+        let inner_height = area.height.saturating_sub(4) as usize;
         let start = self.audit_entries.len().saturating_sub(inner_height);
 
         // Column layout: " OK /path/here  action  key=val key=val  12:30:45 "
@@ -1329,9 +1333,10 @@ impl GettyApp {
             .title(" Journal -xe ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(Color::DarkGray))
+            .padding(Padding::uniform(1));
 
-        let inner_height = area.height.saturating_sub(2) as usize;
+        let inner_height = area.height.saturating_sub(4) as usize;
         let start = self.xe_journal_lines.len().saturating_sub(inner_height);
         let visible: Vec<Line> = self.xe_journal_lines[start..]
             .iter()
@@ -1347,7 +1352,7 @@ impl GettyApp {
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                Line::from(Span::styled(format!("  {}", line), style))
+                Line::from(Span::styled(line.as_str(), style))
             })
             .collect();
 
