@@ -711,12 +711,12 @@ pub fn generate_persist_network_config(interface: &str, mac_address: &str) -> St
     if mac_address.is_empty() || mac_address == "00:00:00:00:00:00" {
         // Fallback to name matching if MAC is unavailable
         format!(
-            "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n",
+            "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDNS=no\n",
             interface
         )
     } else {
         format!(
-            "[Match]\nMACAddress={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n",
+            "[Match]\nMACAddress={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDNS=no\n",
             mac_address
         )
     }
@@ -743,6 +743,8 @@ mod tests {
         assert!(config.contains("MACAddress=aa:bb:cc:dd:ee:ff"));
         assert!(!config.contains("Name="), "should use MAC, not name");
         assert!(config.contains("DHCP=yes"));
+        assert!(config.contains("[DHCPv4]"));
+        assert!(config.contains("UseDNS=no"));
     }
 
     #[test]
@@ -1048,5 +1050,7 @@ subnet_mask=255.255.255.0
         assert!(config.contains("[Network]"));
         assert!(config.contains("DHCP=yes"));
         assert!(config.contains("MulticastDNS=yes"));
+        assert!(config.contains("[DHCPv4]"));
+        assert!(config.contains("UseDNS=no"));
     }
 }

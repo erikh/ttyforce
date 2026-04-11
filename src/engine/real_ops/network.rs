@@ -254,7 +254,7 @@ fn networkd_unit_path(interface: &str) -> String {
 /// Generate the networkd `.network` unit content for DHCP on an interface.
 fn generate_dhcp_network_config(interface: &str) -> String {
     format!(
-        "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n",
+        "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDNS=no\n",
         interface
     )
 }
@@ -312,11 +312,14 @@ fn merge_primary_interface_config(interface: &str, existing: &str) -> String {
         }
     } else if existing.is_empty() {
         format!(
-            "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nRouteMetric=100\n",
+            "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nRouteMetric=100\nUseDNS=no\n",
             interface
         )
     } else {
-        format!("{}\n[DHCPv4]\nRouteMetric=100\n", existing.trim_end())
+        format!(
+            "{}\n[DHCPv4]\nRouteMetric=100\nUseDNS=no\n",
+            existing.trim_end()
+        )
     }
 }
 
@@ -865,6 +868,8 @@ mod tests {
         assert!(config.contains("[Network]"), "missing [Network] section");
         assert!(config.contains("DHCP=yes"), "missing DHCP=yes");
         assert!(config.contains("MulticastDNS=yes"), "missing MulticastDNS=yes");
+        assert!(config.contains("[DHCPv4]"), "missing [DHCPv4]");
+        assert!(config.contains("UseDNS=no"), "missing UseDNS=no");
     }
 
     #[test]
@@ -888,6 +893,7 @@ mod tests {
         assert!(result.contains("MulticastDNS=yes"), "missing MulticastDNS=yes");
         assert!(result.contains("[DHCPv4]"), "missing [DHCPv4]");
         assert!(result.contains("RouteMetric=100"), "missing RouteMetric=100");
+        assert!(result.contains("UseDNS=no"), "missing UseDNS=no");
     }
 
     #[test]
@@ -896,6 +902,7 @@ mod tests {
         let result = merge_primary_interface_config("eth0", existing);
         assert!(result.contains("[DHCPv4]"), "missing [DHCPv4]");
         assert!(result.contains("RouteMetric=100"), "missing RouteMetric=100");
+        assert!(result.contains("UseDNS=no"), "missing UseDNS=no");
         // Should preserve existing content
         assert!(result.contains("[Match]"));
         assert!(result.contains("DHCP=yes"));
