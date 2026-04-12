@@ -49,6 +49,38 @@ pub enum GettyAction {
     Sledgehammer,
 }
 
+/// PgUp/PgDn step size in lines for journal scrolling.
+const JOURNAL_PAGE_STEP: usize = 10;
+
+/// Append a line to a journal buffer, locking the user's view if scrolled back.
+///
+/// When `scroll > 0` (user has paged back), incrementing it by 1 keeps the
+/// same content visible as new lines stream in. When the buffer exceeds `max`,
+/// trim from the front and clamp `scroll` so the view stays valid.
+fn append_log_line(lines: &mut Vec<String>, scroll: &mut usize, max: usize, line: String) {
+    lines.push(line);
+    if *scroll > 0 {
+        *scroll += 1;
+    }
+    if lines.len() > max {
+        let excess = lines.len() - max;
+        lines.drain(..excess);
+    }
+    let max_scroll = lines.len().saturating_sub(1);
+    if *scroll > max_scroll {
+        *scroll = max_scroll;
+    }
+}
+
+/// Compute the visible window for a scrolled journal pane.
+/// Returns `(start, end)` indices into `lines` such that `lines[start..end]`
+/// is the slice to render.
+fn journal_window(total: usize, scroll: usize, height: usize) -> (usize, usize) {
+    let end = total.saturating_sub(scroll);
+    let start = end.saturating_sub(height);
+    (start, end)
+}
+
 /// State for the SSH key input prompt within the reconfigure menu.
 struct SshInputState {
     /// Index into ssh_users for the current user being configured.
@@ -111,6 +143,10 @@ pub struct GettyApp {
     audit_entries: Vec<AuditEntry>,
     /// When true, show full-screen journal -f log instead of the quad.
     show_full_log: bool,
+    /// Scrollback offset for the journal -f pane (0 = follow tail).
+    journal_scroll: usize,
+    /// Scrollback offset for the journal -xe pane (0 = follow tail).
+    xe_journal_scroll: usize,
     /// Mock mode: don't execute real operations (login, reboot, etc).
     pub mock_mode: bool,
 }
@@ -167,6 +203,8 @@ impl GettyApp {
             xe_journal_max_lines: 200,
             audit_entries,
             show_full_log: false,
+            journal_scroll: 0,
+            xe_journal_scroll: 0,
             mock_mode: false,
         }
     }
@@ -460,7 +498,71 @@ impl GettyApp {
             KeyCode::Char('@') => GettyAction::ReconfigureMenu,
             KeyCode::Char('R') => GettyAction::Reboot,
             KeyCode::Char('p') => GettyAction::PowerOff,
+            KeyCode::PageUp => {
+                self.scroll_active_journal_back(JOURNAL_PAGE_STEP);
+                GettyAction::None
+            }
+            KeyCode::PageDown => {
+                self.scroll_active_journal_forward(JOURNAL_PAGE_STEP);
+                GettyAction::None
+            }
+            KeyCode::Up => {
+                self.scroll_active_journal_back(1);
+                GettyAction::None
+            }
+            KeyCode::Down => {
+                self.scroll_active_journal_forward(1);
+                GettyAction::None
+            }
+            KeyCode::End => {
+                self.scroll_active_journal_to_tail();
+                GettyAction::None
+            }
+            KeyCode::Home => {
+                self.scroll_active_journal_to_top();
+                GettyAction::None
+            }
             _ => GettyAction::None,
+        }
+    }
+
+    /// Scroll the currently visible journal pane back by `n` lines.
+    /// In `show_full_log` mode the active pane is journal -f; otherwise
+    /// it is journal -xe (the only journal pane in the quad view).
+    pub fn scroll_active_journal_back(&mut self, n: usize) {
+        if self.show_full_log {
+            let max_scroll = self.journal_lines.len().saturating_sub(1);
+            self.journal_scroll = (self.journal_scroll + n).min(max_scroll);
+        } else {
+            let max_scroll = self.xe_journal_lines.len().saturating_sub(1);
+            self.xe_journal_scroll = (self.xe_journal_scroll + n).min(max_scroll);
+        }
+    }
+
+    /// Scroll the currently visible journal pane forward (toward tail) by `n` lines.
+    pub fn scroll_active_journal_forward(&mut self, n: usize) {
+        if self.show_full_log {
+            self.journal_scroll = self.journal_scroll.saturating_sub(n);
+        } else {
+            self.xe_journal_scroll = self.xe_journal_scroll.saturating_sub(n);
+        }
+    }
+
+    /// Reset the active journal pane to follow the live tail.
+    pub fn scroll_active_journal_to_tail(&mut self) {
+        if self.show_full_log {
+            self.journal_scroll = 0;
+        } else {
+            self.xe_journal_scroll = 0;
+        }
+    }
+
+    /// Jump the active journal pane to the top of its buffer.
+    pub fn scroll_active_journal_to_top(&mut self) {
+        if self.show_full_log {
+            self.journal_scroll = self.journal_lines.len().saturating_sub(1);
+        } else {
+            self.xe_journal_scroll = self.xe_journal_lines.len().saturating_sub(1);
         }
     }
 
@@ -563,12 +665,12 @@ impl GettyApp {
                 Ok(_) => {
                     let trimmed = line.trim_end().to_string();
                     if !trimmed.is_empty() {
-                        self.journal_lines.push(trimmed);
-                    }
-                    // Cap buffer size
-                    if self.journal_lines.len() > self.journal_max_lines {
-                        let excess = self.journal_lines.len() - self.journal_max_lines;
-                        self.journal_lines.drain(..excess);
+                        append_log_line(
+                            &mut self.journal_lines,
+                            &mut self.journal_scroll,
+                            self.journal_max_lines,
+                            trimmed,
+                        );
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -660,11 +762,12 @@ impl GettyApp {
                 Ok(_) => {
                     let trimmed = line.trim_end().to_string();
                     if !trimmed.is_empty() {
-                        self.xe_journal_lines.push(trimmed);
-                    }
-                    if self.xe_journal_lines.len() > self.xe_journal_max_lines {
-                        let excess = self.xe_journal_lines.len() - self.xe_journal_max_lines;
-                        self.xe_journal_lines.drain(..excess);
+                        append_log_line(
+                            &mut self.xe_journal_lines,
+                            &mut self.xe_journal_scroll,
+                            self.xe_journal_max_lines,
+                            trimmed,
+                        );
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -1177,16 +1280,33 @@ impl GettyApp {
     }
 
     fn render_journal(&self, f: &mut ratatui::Frame, area: Rect) {
+        let title = if self.journal_scroll > 0 {
+            format!(
+                " Journal -f [s: status] (paused, -{} lines, End to follow) ",
+                self.journal_scroll
+            )
+        } else {
+            " Journal -f [s: status] ".to_string()
+        };
+        let border_color = if self.journal_scroll > 0 {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
         let block = Block::default()
-            .title(" Journal -f [s: status] ")
+            .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(border_color))
             .padding(Padding::horizontal(1));
 
         let inner_height = area.height.saturating_sub(2) as usize;
-        let start = self.journal_lines.len().saturating_sub(inner_height);
-        let visible: Vec<Line> = self.journal_lines[start..]
+        let (start, end) = journal_window(
+            self.journal_lines.len(),
+            self.journal_scroll,
+            inner_height,
+        );
+        let visible: Vec<Line> = self.journal_lines[start..end]
             .iter()
             .map(|line| {
                 let style = if line.contains("error")
@@ -1329,16 +1449,33 @@ impl GettyApp {
     }
 
     fn render_xe_journal(&self, f: &mut ratatui::Frame, area: Rect) {
+        let title = if self.xe_journal_scroll > 0 {
+            format!(
+                " Journal -xe (paused, -{} lines, End to follow) ",
+                self.xe_journal_scroll
+            )
+        } else {
+            " Journal -xe ".to_string()
+        };
+        let border_color = if self.xe_journal_scroll > 0 {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
         let block = Block::default()
-            .title(" Journal -xe ")
+            .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(border_color))
             .padding(Padding::horizontal(1));
 
         let inner_height = area.height.saturating_sub(2) as usize;
-        let start = self.xe_journal_lines.len().saturating_sub(inner_height);
-        let visible: Vec<Line> = self.xe_journal_lines[start..]
+        let (start, end) = journal_window(
+            self.xe_journal_lines.len(),
+            self.xe_journal_scroll,
+            inner_height,
+        );
+        let visible: Vec<Line> = self.xe_journal_lines[start..end]
             .iter()
             .map(|line| {
                 let style = if line.contains("error")
@@ -1363,9 +1500,9 @@ impl GettyApp {
 
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
-            "  [.] Login   [s] Status   [l] Log   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [s] Status   [l] Log   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off   [PgUp/PgDn] Scroll"
         } else {
-            "  [.] Login   [s] Status   [l] Log   [@] Reconfigure   [R] Reboot   [p] Power Off"
+            "  [.] Login   [s] Status   [l] Log   [@] Reconfigure   [R] Reboot   [p] Power Off   [PgUp/PgDn] Scroll"
         };
         let actions = Paragraph::new(text)
         .alignment(Alignment::Center)
@@ -1880,6 +2017,8 @@ mod tests {
             xe_journal_max_lines: 200,
             audit_entries: Vec::new(),
             show_full_log: false,
+            journal_scroll: 0,
+            xe_journal_scroll: 0,
             mock_mode: false,
         }
     }
@@ -2447,5 +2586,183 @@ mod tests {
     fn test_highlight_key_value_pairs_no_equals() {
         let spans = highlight_key_value_pairs("plaintext", 20);
         assert!(!spans.is_empty());
+    }
+
+    // ── Journal scrolling ────────────────────────────────────────────────
+
+    #[test]
+    fn test_journal_window_at_tail() {
+        let (start, end) = journal_window(100, 0, 10);
+        assert_eq!(end, 100);
+        assert_eq!(start, 90);
+    }
+
+    #[test]
+    fn test_journal_window_scrolled_back() {
+        let (start, end) = journal_window(100, 5, 10);
+        assert_eq!(end, 95);
+        assert_eq!(start, 85);
+    }
+
+    #[test]
+    fn test_journal_window_smaller_than_height() {
+        let (start, end) = journal_window(3, 0, 10);
+        assert_eq!(end, 3);
+        assert_eq!(start, 0);
+    }
+
+    #[test]
+    fn test_journal_window_scroll_past_top_clamps() {
+        let (start, end) = journal_window(10, 100, 5);
+        assert_eq!(end, 0);
+        assert_eq!(start, 0);
+    }
+
+    #[test]
+    fn test_append_log_line_basic() {
+        let mut lines = Vec::new();
+        let mut scroll = 0;
+        append_log_line(&mut lines, &mut scroll, 100, "first".to_string());
+        append_log_line(&mut lines, &mut scroll, 100, "second".to_string());
+        assert_eq!(lines, vec!["first", "second"]);
+        assert_eq!(scroll, 0, "scroll stays at 0 when following tail");
+    }
+
+    #[test]
+    fn test_append_log_line_locks_view_when_scrolled() {
+        let mut lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut scroll = 1;
+        append_log_line(&mut lines, &mut scroll, 100, "d".to_string());
+        // Scroll bumped from 1 → 2 so the same content stays visible
+        assert_eq!(scroll, 2);
+        assert_eq!(lines, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn test_append_log_line_trims_when_over_max() {
+        let mut lines = Vec::new();
+        let mut scroll = 0;
+        for i in 0..10 {
+            append_log_line(&mut lines, &mut scroll, 5, format!("line {}", i));
+        }
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "line 5");
+        assert_eq!(lines[4], "line 9");
+        assert_eq!(scroll, 0);
+    }
+
+    #[test]
+    fn test_append_log_line_clamps_scroll_to_buffer_size() {
+        let mut lines = vec!["a".to_string(), "b".to_string()];
+        let mut scroll = 10;
+        append_log_line(&mut lines, &mut scroll, 5, "c".to_string());
+        // Scroll incremented to 11, then clamped to len-1 = 2
+        assert_eq!(scroll, 2);
+    }
+
+    #[test]
+    fn test_pgup_scrolls_xe_journal_in_quad_view() {
+        let mut app = test_app();
+        app.show_full_log = false;
+        for i in 0..50 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.map_key(KeyEvent::from(KeyCode::PageUp));
+        assert_eq!(app.xe_journal_scroll, JOURNAL_PAGE_STEP);
+        assert_eq!(app.journal_scroll, 0, "journal -f untouched");
+    }
+
+    #[test]
+    fn test_pgup_scrolls_journal_f_in_full_log_view() {
+        let mut app = test_app();
+        app.show_full_log = true;
+        for i in 0..50 {
+            app.journal_lines.push(format!("line {}", i));
+        }
+        app.map_key(KeyEvent::from(KeyCode::PageUp));
+        assert_eq!(app.journal_scroll, JOURNAL_PAGE_STEP);
+        assert_eq!(app.xe_journal_scroll, 0, "journal -xe untouched");
+    }
+
+    #[test]
+    fn test_pgdn_returns_toward_tail() {
+        let mut app = test_app();
+        for i in 0..50 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.xe_journal_scroll = 20;
+        app.map_key(KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(app.xe_journal_scroll, 20 - JOURNAL_PAGE_STEP);
+    }
+
+    #[test]
+    fn test_pgdn_clamps_at_zero() {
+        let mut app = test_app();
+        for i in 0..50 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.xe_journal_scroll = 3;
+        app.map_key(KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(app.xe_journal_scroll, 0);
+    }
+
+    #[test]
+    fn test_up_arrow_scrolls_one_line() {
+        let mut app = test_app();
+        for i in 0..50 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.map_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(app.xe_journal_scroll, 1);
+    }
+
+    #[test]
+    fn test_down_arrow_scrolls_one_line_forward() {
+        let mut app = test_app();
+        for i in 0..50 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.xe_journal_scroll = 5;
+        app.map_key(KeyEvent::from(KeyCode::Down));
+        assert_eq!(app.xe_journal_scroll, 4);
+    }
+
+    #[test]
+    fn test_end_key_returns_to_tail() {
+        let mut app = test_app();
+        for i in 0..50 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.xe_journal_scroll = 25;
+        app.map_key(KeyEvent::from(KeyCode::End));
+        assert_eq!(app.xe_journal_scroll, 0);
+    }
+
+    #[test]
+    fn test_home_key_jumps_to_top() {
+        let mut app = test_app();
+        for i in 0..10 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        app.map_key(KeyEvent::from(KeyCode::Home));
+        assert_eq!(app.xe_journal_scroll, 9);
+    }
+
+    #[test]
+    fn test_pgup_clamps_at_buffer_top() {
+        let mut app = test_app();
+        for i in 0..5 {
+            app.xe_journal_lines.push(format!("line {}", i));
+        }
+        // PageUp step is 10 but buffer only has 5 lines — clamp to 4
+        app.map_key(KeyEvent::from(KeyCode::PageUp));
+        assert_eq!(app.xe_journal_scroll, 4);
+    }
+
+    #[test]
+    fn test_journal_scroll_initially_zero() {
+        let app = test_app();
+        assert_eq!(app.journal_scroll, 0);
+        assert_eq!(app.xe_journal_scroll, 0);
     }
 }
