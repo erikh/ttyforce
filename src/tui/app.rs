@@ -39,6 +39,22 @@ pub(crate) fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
     Ok((saved_stdin, saved_stdout))
 }
 
+/// Bare serial TTYs report 0x0 for TIOCGWINSZ because no terminal emulator
+/// sets the size. crossterm/ratatui renders to an empty viewport in that case.
+/// Set a sane default via stty so the TUI actually draws.
+fn ensure_nonzero_winsize() {
+    if let Ok((cols, rows)) = crossterm::terminal::size() {
+        if rows == 0 || cols == 0 {
+            let _ = std::process::Command::new("stty")
+                .args(["rows", "24", "cols", "80"])
+                .stdin(std::process::Stdio::inherit())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
 /// Restore stdin and stdout from saved file descriptors.
 pub(crate) fn restore_fds(saved_stdin: i32, saved_stdout: i32) {
     if let Err(e) = nix::unistd::dup2(saved_stdin, 0) {
@@ -155,6 +171,7 @@ impl App {
     }
 
     fn run_tui_loop(&mut self, executor: &mut dyn OperationExecutor) -> io::Result<()> {
+        ensure_nonzero_winsize();
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
