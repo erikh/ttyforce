@@ -522,6 +522,69 @@ fn test_ethernet_link_failure() -> Result<(), String> {
     Ok(())
 }
 
+#[test]
+fn test_ethernet_link_retry_budget_is_order_of_magnitude_longer() -> Result<(), String> {
+    // Regression test: the link/carrier check must keep polling for at
+    // least 10x the other connectivity checks. Real hardware can need
+    // tens of seconds to negotiate (STP on managed switches, delayed
+    // phy autonegotiation, etc.).
+    let hw = load_hardware("ethernet_1disk_nocarrier")?;
+    let mut sm = InstallerStateMachine::new(hw);
+    let mut executor = TestExecutor::new(vec![SimulatedResponse {
+        operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+        result: OperationResult::LinkDown,
+        consume: false,
+    }]);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(matches!(sm.network_state, NetworkState::Error(_)));
+
+    let link_checks = executor
+        .recorded_operations()
+        .iter()
+        .filter(|r| matches!(&r.operation, Operation::CheckLinkAvailability { .. }))
+        .count();
+    assert!(
+        link_checks >= 100,
+        "expected >= 100 link checks before giving up, saw {}",
+        link_checks
+    );
+    Ok(())
+}
+
+#[test]
+fn test_ethernet_link_recovers_after_long_wait() -> Result<(), String> {
+    // Simulate a slow-to-come-up port: the first ~50 link checks return
+    // LinkDown, then the port comes up and the flow proceeds to DHCP.
+    // This would have failed before the retry-budget bump.
+    let hw = load_hardware("ethernet_1disk_nocarrier")?;
+    let mut sm = InstallerStateMachine::new(hw);
+
+    let mut responses: Vec<SimulatedResponse> = (0..50)
+        .map(|_| SimulatedResponse {
+            operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+            result: OperationResult::LinkDown,
+            consume: true,
+        })
+        .collect();
+    responses.push(SimulatedResponse {
+        operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+        result: OperationResult::LinkUp,
+        consume: false,
+    });
+    let mut executor = TestExecutor::new(responses);
+
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(
+        sm.network_state.is_online(),
+        "slow-carrier port should eventually come online, got {:?}",
+        sm.network_state
+    );
+    Ok(())
+}
+
 // === QR Code Wifi ===
 
 #[test]

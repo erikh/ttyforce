@@ -1268,6 +1268,11 @@ impl InstallerStateMachine {
         };
 
         const MAX_RETRIES: u32 = 10;
+        // Link/carrier check gets 10x longer than the other checks — real
+        // hardware can take tens of seconds to negotiate (especially after
+        // an interface was just brought up, or when a managed switch is
+        // running STP). At 500 ms per tick this gives ~50 seconds.
+        const LINK_MAX_RETRIES: u32 = 100;
         const DNS_MAX_RETRIES: u32 = 120; // ~60 seconds at 500ms per tick
 
         match &self.network_state {
@@ -1298,7 +1303,7 @@ impl InstallerStateMachine {
                 self.action_manifest.record(op, result.to_outcome());
                 if result.is_error() {
                     self.connectivity_retries += 1;
-                    if self.connectivity_retries >= MAX_RETRIES {
+                    if self.connectivity_retries >= LINK_MAX_RETRIES {
                         self.network_state =
                             NetworkState::Error(format!("No link on {}", iface_name));
                         self.error_message = Some(format!("No link on {}", iface_name));
