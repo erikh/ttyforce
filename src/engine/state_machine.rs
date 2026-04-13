@@ -11,6 +11,7 @@ use crate::operations::Operation;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenId {
+    InstallModeSelect,
     NetworkConfig,
     WifiSelect,
     WifiPassword,
@@ -26,6 +27,39 @@ pub enum ScreenId {
     Reboot,
 }
 
+/// High-level installation style chosen at the start of the installer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum InstallMode {
+    /// Auto-select wired network (if carrier present) and most-redundant
+    /// RAID layout from the largest same-make/model disk group. Falls back
+    /// to manual interface selection when no wired carrier is detected.
+    /// Wifi is never auto-selected.
+    Easy,
+    /// Full manual flow: pick network interface, RAID level, and disk group.
+    Advanced,
+}
+
+impl InstallMode {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            InstallMode::Easy => "Easy",
+            InstallMode::Advanced => "Advanced",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            InstallMode::Easy => {
+                "Detect a wired connection and pick the most redundant disk layout. \
+                 Falls back to asking when there's no cable plugged in. Wifi is never auto-selected."
+            }
+            InstallMode::Advanced => {
+                "Choose network interface, RAID level, and disk group manually."
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum UserInput {
     // Navigation
@@ -36,6 +70,9 @@ pub enum UserInput {
 
     // Selection (0-indexed)
     Select(usize),
+
+    // Install mode
+    SelectInstallMode(InstallMode),
 
     // Text input
     TextInput(String),
@@ -91,6 +128,11 @@ pub struct InstallerStateMachine {
     pub ssh_current_user_idx: usize,
     /// When true, exit after network setup (skip disk/install screens).
     pub network_only: bool,
+    /// Installation style chosen at the start of the flow. Defaults to Advanced
+    /// for direct constructor callers; `new_with_mode_select` starts on the
+    /// InstallModeSelect screen and resets this to whichever mode the user
+    /// picks.
+    pub install_mode: InstallMode,
 }
 
 impl InstallerStateMachine {
@@ -137,7 +179,17 @@ impl InstallerStateMachine {
             ssh_keys: std::collections::BTreeMap::new(),
             ssh_current_user_idx: 0,
             network_only: false,
+            install_mode: InstallMode::Advanced,
         }
+    }
+
+    /// Construct a state machine that starts on the install-mode-select screen.
+    /// This is the real installer entry point; `new` skips it for tests and
+    /// reconfigure flows that don't need to prompt for a style.
+    pub fn new_with_mode_select(hardware: HardwareManifest) -> Self {
+        let mut sm = Self::new(hardware);
+        sm.current_screen = ScreenId::InstallModeSelect;
+        sm
     }
 
     pub fn with_mount_point(mut self, mp: String) -> Self {
@@ -186,12 +238,51 @@ impl InstallerStateMachine {
         self.error_message = None;
 
         match (&self.current_screen, input) {
+            // === Install Mode Select Screen ===
+            (ScreenId::InstallModeSelect, UserInput::SelectInstallMode(mode)) => {
+                self.install_mode = mode;
+                match mode {
+                    InstallMode::Easy => self.start_easy_mode(executor),
+                    InstallMode::Advanced => {
+                        self.current_screen = ScreenId::NetworkConfig;
+                        Some(ScreenId::NetworkConfig)
+                    }
+                }
+            }
+            (ScreenId::InstallModeSelect, UserInput::Select(idx)) => {
+                let mode = match idx {
+                    0 => InstallMode::Easy,
+                    1 => InstallMode::Advanced,
+                    _ => {
+                        self.error_message = Some("Invalid install mode selection".to_string());
+                        return None;
+                    }
+                };
+                self.install_mode = mode;
+                match mode {
+                    InstallMode::Easy => self.start_easy_mode(executor),
+                    InstallMode::Advanced => {
+                        self.current_screen = ScreenId::NetworkConfig;
+                        Some(ScreenId::NetworkConfig)
+                    }
+                }
+            }
+            (ScreenId::InstallModeSelect, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at install mode select".to_string())
+            }
+
             // === Network Config Screen ===
             (ScreenId::NetworkConfig, UserInput::Confirm) => {
                 self.auto_detect_network(executor)
             }
             (ScreenId::NetworkConfig, UserInput::Select(idx)) => {
                 self.select_interface(idx, executor)
+            }
+            (ScreenId::NetworkConfig, UserInput::Back) => {
+                // Only meaningful when reached via the install-mode-select
+                // screen — otherwise there's nothing to go back to.
+                self.current_screen = ScreenId::InstallModeSelect;
+                Some(ScreenId::InstallModeSelect)
             }
             (ScreenId::NetworkConfig, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at network config".to_string())
@@ -270,6 +361,17 @@ impl InstallerStateMachine {
                         // Signal completion via ExitInstaller
                         self.current_screen = ScreenId::Reboot;
                         Some(ScreenId::Reboot)
+                    } else if self.install_mode == InstallMode::Easy {
+                        // Easy mode: auto-pick raid + disk group and jump
+                        // straight to confirm.
+                        if self.apply_easy_disk_defaults() {
+                            self.current_screen = ScreenId::Confirm;
+                            Some(ScreenId::Confirm)
+                        } else {
+                            // No usable disks — fall back to manual flow
+                            self.current_screen = ScreenId::RaidConfig;
+                            Some(ScreenId::RaidConfig)
+                        }
                     } else {
                         self.current_screen = ScreenId::RaidConfig;
                         Some(ScreenId::RaidConfig)
@@ -366,8 +468,18 @@ impl InstallerStateMachine {
                 }
             }
             (ScreenId::Confirm, UserInput::Back) => {
-                self.current_screen = ScreenId::DiskGroupSelect;
-                Some(ScreenId::DiskGroupSelect)
+                if self.install_mode == InstallMode::Easy {
+                    // In Easy mode the user never saw the RAID/disk screens,
+                    // so going back drops them on the mode-select screen.
+                    self.selected_raid = None;
+                    self.selected_disk_group = None;
+                    self.selected_disk = None;
+                    self.current_screen = ScreenId::InstallModeSelect;
+                    Some(ScreenId::InstallModeSelect)
+                } else {
+                    self.current_screen = ScreenId::DiskGroupSelect;
+                    Some(ScreenId::DiskGroupSelect)
+                }
             }
             (ScreenId::Confirm, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at confirmation".to_string())
@@ -437,6 +549,81 @@ impl InstallerStateMachine {
 
             _ => None,
         }
+    }
+
+    /// Kick off the easy-mode network flow. Wifi is never auto-selected: if
+    /// no ethernet interface has carrier, the user is dropped on the
+    /// NetworkConfig screen to choose manually.
+    fn start_easy_mode(&mut self, executor: &mut dyn OperationExecutor) -> Option<ScreenId> {
+        let connected_eth: Option<String> = self
+            .interfaces
+            .iter()
+            .find(|i| i.kind == InterfaceKind::Ethernet && i.has_link && i.has_carrier)
+            .map(|i| i.name.clone());
+
+        if let Some(eth_name) = connected_eth {
+            self.selected_interface = Some(eth_name.clone());
+            self.bring_ethernet_online(eth_name, executor)
+        } else {
+            // No wired carrier — prompt the user (wifi must not be picked
+            // automatically in Easy mode).
+            self.current_screen = ScreenId::NetworkConfig;
+            self.error_message = Some(
+                "No wired connection detected — select an interface".to_string(),
+            );
+            Some(ScreenId::NetworkConfig)
+        }
+    }
+
+    /// Pick the most redundant RAID layout and the largest compatible disk
+    /// group automatically. Returns false when no disks are available so the
+    /// caller can fall back to the manual flow.
+    pub fn apply_easy_disk_defaults(&mut self) -> bool {
+        if self.disk_groups.is_empty() && self.all_disks.is_empty() {
+            return false;
+        }
+
+        // Largest group by disk count, tie-broken by total bytes, then index
+        // so the choice is deterministic.
+        let best = self
+            .disk_groups
+            .iter()
+            .enumerate()
+            .max_by(|(ai, a), (bi, b)| {
+                a.disk_count()
+                    .cmp(&b.disk_count())
+                    .then_with(|| a.total_bytes().cmp(&b.total_bytes()))
+                    .then_with(|| bi.cmp(ai)) // prefer lower index on tie
+            });
+
+        let Some((group_idx, group)) = best else {
+            return false;
+        };
+
+        let count = group.disk_count();
+        if count == 0 {
+            return false;
+        }
+
+        let raid = RaidConfig::recommended_for_count(count);
+
+        self.selected_raid = Some(raid.clone());
+        if matches!(raid, RaidConfig::Single) {
+            // Single mode uses the per-disk path — pick the first disk of the
+            // largest group so the Confirm screen has something concrete.
+            let first_device = &group.disks[0].device;
+            let disk_idx = self
+                .all_disks
+                .iter()
+                .position(|d| &d.device == first_device)
+                .unwrap_or(0);
+            self.selected_disk = Some(disk_idx);
+            self.selected_disk_group = None;
+        } else {
+            self.selected_disk_group = Some(group_idx);
+            self.selected_disk = None;
+        }
+        true
     }
 
     fn auto_detect_network(&mut self, executor: &mut dyn OperationExecutor) -> Option<ScreenId> {

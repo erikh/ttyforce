@@ -31,6 +31,7 @@ pub fn map_key_event(key: KeyEvent, screen: &ScreenId, selected_index: usize) ->
 
 fn map_enter(screen: &ScreenId, selected_index: usize) -> Option<UserInput> {
     match screen {
+        ScreenId::InstallModeSelect => Some(UserInput::Select(selected_index)),
         ScreenId::NetworkConfig => Some(UserInput::Select(selected_index)),
         ScreenId::WifiSelect => Some(UserInput::SelectWifiNetwork(selected_index)),
         ScreenId::WifiPassword => None, // handled by text input widget

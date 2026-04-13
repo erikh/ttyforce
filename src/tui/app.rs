@@ -263,6 +263,7 @@ impl App {
 
     fn render_screen(&self, f: &mut ratatui::Frame, area: Rect) {
         match &self.state_machine.current_screen {
+            ScreenId::InstallModeSelect => self.render_install_mode_select(f, area),
             ScreenId::NetworkConfig => self.render_network_config(f, area),
             ScreenId::WifiSelect => self.render_wifi_select(f, area),
             ScreenId::WifiPassword => self.render_wifi_password(f, area),
@@ -277,6 +278,44 @@ impl App {
             ScreenId::InstallProgress => self.render_install_progress(f, area),
             ScreenId::Reboot => self.render_reboot(f, area),
         }
+    }
+
+    fn render_install_mode_select(&self, f: &mut ratatui::Frame, area: Rect) {
+        use crate::engine::state_machine::InstallMode;
+
+        let modes = [InstallMode::Easy, InstallMode::Advanced];
+        let items: Vec<ListItem> = modes
+            .iter()
+            .enumerate()
+            .map(|(i, mode)| {
+                let style = if i == self.selected_index {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!(
+                    "  {}\n    {}",
+                    mode.display_name(),
+                    mode.description()
+                ))
+                .style(style)
+            })
+            .collect();
+
+        let content_height = (items.len() as u16 * 3) + 2;
+        let height_pct = (content_height * 100 / area.height.max(1)).clamp(30, 70);
+        let center = centered_rect(70, height_pct, area);
+
+        let list = List::new(items).block(
+            Block::default()
+                .title(" Installation Style — ↑↓: navigate, Enter: select ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+        f.render_widget(list, center);
     }
 
     fn render_network_config(&self, f: &mut ratatui::Frame, area: Rect) {

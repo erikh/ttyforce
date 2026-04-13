@@ -1,6 +1,7 @@
+use ttyforce::disk::RaidConfig;
 use ttyforce::engine::executor::{OperationMatcher, SimulatedResponse, TestExecutor};
 use ttyforce::engine::feedback::OperationResult;
-use ttyforce::engine::state_machine::{InstallerStateMachine, ScreenId, UserInput};
+use ttyforce::engine::state_machine::{InstallMode, InstallerStateMachine, ScreenId, UserInput};
 use ttyforce::engine::OperationExecutor;
 use ttyforce::manifest::{HardwareManifest, InstallerFinalState, OperationOutcome};
 use ttyforce::network::wifi::WifiNetwork;
@@ -1751,5 +1752,300 @@ fn test_network_only_abort_returns_to_reboot_screen() -> Result<(), String> {
         "aborting in network_only mode must reach Reboot screen"
     );
 
+    Ok(())
+}
+
+// === Install Mode Select ===
+
+#[test]
+fn test_new_with_mode_select_starts_on_install_mode_screen() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let sm = InstallerStateMachine::new_with_mode_select(hw);
+    assert_eq!(sm.current_screen, ScreenId::InstallModeSelect);
+    assert_eq!(sm.install_mode, InstallMode::Advanced);
+    Ok(())
+}
+
+#[test]
+fn test_new_preserves_legacy_entry_screen() -> Result<(), String> {
+    // Plain `new()` must keep starting on NetworkConfig so existing tests and
+    // reconfigure flows don't see the mode-select screen.
+    let hw = load_hardware("ethernet_1disk")?;
+    let sm = InstallerStateMachine::new(hw);
+    assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
+    assert_eq!(sm.install_mode, InstallMode::Advanced);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_advanced_leads_to_network_config() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Advanced),
+        &mut executor,
+    );
+    assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
+    assert_eq!(sm.install_mode, InstallMode::Advanced);
+    // No network action should have happened yet — the user has to press
+    // enter on NetworkConfig to kick off detection.
+    assert!(sm.selected_interface.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_select_via_index_maps_to_enum() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    // Index 1 = Advanced (matches list order in the renderer).
+    sm.process_input(UserInput::Select(1), &mut executor);
+    assert_eq!(sm.install_mode, InstallMode::Advanced);
+    assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_select_invalid_index_errors() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    let before = sm.current_screen.clone();
+    sm.process_input(UserInput::Select(99), &mut executor);
+    assert_eq!(sm.current_screen, before);
+    assert!(sm.error_message.is_some());
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_with_carrier_auto_picks_ethernet() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+
+    // Carrier present -> jumps straight to NetworkProgress with the wired
+    // interface selected.
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_no_carrier_drops_to_network_config() -> Result<(), String> {
+    // Wifi is present but Easy mode must NOT auto-select it — the user is
+    // dropped on NetworkConfig to make an explicit choice.
+    let hw = load_hardware("wifi_dead_ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+
+    assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
+    assert!(sm.selected_interface.is_none());
+    assert!(
+        sm.error_message
+            .as_deref()
+            .is_some_and(|m| m.contains("wired"))
+    );
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_prefers_ethernet_over_wifi_when_both_present() -> Result<(), String> {
+    // wifi_ethernet_1disk has both with ethernet carrier live.
+    let hw = load_hardware("wifi_ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+
+    assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_picks_most_redundant_raid_4disks() -> Result<(), String> {
+    let hw = load_hardware("ethernet_4disk_same")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    // Bring network online
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+
+    // Confirm on NetworkProgress triggers the easy-mode disk defaults and
+    // jumps straight past RaidConfig / DiskGroupSelect.
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::Confirm);
+    assert_eq!(sm.selected_raid, Some(RaidConfig::BtrfsRaid5));
+    assert_eq!(sm.selected_disk_group, Some(0));
+    assert!(sm.selected_disk.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_picks_single_for_one_disk() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::Confirm);
+    assert_eq!(sm.selected_raid, Some(RaidConfig::Single));
+    // Single mode picks an explicit disk, not a group.
+    assert_eq!(sm.selected_disk, Some(0));
+    assert!(sm.selected_disk_group.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_apply_easy_disk_defaults_two_disks_picks_mirror() -> Result<(), String> {
+    let hw = load_hardware("ethernet_4disk_same")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+
+    // Shrink to two disks to exercise the 2-disk -> mirror branch.
+    sm.all_disks.truncate(2);
+    sm.disk_groups = ttyforce::disk::DiskGroup::from_disks(&sm.all_disks);
+
+    assert!(sm.apply_easy_disk_defaults());
+    assert_eq!(sm.selected_raid, Some(RaidConfig::BtrfsRaid1));
+    assert_eq!(sm.selected_disk_group, Some(0));
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_full_install_flow() -> Result<(), String> {
+    let hw = load_hardware("ethernet_4disk_same")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    // Step through the happy path: easy -> network online -> confirm ->
+    // install -> reboot.
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::Confirm);
+
+    sm.process_input(UserInput::ConfirmInstall, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::InstallProgress);
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+
+    // RAID5 on 4 identical disks means BtrfsRaidSetup should have been used.
+    let ops = executor.recorded_operations();
+    let has_raid_setup = ops.iter().any(|r| {
+        matches!(
+            &r.operation,
+            Operation::BtrfsRaidSetup { raid_level, .. } if raid_level == "raid5"
+        )
+    });
+    assert!(
+        has_raid_setup,
+        "easy mode on 4 disks must run BtrfsRaidSetup at raid5"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_back_from_confirm_returns_to_mode_select() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::Confirm);
+
+    sm.process_input(UserInput::Back, &mut executor);
+    // Easy mode skipped raid/disk screens, so back goes all the way to mode
+    // select, clearing the auto-picked values.
+    assert_eq!(sm.current_screen, ScreenId::InstallModeSelect);
+    assert!(sm.selected_raid.is_none());
+    assert!(sm.selected_disk.is_none());
+    assert!(sm.selected_disk_group.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_advanced_back_from_confirm_goes_to_disk_select() -> Result<(), String> {
+    // Advanced mode: Back from Confirm must NOT jump to mode-select; it
+    // should step back one screen to DiskGroupSelect like the legacy flow.
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Advanced),
+        &mut executor,
+    );
+    sm.process_input(UserInput::Confirm, &mut executor);
+    while sm.advance_connectivity(&mut executor) {}
+    sm.process_input(UserInput::Confirm, &mut executor);
+    sm.process_input(UserInput::SelectRaidOption(0), &mut executor);
+    sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::Confirm);
+
+    sm.process_input(UserInput::Back, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::DiskGroupSelect);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_select_back_from_network_config() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Advanced),
+        &mut executor,
+    );
+    assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
+
+    sm.process_input(UserInput::Back, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::InstallModeSelect);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_select_abort() -> Result<(), String> {
+    let hw = load_hardware("ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(UserInput::AbortInstall, &mut executor);
+    assert_eq!(sm.current_screen, ScreenId::Reboot);
+    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Aborted);
     Ok(())
 }
