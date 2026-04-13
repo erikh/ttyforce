@@ -191,7 +191,7 @@ fn run_output(input: Option<&str>, output: Option<&str>) {
         process::exit(1);
     }
 
-    let state_machine = InstallerStateMachine::new(hardware);
+    let state_machine = InstallerStateMachine::new_with_mode_select(hardware);
     let mut app = App::new(state_machine);
     let mut executor = TestExecutor::new(vec![]);
 
@@ -227,14 +227,7 @@ fn run_installer(
         process::exit(1);
     }
 
-    // Only `ttyforce initrd` shows the Easy/Advanced install-mode-select
-    // screen. `ttyforce run` keeps the legacy flow that lands directly on
-    // NetworkConfig.
-    let mut state_machine = if initrd {
-        InstallerStateMachine::new_with_mode_select(hardware)
-    } else {
-        InstallerStateMachine::new(hardware)
-    };
+    let mut state_machine = InstallerStateMachine::new_with_mode_select(hardware);
     if let Some(target) = etc_prefix {
         state_machine.etc_prefix = Some(target.to_string());
     }
