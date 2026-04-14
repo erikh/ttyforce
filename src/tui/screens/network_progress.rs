@@ -24,6 +24,7 @@ impl Default for NetworkProgressScreen {
 
 fn ethernet_steps() -> Vec<(NetworkState, &'static str)> {
     vec![
+        (NetworkState::WaitingForCarrier, "Waiting for carrier"),
         (NetworkState::DeviceEnabled, "Device enabled"),
         (NetworkState::DhcpConfiguring, "Configuring DHCP"),
         (NetworkState::IpAssigned, "IP address assigned"),
@@ -81,16 +82,29 @@ impl Screen for NetworkProgressScreen {
             .split(inner);
 
         // --- Interface / SSID summary ---
-        let iface_label = state
-            .selected_interface
-            .as_deref()
-            .unwrap_or("<none>");
+        let is_waiting_for_carrier =
+            matches!(state.network_state, NetworkState::WaitingForCarrier);
+        let iface_label_owned = if is_waiting_for_carrier
+            && !state.carrier_candidates.is_empty()
+        {
+            state.carrier_candidates.join(", ")
+        } else {
+            state
+                .selected_interface
+                .clone()
+                .unwrap_or_else(|| "<none>".to_string())
+        };
         let ssid_part = state
             .selected_ssid
             .as_deref()
             .map(|s| format!("  SSID: {}", s))
             .unwrap_or_default();
-        let iface_text = format!("Interface: {}{}", iface_label, ssid_part);
+        let label_prefix = if is_waiting_for_carrier {
+            "Polling"
+        } else {
+            "Interface"
+        };
+        let iface_text = format!("{}: {}{}", label_prefix, iface_label_owned, ssid_part);
         let iface_para = Paragraph::new(iface_text)
             .style(Style::default().fg(Color::Yellow));
         f.render_widget(iface_para, chunks[0]);

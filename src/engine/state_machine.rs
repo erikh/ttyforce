@@ -122,6 +122,10 @@ pub struct InstallerStateMachine {
     /// Target directory for /etc config files. If None, uses mount_point.
     pub etc_prefix: Option<String>,
     connectivity_retries: u32,
+    /// Easy-mode carrier wait: instant the poll started.
+    pub carrier_wait_start: Option<std::time::Instant>,
+    /// Easy-mode carrier wait: ethernet interfaces being polled.
+    pub carrier_candidates: Vec<String>,
     pub wps_start_time: Option<std::time::Instant>,
     pub ssh_users: Vec<String>,
     pub ssh_keys: std::collections::BTreeMap<String, Vec<String>>,
@@ -174,6 +178,8 @@ impl InstallerStateMachine {
             mount_point: "/town-os".to_string(),
             etc_prefix: None,
             connectivity_retries: 0,
+            carrier_wait_start: None,
+            carrier_candidates: Vec::new(),
             wps_start_time: None,
             ssh_users: Vec::new(),
             ssh_keys: std::collections::BTreeMap::new(),
@@ -551,28 +557,65 @@ impl InstallerStateMachine {
         }
     }
 
-    /// Kick off the easy-mode network flow. Wifi is never auto-selected: if
-    /// no ethernet interface has carrier, the user is dropped on the
-    /// NetworkConfig screen to choose manually.
+    /// Kick off the easy-mode network flow. Enables every ethernet
+    /// interface and polls for carrier on each in parallel — whichever
+    /// comes up first wins. If the 30-second poll expires with nothing
+    /// plugged in, drops the user on the NetworkConfig screen to choose
+    /// manually. Wifi is never auto-selected in Easy mode.
     fn start_easy_mode(&mut self, executor: &mut dyn OperationExecutor) -> Option<ScreenId> {
-        let connected_eth: Option<String> = self
+        // Fast path: something already reports link+carrier from the
+        // initial detection pass — skip straight to bring-up.
+        if let Some(eth_name) = self
             .interfaces
             .iter()
             .find(|i| i.kind == InterfaceKind::Ethernet && i.has_link && i.has_carrier)
-            .map(|i| i.name.clone());
-
-        if let Some(eth_name) = connected_eth {
+            .map(|i| i.name.clone())
+        {
             self.selected_interface = Some(eth_name.clone());
-            self.bring_ethernet_online(eth_name, executor)
-        } else {
-            // No wired carrier — prompt the user (wifi must not be picked
-            // automatically in Easy mode).
+            return self.bring_ethernet_online(eth_name, executor);
+        }
+
+        let eth_names: Vec<String> = self
+            .interfaces
+            .iter()
+            .filter(|i| i.kind == InterfaceKind::Ethernet)
+            .map(|i| i.name.clone())
+            .collect();
+
+        if eth_names.is_empty() {
+            // No ethernet hardware — fall back to manual selection (the
+            // user might still have wifi, which Easy mode refuses to
+            // auto-pick).
             self.current_screen = ScreenId::NetworkConfig;
             self.error_message = Some(
-                "No wired connection detected — select an interface".to_string(),
+                "No ethernet detected — select an interface".to_string(),
             );
-            Some(ScreenId::NetworkConfig)
+            return Some(ScreenId::NetworkConfig);
         }
+
+        // Enable every ethernet interface up front so a late plug-in has
+        // a chance to come up while we poll. advance_connectivity() drives
+        // the actual carrier polling from the TUI loop.
+        for name in &eth_names {
+            let op = Operation::EnableInterface {
+                interface: name.clone(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
+            if !result.is_error() {
+                if let Some(iface) =
+                    self.interfaces.iter_mut().find(|i| &i.name == name)
+                {
+                    iface.enabled = true;
+                }
+            }
+        }
+
+        self.carrier_candidates = eth_names;
+        self.carrier_wait_start = Some(std::time::Instant::now());
+        self.network_state = NetworkState::WaitingForCarrier;
+        self.current_screen = ScreenId::NetworkProgress;
+        Some(ScreenId::NetworkProgress)
     }
 
     /// Pick the most redundant RAID layout and the largest compatible disk
@@ -1262,6 +1305,12 @@ impl InstallerStateMachine {
     /// Called from the TUI loop on each tick when on NetworkProgress screen.
     /// Returns true if a step was executed (state changed).
     pub fn advance_connectivity(&mut self, executor: &mut dyn OperationExecutor) -> bool {
+        // Easy-mode carrier wait runs before an interface is selected, so
+        // dispatch it here instead of requiring selected_interface first.
+        if matches!(self.network_state, NetworkState::WaitingForCarrier) {
+            return self.advance_carrier_wait(executor);
+        }
+
         let iface_name = match &self.selected_interface {
             Some(name) => name.clone(),
             None => return false,
@@ -1494,6 +1543,69 @@ impl InstallerStateMachine {
             }
             _ => false, // Terminal or pre-IP states — don't advance
         }
+    }
+
+    /// Easy-mode carrier poll: check every ethernet candidate for link,
+    /// commit to the first one to come up, or fall back to the manual
+    /// selection screen after a 30-second timeout.
+    fn advance_carrier_wait(&mut self, executor: &mut dyn OperationExecutor) -> bool {
+        const CARRIER_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+        let candidates = self.carrier_candidates.clone();
+        for cand in &candidates {
+            let op = Operation::CheckLinkAvailability {
+                interface: cand.clone(),
+            };
+            let result = executor.execute(&op);
+            self.action_manifest.record(op, result.to_outcome());
+            if !result.is_error() {
+                // Winner. Mark carrier seen so render reflects reality,
+                // then jump past enable/link-check into DHCP — the
+                // interface was already enabled in start_easy_mode().
+                if let Some(iface) =
+                    self.interfaces.iter_mut().find(|i| &i.name == cand)
+                {
+                    iface.has_link = true;
+                    iface.has_carrier = true;
+                }
+                self.selected_interface = Some(cand.clone());
+                self.carrier_candidates.clear();
+                self.carrier_wait_start = None;
+                self.network_state = NetworkState::DhcpConfiguring;
+                self.connectivity_retries = 0;
+                return true;
+            }
+        }
+
+        let elapsed = self
+            .carrier_wait_start
+            .map(|t| t.elapsed())
+            .unwrap_or(CARRIER_WAIT);
+        if elapsed >= CARRIER_WAIT {
+            // Nothing plugged in — drop to manual selection. Shut the
+            // interfaces we brought up so the user's pick isn't fighting
+            // with a half-configured neighbour.
+            for cand in &candidates {
+                let op = Operation::ShutdownInterface {
+                    interface: cand.clone(),
+                };
+                let result = executor.execute(&op);
+                self.action_manifest.record(op, result.to_outcome());
+                if let Some(iface) =
+                    self.interfaces.iter_mut().find(|i| &i.name == cand)
+                {
+                    iface.enabled = false;
+                }
+            }
+            self.carrier_candidates.clear();
+            self.carrier_wait_start = None;
+            self.network_state = NetworkState::Offline;
+            self.current_screen = ScreenId::NetworkConfig;
+            self.error_message = Some(
+                "No wired carrier after 30s — select an interface".to_string(),
+            );
+        }
+        true
     }
 
     pub fn connect_wifi_qr(

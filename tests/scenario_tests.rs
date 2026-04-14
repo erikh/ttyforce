@@ -1903,10 +1903,11 @@ fn test_install_mode_easy_with_carrier_auto_picks_ethernet() -> Result<(), Strin
 }
 
 #[test]
-fn test_install_mode_easy_no_carrier_drops_to_network_config() -> Result<(), String> {
-    // Wifi is present but Easy mode must NOT auto-select it — the user is
-    // dropped on NetworkConfig to make an explicit choice.
-    let hw = load_hardware("wifi_dead_ethernet_1disk")?;
+fn test_install_mode_easy_no_ethernet_hardware_drops_to_network_config() -> Result<(), String> {
+    // No ethernet hardware at all — Easy mode has nothing to poll and
+    // drops the user straight to NetworkConfig. Wifi must not be
+    // auto-selected in Easy mode.
+    let hw = load_hardware("wifi_1disk")?;
     let mut sm = InstallerStateMachine::new_with_mode_select(hw);
     let mut executor = success_executor();
 
@@ -1917,11 +1918,167 @@ fn test_install_mode_easy_no_carrier_drops_to_network_config() -> Result<(), Str
 
     assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
     assert!(sm.selected_interface.is_none());
+    assert!(sm.carrier_candidates.is_empty());
+    assert!(sm.carrier_wait_start.is_none());
+    assert!(
+        sm.error_message
+            .as_deref()
+            .is_some_and(|m| m.contains("ethernet"))
+    );
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_dead_ethernet_enters_carrier_wait() -> Result<(), String> {
+    // Ethernet is unplugged — Easy mode should land on NetworkProgress
+    // in WaitingForCarrier state, polling the interface rather than
+    // immediately giving up.
+    let hw = load_hardware("wifi_dead_ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+
+    assert_eq!(sm.current_screen, ScreenId::NetworkProgress);
+    assert_eq!(sm.network_state, NetworkState::WaitingForCarrier);
+    assert_eq!(sm.carrier_candidates, vec!["eth0".to_string()]);
+    assert!(sm.carrier_wait_start.is_some());
+    // Wifi must NOT have been picked.
+    assert!(sm.selected_interface.is_none());
+    // The interface should have been brought up.
+    let enabled_ops = executor
+        .recorded_operations()
+        .iter()
+        .filter(|r| {
+            matches!(
+                &r.operation,
+                Operation::EnableInterface { interface } if interface == "eth0"
+            )
+        })
+        .count();
+    assert_eq!(enabled_ops, 1);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_carrier_wait_picks_first_live_ethernet() -> Result<(), String> {
+    // Dead ethernet at start — executor returns success for
+    // CheckLinkAvailability, simulating a cable plugged in mid-wait.
+    // advance_connectivity should commit the interface and jump to DHCP.
+    let hw = load_hardware("wifi_dead_ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = success_executor();
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    assert_eq!(sm.network_state, NetworkState::WaitingForCarrier);
+
+    // One tick — success_executor() returns Success for every op, so the
+    // first poll commits eth0.
+    sm.advance_connectivity(&mut executor);
+    assert_eq!(sm.selected_interface, Some("eth0".to_string()));
+    assert_eq!(sm.network_state, NetworkState::DhcpConfiguring);
+    assert!(sm.carrier_candidates.is_empty());
+    assert!(sm.carrier_wait_start.is_none());
+
+    // Finish the bring-up and make sure it goes online cleanly.
+    while sm.advance_connectivity(&mut executor) {}
+    assert!(sm.network_state.is_online());
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_carrier_wait_times_out_to_network_config() -> Result<(), String> {
+    // Ethernet never gets carrier — after the 30s wait window elapses,
+    // Easy mode should drop the user on NetworkConfig.
+    let hw = load_hardware("wifi_dead_ethernet_1disk")?;
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = TestExecutor::new(vec![SimulatedResponse {
+        operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+        result: OperationResult::Error("no carrier".to_string()),
+        consume: false,
+    }]);
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    assert_eq!(sm.network_state, NetworkState::WaitingForCarrier);
+
+    // Fast-forward the deadline past the 30s window.
+    sm.carrier_wait_start =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    sm.advance_connectivity(&mut executor);
+
+    assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
+    assert_eq!(sm.network_state, NetworkState::Offline);
+    assert!(sm.carrier_candidates.is_empty());
+    assert!(sm.carrier_wait_start.is_none());
+    assert!(sm.selected_interface.is_none());
     assert!(
         sm.error_message
             .as_deref()
             .is_some_and(|m| m.contains("wired"))
     );
+    // Poll candidates were brought down so the user's manual pick
+    // isn't racing them.
+    let shutdown_ops = executor
+        .recorded_operations()
+        .iter()
+        .filter(|r| {
+            matches!(
+                &r.operation,
+                Operation::ShutdownInterface { interface } if interface == "eth0"
+            )
+        })
+        .count();
+    assert_eq!(shutdown_ops, 1);
+    Ok(())
+}
+
+#[test]
+fn test_install_mode_easy_polls_every_ethernet_candidate() -> Result<(), String> {
+    // Two ethernet interfaces present, both starting without carrier.
+    // Easy mode should enable both and poll both.
+    let mut hw = load_hardware("wifi_dead_ethernet_1disk")?;
+    hw.network.interfaces.push(ttyforce::manifest::NetworkInterfaceSpec {
+        name: "eth1".to_string(),
+        kind: ttyforce::manifest::InterfaceKind::Ethernet,
+        mac: "aa:bb:cc:11:22:33".to_string(),
+        has_link: false,
+        has_carrier: false,
+    });
+    let mut sm = InstallerStateMachine::new_with_mode_select(hw);
+    let mut executor = TestExecutor::new(vec![SimulatedResponse {
+        operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
+        result: OperationResult::Error("no carrier".to_string()),
+        consume: false,
+    }]);
+
+    sm.process_input(
+        UserInput::SelectInstallMode(InstallMode::Easy),
+        &mut executor,
+    );
+    assert_eq!(sm.network_state, NetworkState::WaitingForCarrier);
+    assert_eq!(sm.carrier_candidates, vec!["eth0".to_string(), "eth1".to_string()]);
+
+    // One tick polls both candidates.
+    sm.advance_connectivity(&mut executor);
+    let link_checks: Vec<&str> = executor
+        .recorded_operations()
+        .iter()
+        .filter_map(|r| match &r.operation {
+            Operation::CheckLinkAvailability { interface } => Some(interface.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(link_checks.contains(&"eth0"));
+    assert!(link_checks.contains(&"eth1"));
     Ok(())
 }
 

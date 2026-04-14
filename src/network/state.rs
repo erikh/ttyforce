@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NetworkState {
     Offline,
+    /// Easy-mode poll waiting for line carrier on one of several candidate
+    /// ethernet interfaces. Kept as a pre-DeviceEnabled state because the
+    /// interfaces are brought up before the wait starts.
+    WaitingForCarrier,
     DeviceEnabled,
     Scanning,
     NetworkSelected,
@@ -62,6 +66,7 @@ impl std::fmt::Display for NetworkState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NetworkState::Offline => write!(f, "Offline"),
+            NetworkState::WaitingForCarrier => write!(f, "Waiting for carrier"),
             NetworkState::DeviceEnabled => write!(f, "Device Enabled"),
             NetworkState::Scanning => write!(f, "Scanning"),
             NetworkState::NetworkSelected => write!(f, "Network Selected"),
