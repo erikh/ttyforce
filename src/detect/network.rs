@@ -2,24 +2,36 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use crate::engine::real_ops::cmd_log_append;
 use crate::manifest::{
     InterfaceKind, NetworkInterfaceSpec, WifiEnvironment, WifiNetworkSpec, WifiSecurity,
 };
 
 pub fn detect_interfaces() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
+    cmd_log_append("$ detect network interfaces (networkd dbus → sysfs fallback)".to_string());
     // Try systemd-networkd dbus first
-    if let Some(interfaces) = detect_interfaces_networkd() {
-        if !interfaces.is_empty() {
+    match detect_interfaces_networkd() {
+        Some(interfaces) if !interfaces.is_empty() => {
+            cmd_log_append(format!(
+                "  -> networkd returned {} interface(s)",
+                interfaces.len()
+            ));
             return Ok(interfaces);
         }
+        Some(_) => cmd_log_append(
+            "  -> networkd returned no interfaces; falling back to sysfs".to_string(),
+        ),
+        None => cmd_log_append(
+            "  -> networkd unavailable; falling back to sysfs".to_string(),
+        ),
     }
 
-    // Fallback: sysfs
     detect_interfaces_sysfs()
 }
 
 /// Detect network interfaces via systemd-networkd dbus (org.freedesktop.network1).
 fn detect_interfaces_networkd() -> Option<Vec<NetworkInterfaceSpec>> {
+    cmd_log_append("$ networkd ListLinks (org.freedesktop.network1)".to_string());
     let conn = zbus::blocking::Connection::system().ok()?;
 
     // ListLinks returns a(iso) — array of (ifindex, name, object_path)
@@ -36,11 +48,15 @@ fn detect_interfaces_networkd() -> Option<Vec<NetworkInterfaceSpec>> {
     let links: Vec<(i32, String, zbus::zvariant::OwnedObjectPath)> =
         reply.body().deserialize().ok()?;
 
+    cmd_log_append(format!("  -> networkd reports {} link(s)", links.len()));
+
     let mut interfaces = Vec::new();
 
     for (index, name, _path) in &links {
+        cmd_log_append(format!("  inspect {} (ifindex={})", name, index));
         // Skip loopback and virtual interfaces
         if should_skip_interface(name) {
+            cmd_log_append(format!("    skip {} (lo/veth/docker/bridge)", name));
             continue;
         }
 
@@ -67,6 +83,11 @@ fn detect_interfaces_networkd() -> Option<Vec<NetworkInterfaceSpec>> {
             "carrier" | "routable" | "degraded" | "enslaved"
         ) || has_carrier;
 
+        cmd_log_append(format!(
+            "    accept {} kind={:?} mac={} carrier_state={} oper_state={}",
+            name, kind, mac, carrier_state, oper_state
+        ));
+
         interfaces.push(NetworkInterfaceSpec {
             name: name.clone(),
             kind,
@@ -78,6 +99,10 @@ fn detect_interfaces_networkd() -> Option<Vec<NetworkInterfaceSpec>> {
 
     // Sort: ethernet first, then wifi, alphabetical within each group
     sort_interfaces(&mut interfaces);
+    cmd_log_append(format!(
+        "  -> networkd scan accepted {} interface(s)",
+        interfaces.len()
+    ));
     Some(interfaces)
 }
 
@@ -87,14 +112,24 @@ pub fn detect_interfaces_sysfs() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
     let net_dir = Path::new("/sys/class/net");
 
     if !net_dir.exists() {
+        cmd_log_append("  /sys/class/net does not exist".to_string());
         return Ok(interfaces);
     }
 
-    for entry in fs::read_dir(net_dir)? {
-        let entry = entry?;
+    cmd_log_append("$ scan /sys/class/net for interfaces".to_string());
+
+    let entries: Vec<_> = fs::read_dir(net_dir)?.collect::<Result<_, _>>()?;
+    cmd_log_append(format!(
+        "  -> {} entry/entries in /sys/class/net",
+        entries.len()
+    ));
+
+    for entry in entries {
         let name = entry.file_name().to_string_lossy().to_string();
+        cmd_log_append(format!("  inspect {}", name));
 
         if should_skip_interface(&name) {
+            cmd_log_append(format!("    skip {} (lo/veth/docker/bridge)", name));
             continue;
         }
 
@@ -109,6 +144,11 @@ pub fn detect_interfaces_sysfs() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
         let operstate = read_sysfs_trimmed(&iface_path.join("operstate")).unwrap_or_default();
         let has_link = has_carrier || operstate == "up" || operstate == "dormant";
 
+        cmd_log_append(format!(
+            "    accept {} kind={:?} mac={} carrier={} operstate={}",
+            name, kind, mac, has_carrier, operstate
+        ));
+
         interfaces.push(NetworkInterfaceSpec {
             name,
             kind,
@@ -119,6 +159,10 @@ pub fn detect_interfaces_sysfs() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
     }
 
     sort_interfaces(&mut interfaces);
+    cmd_log_append(format!(
+        "  -> sysfs scan accepted {} interface(s)",
+        interfaces.len()
+    ));
     Ok(interfaces)
 }
 
@@ -191,6 +235,7 @@ pub fn detect_wifi_environment(
 ) -> Option<WifiEnvironment> {
     let has_wifi = interfaces.iter().any(|i| i.kind == InterfaceKind::Wifi);
     if !has_wifi {
+        cmd_log_append("  -> no wifi interface present, skipping scan".to_string());
         return None;
     }
 
@@ -198,7 +243,13 @@ pub fn detect_wifi_environment(
         .iter()
         .find(|i| i.kind == InterfaceKind::Wifi)?;
 
+    cmd_log_append(format!("$ scan wifi networks on {}", wifi_iface.name));
     let networks = scan_wifi_networks(&wifi_iface.name).unwrap_or_default();
+    cmd_log_append(format!(
+        "  -> {} network(s) found on {}",
+        networks.len(),
+        wifi_iface.name
+    ));
     if networks.is_empty() {
         // Return an empty environment so the UI still shows wifi is available
         Some(WifiEnvironment {

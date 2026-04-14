@@ -30,19 +30,35 @@ pub fn enable_interface(interface: &str) -> OperationResult {
     }
 
     // Wait for carrier — ioctl IFF_UP is asynchronous
-    cmd_log_append(format!("  waiting for carrier on {} ...", interface));
+    cmd_log_append(format!("  waiting for carrier on {} (up to 5s) ...", interface));
     let carrier_path = format!("/sys/class/net/{}/carrier", interface);
+    let mut last_state: Option<String> = None;
     for i in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        if let Ok(val) = fs::read_to_string(&carrier_path) {
-            if val.trim() == "1" {
-                cmd_log_append(format!("  -> carrier up after {}ms", (i + 1) * 100));
-                return OperationResult::Success;
-            }
+        let val = fs::read_to_string(&carrier_path)
+            .map(|v| v.trim().to_string())
+            .unwrap_or_else(|e| format!("err:{}", e));
+        if val == "1" {
+            cmd_log_append(format!("  -> carrier up on {} after {}ms", interface, (i + 1) * 100));
+            return OperationResult::Success;
         }
+        // Heartbeat once per second so the log never appears stalled.
+        if (i + 1) % 10 == 0 {
+            cmd_log_append(format!(
+                "  ... {} carrier={} ({}ms elapsed)",
+                interface,
+                val,
+                (i + 1) * 100
+            ));
+        }
+        last_state = Some(val);
     }
 
-    cmd_log_append("  -> no carrier after 5s (continuing)".to_string());
+    cmd_log_append(format!(
+        "  -> no carrier on {} after 5s (last carrier={}) (continuing)",
+        interface,
+        last_state.as_deref().unwrap_or("?")
+    ));
     OperationResult::Success
 }
 
@@ -240,51 +256,149 @@ pub fn wps_pbc_status(interface: &str) -> OperationResult {
 // ── DHCP (external tool: dhcpcd) ────────────────────────────────────────
 
 /// Configure DHCP on an interface via dhcpcd.
-/// Polls for an IP address (up to 30s) before returning.
-/// After IP is confirmed, writes /etc/resolv.conf from the lease.
+///
+/// The full DHCP handshake is two stages from our perspective:
+///   1. an IPv4 address appears on the interface
+///   2. a default route (gateway) is installed in `/proc/net/route`
+///
+/// dhcpcd installs the address slightly before the route, so callers that
+/// immediately check for an upstream router can race the lease and falsely
+/// declare "no router". We poll for both the address (up to 30s) and the
+/// default route (an additional 15s once the address is up) before
+/// returning. Each attempt is logged so the log never appears to stall.
 pub fn configure_dhcp(interface: &str) -> OperationResult {
     let result = configure_dhcp_with(
         interface,
         try_trigger_dhcp,
         check_ip_sysfs,
+        check_default_route_proc,
         30,
+        15,
         std::time::Duration::from_secs(1),
     );
 
     if result.is_success() {
-        // IP is assigned, so the lease is complete — write resolv.conf now
+        // IP and route are both up — write resolv.conf from the lease now
         write_resolv_conf_from_lease(interface);
     }
 
     result
 }
 
+/// Read `/proc/net/route` and return true if a default route is installed
+/// for `interface`. Used to confirm the DHCP handshake completed end-to-end.
+fn check_default_route_proc(interface: &str) -> bool {
+    let content = match fs::read_to_string("/proc/net/route") {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        if fields[0] != interface || fields[1] != "00000000" {
+            continue;
+        }
+        if let Ok(gw) = u32::from_str_radix(fields[2], 16) {
+            if gw != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Testable inner function with injected dependencies.
+///
+/// Polls in two phases:
+///   1. up to `ip_attempts` ticks waiting for an IPv4 address
+///   2. up to `route_attempts` additional ticks waiting for the default route
 fn configure_dhcp_with(
     interface: &str,
     trigger: fn(&str) -> OperationResult,
     check_ip: fn(&str) -> OperationResult,
-    max_attempts: u32,
+    check_route: fn(&str) -> bool,
+    ip_attempts: u32,
+    route_attempts: u32,
     poll_interval: std::time::Duration,
 ) -> OperationResult {
-    let dhcp_triggered = trigger(interface);
+    cmd_log_append(format!(
+        "$ dhcp handshake on {} (lease {}s + route {}s)",
+        interface,
+        ip_attempts as u64 * poll_interval.as_secs(),
+        route_attempts as u64 * poll_interval.as_secs(),
+    ));
 
+    let dhcp_triggered = trigger(interface);
     if let OperationResult::Error(e) = dhcp_triggered {
+        cmd_log_append(format!("  -> dhcp trigger FAILED: {}", e));
         return OperationResult::Error(e);
     }
 
-    for _ in 0..max_attempts {
+    // Phase 1: wait for an IP address.
+    let mut got_ip: Option<String> = None;
+    for attempt in 1..=ip_attempts {
         std::thread::sleep(poll_interval);
-        if let OperationResult::IpAssigned(_) = check_ip(interface) {
-            return OperationResult::Success;
+        match check_ip(interface) {
+            OperationResult::IpAssigned(ip) => {
+                cmd_log_append(format!(
+                    "  -> {} acquired {} after {}s",
+                    interface,
+                    ip,
+                    attempt as u64 * poll_interval.as_secs()
+                ));
+                got_ip = Some(ip);
+                break;
+            }
+            _ => {
+                cmd_log_append(format!(
+                    "  ... {} waiting for lease ({}/{})",
+                    interface, attempt, ip_attempts
+                ));
+            }
         }
     }
 
-    OperationResult::Error(format!(
-        "DHCP timeout on {}: no IP assigned after {}s",
+    if got_ip.is_none() {
+        return OperationResult::Error(format!(
+            "DHCP timeout on {}: no IP assigned after {}s",
+            interface,
+            ip_attempts as u64 * poll_interval.as_secs()
+        ));
+    }
+
+    // Phase 2: wait for default route. Don't fail the whole DHCP step if
+    // the route never shows up — the upstream-router check will retry on
+    // its own and the user will see a clear "no router" error from the
+    // state machine. We just want to give the lease time to settle so the
+    // first router check has a fighting chance.
+    if check_route(interface) {
+        cmd_log_append(format!("  -> {} default route already installed", interface));
+        return OperationResult::Success;
+    }
+    for attempt in 1..=route_attempts {
+        std::thread::sleep(poll_interval);
+        if check_route(interface) {
+            cmd_log_append(format!(
+                "  -> {} default route installed after {}s",
+                interface,
+                attempt as u64 * poll_interval.as_secs()
+            ));
+            return OperationResult::Success;
+        }
+        cmd_log_append(format!(
+            "  ... {} waiting for default route ({}/{})",
+            interface, attempt, route_attempts
+        ));
+    }
+
+    cmd_log_append(format!(
+        "  -> {} default route not installed after {}s (continuing — router check will retry)",
         interface,
-        max_attempts as u64 * poll_interval.as_secs()
-    ))
+        route_attempts as u64 * poll_interval.as_secs()
+    ));
+    OperationResult::Success
 }
 
 /// Trigger DHCP on an interface via dhcpcd.
@@ -428,6 +542,7 @@ fn check_ip_sysfs(interface: &str) -> OperationResult {
 
 /// Check for upstream router by parsing /proc/net/route.
 pub fn check_upstream_router(interface: &str) -> OperationResult {
+    cmd_log_append(format!("$ check default route for {} (/proc/net/route)", interface));
     match fs::read_to_string("/proc/net/route") {
         Ok(content) => {
             for line in content.lines().skip(1) {
@@ -445,14 +560,19 @@ pub fn check_upstream_router(interface: &str) -> OperationResult {
                         if gw != 0 {
                             // /proc/net/route stores IPs in host byte order (little-endian on x86)
                             let ip = Ipv4Addr::from(u32::from_be(gw.swap_bytes()));
+                            cmd_log_append(format!("  -> gateway {} via {}", ip, interface));
                             return OperationResult::RouterFound(ip.to_string());
                         }
                     }
                 }
             }
+            cmd_log_append(format!("  -> no default route on {}", interface));
             OperationResult::NoRouter
         }
-        Err(_) => OperationResult::NoRouter,
+        Err(e) => {
+            cmd_log_append(format!("  -> read /proc/net/route failed: {}", e));
+            OperationResult::NoRouter
+        }
     }
 }
 
@@ -850,6 +970,8 @@ mod tests {
             "eth0",
             |_| OperationResult::Success,
             |_| OperationResult::IpAssigned("10.0.0.5".into()),
+            |_| true,
+            5,
             5,
             Duration::from_millis(1),
         );
@@ -871,6 +993,8 @@ mod tests {
                     OperationResult::NoIp
                 }
             },
+            |_| true,
+            5,
             5,
             Duration::from_millis(1),
         );
@@ -883,6 +1007,8 @@ mod tests {
             "eth0",
             |_| OperationResult::Success,
             |_| OperationResult::NoIp,
+            |_| true,
+            3,
             3,
             Duration::from_millis(1),
         );
@@ -892,6 +1018,53 @@ mod tests {
             }
             other => panic!("expected Error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_dhcp_waits_for_default_route() {
+        // IP appears immediately, but the route takes 3 ticks to install.
+        // The dhcp step should wait for the route, not return on the IP alone.
+        static ROUTE_TICKS: AtomicU32 = AtomicU32::new(0);
+        ROUTE_TICKS.store(0, Ordering::SeqCst);
+        let result = configure_dhcp_with(
+            "eth0",
+            |_| OperationResult::Success,
+            |_| OperationResult::IpAssigned("10.0.0.5".into()),
+            |_| {
+                let n = ROUTE_TICKS.fetch_add(1, Ordering::SeqCst);
+                n >= 3
+            },
+            5,
+            10,
+            Duration::from_millis(1),
+        );
+        assert!(result.is_success(), "expected Success, got {:?}", result);
+        assert!(
+            ROUTE_TICKS.load(Ordering::SeqCst) >= 4,
+            "route checker should have been polled multiple times, got {}",
+            ROUTE_TICKS.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn test_dhcp_succeeds_even_if_route_never_installs() {
+        // Lease arrives but the gateway never appears. We still want Success
+        // so the state machine moves on to its own router-check retry loop
+        // and surfaces a clean "no router" error there.
+        let result = configure_dhcp_with(
+            "eth0",
+            |_| OperationResult::Success,
+            |_| OperationResult::IpAssigned("10.0.0.5".into()),
+            |_| false,
+            5,
+            3,
+            Duration::from_millis(1),
+        );
+        assert!(
+            result.is_success(),
+            "expected Success even without route, got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -943,6 +1116,8 @@ lease_time=86400
                 POLL_CALLED.fetch_add(1, Ordering::SeqCst);
                 OperationResult::NoIp
             },
+            |_| true,
+            5,
             5,
             Duration::from_millis(1),
         );

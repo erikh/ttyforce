@@ -5,14 +5,21 @@ use std::path::Path;
 use crate::manifest::DiskSpec;
 
 pub fn detect_disks() -> anyhow::Result<Vec<DiskSpec>> {
+    use crate::engine::real_ops::cmd_log_append;
+    cmd_log_append("$ detect disks (UDisks2 dbus → sysfs fallback)".to_string());
     // Try UDisks2 dbus first
-    if let Some(disks) = detect_disks_udisks2() {
-        if !disks.is_empty() {
+    match detect_disks_udisks2() {
+        Some(disks) if !disks.is_empty() => {
+            cmd_log_append(format!(
+                "  -> UDisks2 returned {} disk(s)",
+                disks.len()
+            ));
             return Ok(disks);
         }
+        Some(_) => cmd_log_append("  -> UDisks2 returned no disks; falling back to sysfs".to_string()),
+        None => cmd_log_append("  -> UDisks2 unavailable; falling back to sysfs".to_string()),
     }
 
-    // Fallback: sysfs
     detect_disks_sysfs()
 }
 
@@ -220,10 +227,16 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
 
     cmd_log_append("$ scan /sys/block for disks".to_string());
 
-    for entry in fs::read_dir(block_dir)? {
-        let entry = entry?;
+    let entries: Vec<_> = fs::read_dir(block_dir)?.collect::<Result<_, _>>()?;
+    cmd_log_append(format!(
+        "  -> {} block device(s) in /sys/block",
+        entries.len()
+    ));
+
+    for entry in entries {
         let name = entry.file_name().to_string_lossy().to_string();
         let dev_path = entry.path();
+        cmd_log_append(format!("  inspect {}", name));
 
         // Generic disk detection: check sysfs properties instead of name prefixes
         // Skip removable devices (USB sticks, CD-ROMs, floppies)
@@ -231,6 +244,7 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
             .map(|v| v == "1")
             .unwrap_or(false);
         if removable {
+            cmd_log_append(format!("    skip {} (removable)", name));
             continue;
         }
 
@@ -238,17 +252,22 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
         let size_sectors = read_sysfs_u64(&dev_path.join("size")).unwrap_or(0);
         let size_bytes = size_sectors * 512;
         if size_bytes == 0 {
+            cmd_log_append(format!("    skip {} (zero size)", name));
             continue;
         }
 
         // Skip virtual/pseudo block devices by checking for a real device backing
         // Real disks have /sys/block/<name>/device; loop/ram/dm do not
         if !dev_path.join("device").exists() {
+            cmd_log_append(format!(
+                "    skip {} (no device backing — virtual/loop/dm)",
+                name
+            ));
             continue;
         }
 
         cmd_log_append(format!(
-            "  found {} ({} bytes / {} GB)",
+            "    found {} ({} bytes / {} GB)",
             name,
             size_bytes,
             size_bytes / 1_000_000_000
@@ -256,7 +275,7 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
 
         // Skip tiny devices (< 1GB) - likely USB boot media or similar
         if size_bytes < 1_000_000_000 {
-            cmd_log_append(format!("  skipping {} (< 1GB)", name));
+            cmd_log_append(format!("    skip {} (< 1GB)", name));
             continue;
         }
 
@@ -267,6 +286,11 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
         let make = read_disk_vendor(&dev_path, &name);
         let serial = read_disk_serial(&dev_path, &name);
         let transport = detect_transport_sysfs(&dev_path, &name);
+
+        cmd_log_append(format!(
+            "    accept {} make={} model={} transport={}",
+            name, make, model, transport
+        ));
 
         disks.push(DiskSpec {
             device,
@@ -279,6 +303,7 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
     }
 
     disks.sort_by(|a, b| a.device.cmp(&b.device));
+    cmd_log_append(format!("  -> sysfs scan accepted {} disk(s)", disks.len()));
     Ok(disks)
 }
 

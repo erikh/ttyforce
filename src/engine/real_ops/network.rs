@@ -1,4 +1,5 @@
 use std::fs;
+use std::process::Command;
 
 use zbus::zvariant::ObjectPath;
 
@@ -206,44 +207,133 @@ pub fn configure_wifi_qr_code(interface: &str, qr_data: &str) -> OperationResult
 }
 
 /// Configure DHCP on an interface via systemd-networkd.
-/// After triggering DHCP, polls for an IP address (up to 30s) before returning.
+///
+/// The full DHCP handshake is two stages from our perspective:
+///   1. an IPv4 address appears on the interface
+///   2. a default route (gateway) is installed
+///
+/// networkd installs the address slightly before the route. We poll for
+/// both the address (up to 30s) and the default route (an additional 15s
+/// once the address is up) before returning. Each tick is logged so the
+/// log never appears stalled. If the route never installs we still return
+/// success so the state machine's router check gets a chance to surface
+/// a clean error of its own.
 pub fn configure_dhcp(interface: &str) -> OperationResult {
     configure_dhcp_with(
         interface,
         try_trigger_dhcp,
         check_ip_via_command,
+        check_default_route_via_command,
         30,
+        15,
         std::time::Duration::from_secs(1),
     )
 }
 
-/// Testable inner function with injected dependencies for DHCP trigger, IP check,
-/// retry count, and poll interval.
+/// Probe `ip route show default dev <iface>` and report whether a gateway is
+/// present. Used by `configure_dhcp` to detect the end of the DHCP handshake.
+fn check_default_route_via_command(interface: &str) -> bool {
+    let output = match Command::new("ip")
+        .args(["-j", "route", "show", "default", "dev", interface])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    parsed
+        .iter()
+        .any(|r| r.get("gateway").and_then(|g| g.as_str()).is_some())
+}
+
+/// Testable inner function with injected dependencies for DHCP trigger, IP
+/// check, default-route check, retry counts, and poll interval.
 fn configure_dhcp_with(
     interface: &str,
     trigger: fn(&str) -> OperationResult,
     check_ip: fn(&str) -> OperationResult,
-    max_attempts: u32,
+    check_route: fn(&str) -> bool,
+    ip_attempts: u32,
+    route_attempts: u32,
     poll_interval: std::time::Duration,
 ) -> OperationResult {
-    let dhcp_triggered = trigger(interface);
+    cmd_log_append(format!(
+        "$ dhcp handshake on {} (lease {}s + route {}s)",
+        interface,
+        ip_attempts as u64 * poll_interval.as_secs(),
+        route_attempts as u64 * poll_interval.as_secs(),
+    ));
 
+    let dhcp_triggered = trigger(interface);
     if let OperationResult::Error(e) = dhcp_triggered {
+        cmd_log_append(format!("  -> dhcp trigger FAILED: {}", e));
         return OperationResult::Error(e);
     }
 
-    for _ in 0..max_attempts {
+    let mut got_ip = false;
+    for attempt in 1..=ip_attempts {
         std::thread::sleep(poll_interval);
-        if let OperationResult::IpAssigned(_) = check_ip(interface) {
-            return OperationResult::Success;
+        match check_ip(interface) {
+            OperationResult::IpAssigned(ip) => {
+                cmd_log_append(format!(
+                    "  -> {} acquired {} after {}s",
+                    interface,
+                    ip,
+                    attempt as u64 * poll_interval.as_secs()
+                ));
+                got_ip = true;
+                break;
+            }
+            _ => {
+                cmd_log_append(format!(
+                    "  ... {} waiting for lease ({}/{})",
+                    interface, attempt, ip_attempts
+                ));
+            }
         }
     }
 
-    OperationResult::Error(format!(
-        "DHCP timeout on {}: no IP assigned after {}s",
+    if !got_ip {
+        return OperationResult::Error(format!(
+            "DHCP timeout on {}: no IP assigned after {}s",
+            interface,
+            ip_attempts as u64 * poll_interval.as_secs()
+        ));
+    }
+
+    if check_route(interface) {
+        cmd_log_append(format!("  -> {} default route already installed", interface));
+        return OperationResult::Success;
+    }
+    for attempt in 1..=route_attempts {
+        std::thread::sleep(poll_interval);
+        if check_route(interface) {
+            cmd_log_append(format!(
+                "  -> {} default route installed after {}s",
+                interface,
+                attempt as u64 * poll_interval.as_secs()
+            ));
+            return OperationResult::Success;
+        }
+        cmd_log_append(format!(
+            "  ... {} waiting for default route ({}/{})",
+            interface, attempt, route_attempts
+        ));
+    }
+
+    cmd_log_append(format!(
+        "  -> {} default route not installed after {}s (continuing — router check will retry)",
         interface,
-        max_attempts as u64 * poll_interval.as_secs()
-    ))
+        route_attempts as u64 * poll_interval.as_secs()
+    ));
+    OperationResult::Success
 }
 
 /// Build the path for a ttyforce-managed networkd `.network` unit.
@@ -738,12 +828,22 @@ mod tests {
         }
     }
 
+    fn route_always(_interface: &str) -> bool {
+        true
+    }
+
+    fn route_never(_interface: &str) -> bool {
+        false
+    }
+
     #[test]
     fn test_dhcp_polling_immediate_ip() {
         let result = configure_dhcp_with(
             "eth0",
             trigger_success,
             check_ip_always_assigned,
+            route_always,
+            TEST_ATTEMPTS,
             TEST_ATTEMPTS,
             TEST_INTERVAL,
         );
@@ -761,6 +861,8 @@ mod tests {
             "eth0",
             trigger_success,
             check_ip_on_third_call,
+            route_always,
+            5,
             5,
             TEST_INTERVAL,
         );
@@ -777,6 +879,8 @@ mod tests {
             "eth0",
             trigger_success,
             check_ip_always_none,
+            route_always,
+            TEST_ATTEMPTS,
             TEST_ATTEMPTS,
             TEST_INTERVAL,
         );
@@ -807,6 +911,8 @@ mod tests {
             "eth0",
             trigger_error,
             check_ip_tracking,
+            route_always,
+            TEST_ATTEMPTS,
             TEST_ATTEMPTS,
             TEST_INTERVAL,
         );
@@ -829,7 +935,9 @@ mod tests {
             "eth0",
             trigger_success,
             check_ip_always_assigned,
-            0, // zero attempts — should never check
+            route_always,
+            0, // zero ip attempts — should never check
+            TEST_ATTEMPTS,
             TEST_INTERVAL,
         );
         match &result {
@@ -838,6 +946,54 @@ mod tests {
             }
             other => panic!("expected Error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_dhcp_waits_for_default_route() {
+        // IP is assigned immediately but the default route only appears
+        // after several poll cycles. configure_dhcp_with should wait for
+        // it instead of returning the moment the address comes up.
+        static ROUTE_TICKS: AtomicU32 = AtomicU32::new(0);
+        ROUTE_TICKS.store(0, Ordering::SeqCst);
+        fn route_after_three(_interface: &str) -> bool {
+            let n = ROUTE_TICKS.fetch_add(1, Ordering::SeqCst);
+            n >= 3
+        }
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_success,
+            check_ip_always_assigned,
+            route_after_three,
+            5,
+            10,
+            TEST_INTERVAL,
+        );
+        assert!(result.is_success(), "expected Success, got {:?}", result);
+        assert!(
+            ROUTE_TICKS.load(Ordering::SeqCst) >= 4,
+            "route checker should have been polled multiple times, got {}",
+            ROUTE_TICKS.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn test_dhcp_succeeds_even_if_route_never_installs() {
+        // Lease arrives but no gateway. The state machine has its own
+        // router-check retry loop, so we still want Success here.
+        let result = configure_dhcp_with(
+            "eth0",
+            trigger_success,
+            check_ip_always_assigned,
+            route_never,
+            TEST_ATTEMPTS,
+            TEST_ATTEMPTS,
+            TEST_INTERVAL,
+        );
+        assert!(
+            result.is_success(),
+            "expected Success even without route, got {:?}",
+            result
+        );
     }
 
     // ---------------------------------------------------------------

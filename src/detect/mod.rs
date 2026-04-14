@@ -4,9 +4,16 @@ pub mod network;
 use crate::manifest::{HardwareManifest, NetworkManifest};
 
 pub fn detect_hardware() -> anyhow::Result<HardwareManifest> {
+    use crate::engine::real_ops::cmd_log_append;
+    cmd_log_append("$ detect_hardware: scanning network and disks".to_string());
     let interfaces = network::detect_interfaces()?;
     let wifi_environment = network::detect_wifi_environment(&interfaces);
     let disks = disk::detect_disks()?;
+    cmd_log_append(format!(
+        "  -> detect_hardware complete: {} iface(s), {} disk(s)",
+        interfaces.len(),
+        disks.len()
+    ));
 
     Ok(HardwareManifest {
         network: NetworkManifest {
@@ -24,11 +31,18 @@ pub fn detect_hardware() -> anyhow::Result<HardwareManifest> {
 /// by unblocking rfkill, loading common wifi kernel modules, and waiting
 /// briefly for interfaces to appear.
 pub fn detect_hardware_initrd() -> anyhow::Result<HardwareManifest> {
+    use crate::engine::real_ops::cmd_log_append;
+    cmd_log_append("$ detect_hardware_initrd: preparing wifi + scanning sysfs".to_string());
     prepare_wifi_hardware();
 
     let interfaces = network::detect_interfaces_sysfs()?;
     let wifi_environment = network::detect_wifi_environment(&interfaces);
     let disks = disk::detect_disks_sysfs()?;
+    cmd_log_append(format!(
+        "  -> detect_hardware_initrd complete: {} iface(s), {} disk(s)",
+        interfaces.len(),
+        disks.len()
+    ));
 
     Ok(HardwareManifest {
         network: NetworkManifest {
