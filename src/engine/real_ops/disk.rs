@@ -273,13 +273,45 @@ mod tests {
     fn test_partition_path_virtio() {
         assert_eq!(partition_path("/dev/vda"), "/dev/vda1");
     }
+
+    #[test]
+    fn test_btrfs_metadata_profile_parity_raid_uses_mirror() {
+        assert_eq!(btrfs_metadata_profile_for("raid5"), "raid1c3");
+        assert_eq!(btrfs_metadata_profile_for("raid6"), "raid1c4");
+    }
+
+    #[test]
+    fn test_btrfs_metadata_profile_non_parity_matches_data() {
+        assert_eq!(btrfs_metadata_profile_for("single"), "single");
+        assert_eq!(btrfs_metadata_profile_for("raid0"), "raid0");
+        assert_eq!(btrfs_metadata_profile_for("raid1"), "raid1");
+        assert_eq!(btrfs_metadata_profile_for("raid10"), "raid10");
+    }
+}
+
+/// Map a btrfs data profile to the metadata profile we want to pair with it.
+///
+/// Parity RAID (raid5/raid6) on btrfs has a well-known latency trap when
+/// metadata uses the same profile: every small sync write triggers a
+/// read-modify-write across every drive in the stripe, which crushes
+/// sqlite/prometheus/journald workloads on rotational media. Mirror metadata
+/// instead (raid1c3 for raid5, raid1c4 for raid6) — same failure tolerance
+/// as the data profile, vastly better small-write latency. Non-parity data
+/// profiles keep metadata matching data.
+pub fn btrfs_metadata_profile_for(data_profile: &str) -> &str {
+    match data_profile {
+        "raid5" => "raid1c3",
+        "raid6" => "raid1c4",
+        other => other,
+    }
 }
 
 /// Set up btrfs with RAID.
 /// Automatically converts raw disk paths to their first partition path.
 pub fn btrfs_raid_setup(devices: &[String], raid_level: &str) -> OperationResult {
     let part_devices: Vec<String> = devices.iter().map(|d| partition_path(d)).collect();
-    let mut args = vec!["-f", "-d", raid_level, "-m", raid_level];
+    let metadata_level = btrfs_metadata_profile_for(raid_level);
+    let mut args = vec!["-f", "-d", raid_level, "-m", metadata_level];
     let dev_refs: Vec<&str> = part_devices.iter().map(|d| d.as_str()).collect();
     args.extend(dev_refs);
 
