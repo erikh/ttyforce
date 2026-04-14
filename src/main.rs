@@ -76,6 +76,9 @@ enum Command {
         /// Mock mode: run the TUI without executing any real operations
         #[arg(long)]
         mock: bool,
+        /// Start the TUI in full-screen log view (equivalent to pressing [l] at launch)
+        #[arg(long)]
+        log: bool,
     },
 }
 
@@ -106,9 +109,9 @@ fn main() {
                 ssh_user.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock } => {
+        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock, log } => {
             run_getty(GettyConfig {
-                etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock,
+                etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock, log,
             });
         }
     }
@@ -283,6 +286,7 @@ struct GettyConfig {
     sledgehammer_grub_entry: Option<String>,
     ssh_user: Option<String>,
     mock: bool,
+    log: bool,
 }
 
 fn run_getty(cfg: GettyConfig) {
@@ -292,6 +296,7 @@ fn run_getty(cfg: GettyConfig) {
     app.initrd_mode = cfg.initrd;
     app.sledgehammer_grub_entry = cfg.sledgehammer_grub_entry;
     app.mock_mode = cfg.mock;
+    app.show_full_log = cfg.log;
     if let Some(users) = cfg.ssh_user {
         app.ssh_users = users
             .split(',')

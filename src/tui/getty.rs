@@ -142,7 +142,7 @@ pub struct GettyApp {
     /// Audit log entries fetched from the Town OS API.
     audit_entries: Vec<AuditEntry>,
     /// When true, show full-screen journal -f log instead of the quad.
-    show_full_log: bool,
+    pub show_full_log: bool,
     /// Scrollback offset for the journal -f pane (0 = follow tail).
     journal_scroll: usize,
     /// Scrollback offset for the journal -xe pane (0 = follow tail).
