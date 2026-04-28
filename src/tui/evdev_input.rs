@@ -55,11 +55,16 @@ impl EvdevWatcher {
     }
 
     /// Drain all pending events and report activity.
+    /// Devices that return a non-recoverable error (e.g. ENODEV from a
+    /// hot-unplug or USB autosuspend) are dropped from the watch list so
+    /// we don't spam the journal once per tick.
     pub fn has_activity(&mut self) -> ActivityResult {
         let mut any_activity = false;
         let mut has_non_modifier = false;
+        let mut dead: Vec<usize> = Vec::new();
 
-        for device in &mut self.devices {
+        for (i, device) in self.devices.iter_mut().enumerate() {
+            let name = device.name().unwrap_or("?").to_string();
             match device.fetch_events() {
                 Ok(events) => {
                     for event in events {
@@ -73,9 +78,14 @@ impl EvdevWatcher {
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(ref e) => {
-                    kmsg_log(&format!("evdev: fetch_events error: {}", e));
+                    kmsg_log(&format!("evdev: dropping {:?}: {}", name, e));
+                    dead.push(i);
                 }
             }
+        }
+
+        for i in dead.into_iter().rev() {
+            self.devices.swap_remove(i);
         }
 
         ActivityResult {
