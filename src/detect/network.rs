@@ -345,7 +345,7 @@ fn scan_wifi_wpa_supplicant_dbus(interface: &str) -> Option<Vec<WifiNetworkSpec>
     }
 
     // Sort by signal strength (strongest first)
-    networks.sort_by(|a, b| b.signal_strength.cmp(&a.signal_strength));
+    networks.sort_by_key(|b| std::cmp::Reverse(b.signal_strength));
     Some(networks)
 }
 
@@ -521,7 +521,7 @@ pub fn parse_iw_scan(output: &str) -> Vec<WifiNetworkSpec> {
     }
 
     // Sort by signal strength (strongest first)
-    networks.sort_by(|a, b| b.signal_strength.cmp(&a.signal_strength));
+    networks.sort_by_key(|b| std::cmp::Reverse(b.signal_strength));
     networks
 }
 
@@ -603,7 +603,7 @@ pub fn parse_iwlist_scan(output: &str) -> Vec<WifiNetworkSpec> {
         }
     }
 
-    networks.sort_by(|a, b| b.signal_strength.cmp(&a.signal_strength));
+    networks.sort_by_key(|b| std::cmp::Reverse(b.signal_strength));
     networks
 }
 
