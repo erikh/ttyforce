@@ -336,10 +336,21 @@ fn get_device_path(
 
 /// Fallback: detect disks via sysfs.
 pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
+    // Disks backing the running system must never be installation targets.
+    let boot_disks = read_boot_disks();
+    detect_disks_sysfs_in(Path::new("/sys/block"), &boot_disks)
+}
+
+/// Core of the sysfs disk scan, parameterized by the block-device directory and
+/// the set of off-limits boot disks so it can be exercised hermetically in
+/// tests without touching the host's real `/sys/block` or `/proc`.
+fn detect_disks_sysfs_in(
+    block_dir: &Path,
+    boot_disks: &HashSet<String>,
+) -> anyhow::Result<Vec<DiskSpec>> {
     use crate::engine::real_ops::cmd_log_append;
 
     let mut disks = Vec::new();
-    let block_dir = Path::new("/sys/block");
 
     if !block_dir.exists() {
         cmd_log_append("  /sys/block does not exist".to_string());
@@ -347,9 +358,6 @@ pub fn detect_disks_sysfs() -> anyhow::Result<Vec<DiskSpec>> {
     }
 
     cmd_log_append("$ scan /sys/block for disks".to_string());
-
-    // Disks backing the running system must never be installation targets.
-    let boot_disks = read_boot_disks();
 
     let entries: Vec<_> = fs::read_dir(block_dir)?.collect::<Result<_, _>>()?;
     cmd_log_append(format!(
@@ -787,5 +795,70 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
             boot_disk_from_cmdline("root=/dev/nvme0n1p2 rw"),
             Some("/dev/nvme0n1".to_string())
         );
+    }
+
+    /// Create a fake `/sys/block/<name>` device entry: a `size` file (in
+    /// 512-byte sectors) and a `device/` subdirectory (the real-backing marker).
+    fn make_fake_disk(block_dir: &Path, name: &str, size_sectors: u64) -> Result<(), String> {
+        let dev = block_dir.join(name);
+        fs::create_dir_all(dev.join("device")).map_err(|e| e.to_string())?;
+        fs::write(dev.join("size"), format!("{}\n", size_sectors))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_sysfs_excludes_boot_disk_keeps_usb() -> Result<(), String> {
+        let tmp = std::env::temp_dir().join("ttyforce-detect-bootdisk-test");
+        let _cleanup = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+
+        // Three real, >=1GB disks: an internal NVMe (the boot disk), an internal
+        // SATA drive, and a USB-attached drive (also sd*). 100GB = 209715200
+        // sectors of 512 bytes.
+        make_fake_disk(&tmp, "nvme0n1", 209_715_200)?; // boot disk
+        make_fake_disk(&tmp, "sda", 209_715_200)?; // internal SATA
+        make_fake_disk(&tmp, "sdb", 209_715_200)?; // USB data drive
+        // A tiny NVMe namespace that must be dropped by the <1GB filter.
+        make_fake_disk(&tmp, "nvme0n2", 6_144)?;
+
+        // The running system booted from nvme0n1 (as computed by read_boot_disks).
+        let mut boot_disks = HashSet::new();
+        boot_disks.insert("/dev/nvme0n1".to_string());
+
+        let disks = detect_disks_sysfs_in(&tmp, &boot_disks).map_err(|e| e.to_string())?;
+        let devices: Vec<&str> = disks.iter().map(|d| d.device.as_str()).collect();
+
+        // Boot disk excluded even though it is a valid 100GB disk; tiny namespace
+        // dropped; both non-boot data drives (incl. USB sdb) kept.
+        assert!(
+            !devices.contains(&"/dev/nvme0n1"),
+            "boot disk must be excluded, got {:?}",
+            devices
+        );
+        assert!(!devices.contains(&"/dev/nvme0n2"), "tiny disk must be dropped");
+        assert_eq!(devices, vec!["/dev/sda", "/dev/sdb"]);
+
+        let _cleanup = fs::remove_dir_all(&tmp);
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_sysfs_no_boot_disk_keeps_all() -> Result<(), String> {
+        // Mirrors the initrd-before-mount case for a NON-boot scan: with an empty
+        // boot set every real disk is offered.
+        let tmp = std::env::temp_dir().join("ttyforce-detect-noboot-test");
+        let _cleanup = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+
+        make_fake_disk(&tmp, "nvme0n1", 209_715_200)?;
+        make_fake_disk(&tmp, "sda", 209_715_200)?;
+
+        let disks = detect_disks_sysfs_in(&tmp, &HashSet::new()).map_err(|e| e.to_string())?;
+        let devices: Vec<&str> = disks.iter().map(|d| d.device.as_str()).collect();
+        assert_eq!(devices, vec!["/dev/nvme0n1", "/dev/sda"]);
+
+        let _cleanup = fs::remove_dir_all(&tmp);
+        Ok(())
     }
 }
