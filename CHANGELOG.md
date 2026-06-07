@@ -20,6 +20,34 @@
 - Add hermetic integration tests for boot-disk exclusion (fake `/sys/block`, no
   host access) plus unit tests for the `/proc/mounts` and `root=` parsing helpers
 
+## 0.4.0 (2026-04-19)
+
+### Features
+
+- Add Easy/Advanced installation style selection, shown for all installer entry points
+- Add `--log` flag to getty for a full-screen log view at launch
+- Add scrollback to the getty journal panes
+
+### Improvements
+
+- Easy mode: poll all ethernet interfaces for carrier for up to 30s before falling back
+- Wait for the full DHCP handshake before proceeding, with verbose detection logging
+- Wait 10x longer for network carrier before giving up
+- Mirror btrfs metadata on parity (RAID5) arrays instead of matching the data profile
+- Set a default 24x80 terminal size on bare serial TTYs
+- Use horizontal-only padding for the getty quad panes
+
+### Fixes
+
+- Disable DHCP-provided DNS in generated networkd `.network` files
+
+## 0.3.2 (2026-03-29)
+
+### Improvements
+
+- Tabular audit log in getty with structured entries and highlighted fields
+- Update README with missing CLI flags for initrd and getty modes
+
 ## 0.3.1 (2026-03-27)
 
 ### Features
