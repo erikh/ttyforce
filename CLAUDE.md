@@ -471,13 +471,39 @@ non-blocking I/O with 200-line circular buffers.
 In initrd mode, disk detection uses generic sysfs properties instead of
 dbus/UDisks2. A block device in `/sys/block/` is considered a real disk if:
 
-1. `removable` is not `1` (filters USB sticks, CD-ROMs, floppies)
+1. The device name is a real disk type, not optical/floppy/virtual
+   (accepts sd*, nvme*, vd*, hd*, xvd*, mmcblk*; rejects sr*, fd*, loop*,
+   ram*, dm-*, zram*, nbd*, md*) — see `is_real_disk`
 2. `size` > 0 (filters uninitialized devices)
 3. `device/` subdirectory exists (filters loop, ram, dm, zram — virtual devices)
-4. Size >= 1GB (filters USB boot media)
+4. Size >= 1GB (filters tiny media)
+5. It is NOT the disk the system booted from (see below)
 
-This approach works for any disk type (sd*, nvme*, vd*, hd*, xvd*, mmcblk*)
-without maintaining name prefix lists.
+USB-attached drives ARE valid installation targets. They enumerate as
+sd* with `removable=1`; the `removable` flag is intentionally NOT used to
+filter them out (it previously was). USB drives keep transport=`usb` so
+disk grouping isolates them from internal SATA/NVMe drives.
+
+### Boot/running-system disk exclusion:
+
+The disk that is managing ttyforce (the booted device) is NEVER offered
+as an installation target — even if it has unused/unpartitioned space,
+and even when it is a USB stick the machine booted from. This applies to
+both the sysfs (initrd) and UDisks2 paths. The set of off-limits whole
+disks is computed by `read_boot_disks()` from two sources:
+
+1. `/proc/mounts` — any mounted `/dev/...` source is mapped to its parent
+   whole disk (`/dev/sda1` → `/dev/sda`, `/dev/nvme0n1p2` → `/dev/nvme0n1`)
+   and excluded. Excluding the WHOLE disk is what prevents installing onto
+   free space on the boot drive.
+2. `/proc/cmdline` `root=` — in the Town OS initrd, ttyforce runs BEFORE
+   the squashfs data partition is mounted, so the boot disk may not appear
+   in `/proc/mounts` yet. The kernel `root=` parameter always names it;
+   `UUID=`/`LABEL=`/`PARTUUID=` forms are resolved via `/dev/disk/by-*`
+   symlinks (literal `/dev/...` used directly), then reduced to the parent
+   whole disk and excluded.
+
+This approach works for any disk type without maintaining name prefix lists.
 
 ## Town OS install system:
 
