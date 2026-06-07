@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Support USB-attached drives as installation targets — previously all removable
+  devices were filtered out, so a USB/SD data drive could never be selected
+
+### Fixes
+
+- Never offer the disk the running system booted from as an installation target,
+  even when it has unused/unpartitioned space or is the USB stick the machine
+  booted from. The boot disk is resolved from `/proc/mounts` and the kernel
+  `root=` parameter (`UUID=`/`LABEL=`/`PARTUUID=`/`/dev` forms), then excluded by
+  whole disk in both the sysfs (initrd) and UDisks2 detection paths
+
+### Improvements
+
+- Add hermetic integration tests for boot-disk exclusion (fake `/sys/block`, no
+  host access) plus unit tests for the `/proc/mounts` and `root=` parsing helpers
+
 ## 0.3.1 (2026-03-27)
 
 ### Features
