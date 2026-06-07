@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-06-07)
 
 ### Features
 
+- **aarch64 support** — ttyforce now runs on aarch64 (validated on Apple
+  Silicon / Asahi Linux). Hardware and disk detection are architecture-
+  independent: they read generic sysfs properties and the kernel `root=`
+  parameter rather than any x86-specific assumptions or device-name prefix
+  lists, so the same detection path works identically on x86_64 and aarch64
 - Support USB-attached drives as installation targets — previously all removable
   devices were filtered out, so a USB/SD data drive could never be selected
 
@@ -14,6 +19,10 @@
   booted from. The boot disk is resolved from `/proc/mounts` and the kernel
   `root=` parameter (`UUID=`/`LABEL=`/`PARTUUID=`/`/dev` forms), then excluded by
   whole disk in both the sysfs (initrd) and UDisks2 detection paths
+- Self-heal the evdev watcher when a keyboard returns a non-recoverable read
+  error (e.g. `ENODEV` from hot-unplug or USB autosuspend): drop the dead device
+  instead of logging the same error every tick. Other keyboards and crossterm
+  input keep working
 
 ### Improvements
 
