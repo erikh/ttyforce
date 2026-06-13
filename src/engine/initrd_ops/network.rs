@@ -593,9 +593,14 @@ pub fn check_internet_routability(_interface: &str) -> OperationResult {
 }
 
 /// Check DNS resolution using a direct UDP DNS query.
-pub fn check_dns_resolution(_interface: &str, hostname: &str) -> OperationResult {
+///
+/// The query is sent to the DNS server handed out by DHCP for `interface`
+/// (read straight from the dhcpcd lease) so the check validates the
+/// nameserver the network actually provided. If no lease DNS is available
+/// it falls back to the first nameserver in `/etc/resolv.conf`.
+pub fn check_dns_resolution(interface: &str, hostname: &str) -> OperationResult {
     cmd_log_append(format!("$ dns resolve {}", hostname));
-    match dns_resolve(hostname) {
+    match dns_resolve(interface, hostname) {
         Ok(ip) => {
             cmd_log_append(format!("  -> {}", ip));
             OperationResult::DnsResolved(ip)
@@ -610,9 +615,19 @@ pub fn check_dns_resolution(_interface: &str, hostname: &str) -> OperationResult
     }
 }
 
-/// Resolve a hostname by sending a DNS query to the system nameserver.
-fn dns_resolve(hostname: &str) -> Result<String, String> {
-    let nameserver = get_nameserver().ok_or("no nameserver found")?;
+/// Resolve a hostname by sending a DNS query to the DHCP-provided nameserver.
+fn dns_resolve(interface: &str, hostname: &str) -> Result<String, String> {
+    let nameserver = match get_dhcp_nameserver(interface) {
+        Some(ns) => {
+            cmd_log_append(format!("  using DHCP nameserver {} (lease for {})", ns, interface));
+            ns
+        }
+        None => {
+            let ns = get_nameserver().ok_or("no nameserver found")?;
+            cmd_log_append(format!("  using nameserver {} (/etc/resolv.conf)", ns));
+            ns
+        }
+    };
 
     let query = build_dns_query(hostname).map_err(|e| format!("failed to build DNS query: {}", e))?;
 
@@ -636,6 +651,28 @@ fn dns_resolve(hostname: &str) -> Result<String, String> {
 /// Read the first nameserver from /etc/resolv.conf.
 fn get_nameserver() -> Option<String> {
     let content = fs::read_to_string("/etc/resolv.conf").ok()?;
+    first_nameserver(&content)
+}
+
+/// Query the dhcpcd lease for `interface` and return the first DNS server it
+/// handed out. Tries `--dumplease` then `-U` (alternative dump format), the
+/// same chain used to write resolv.conf. Returns None if no lease DNS is
+/// available so the caller can fall back to /etc/resolv.conf.
+fn get_dhcp_nameserver(interface: &str) -> Option<String> {
+    for args in [["--dumplease", interface], ["-U", interface]] {
+        if let Ok(output) = run_cmd("dhcpcd", &args) {
+            if let Some(resolv) = parse_dhcpcd_lease_dns(&output) {
+                if let Some(ns) = first_nameserver(&resolv) {
+                    return Some(ns);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Return the first `nameserver` entry from resolv.conf-formatted content.
+fn first_nameserver(content: &str) -> Option<String> {
     for line in content.lines() {
         let line = line.trim();
         if let Some(ns) = line.strip_prefix("nameserver") {
@@ -960,6 +997,27 @@ mod tests {
             .trim();
         assert_eq!(ns, "8.8.8.8");
         Ok(())
+    }
+
+    #[test]
+    fn test_first_nameserver_skips_search_line() {
+        let content = "search lan\nnameserver 192.168.1.1\nnameserver 192.168.1.2\n";
+        assert_eq!(first_nameserver(content), Some("192.168.1.1".to_string()));
+    }
+
+    #[test]
+    fn test_first_nameserver_none_when_empty() {
+        assert_eq!(first_nameserver("search lan\n"), None);
+        assert_eq!(first_nameserver(""), None);
+    }
+
+    #[test]
+    fn test_first_nameserver_matches_dhcp_lease() {
+        // The DNS check feeds the parsed lease through first_nameserver, so the
+        // server it queries is the one DHCP handed out, not a hardcoded fallback.
+        let lease = "domain_name_servers=10.0.0.1 10.0.0.2\ndomain_name='lan'\n";
+        let resolv = parse_dhcpcd_lease_dns(lease).expect("lease has DNS");
+        assert_eq!(first_nameserver(&resolv), Some("10.0.0.1".to_string()));
     }
 
     // DHCP polling tests

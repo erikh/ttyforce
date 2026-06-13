@@ -30,14 +30,18 @@ install:
 clean:
 	cargo clean
 
+# All podman calls use --network=host so apt/rustup/cargo can resolve DNS —
+# the default podman bridge has no working resolver in nested/sandboxed
+# environments. (--dns is incompatible with host network mode, so it is
+# omitted; host networking does not alter host config so tests stay hermetic.)
 test-integration-build:
-	$(SUDO) $(CONTAINER_ENGINE) build --no-cache --dns=1.1.1.1 -f Containerfile.integration -t $(INTEGRATION_IMAGE) .
+	$(SUDO) $(CONTAINER_ENGINE) build --no-cache --network=host -f Containerfile.integration -t $(INTEGRATION_IMAGE) .
 
 test-integration: test-integration-build
 	$(SUDO) $(CONTAINER_ENGINE) run --rm --privileged \
+		--network=host \
 		--tmpfs /run \
 		--tmpfs /tmp \
-		--dns=none \
 		-v /dev:/dev \
 		$(INTEGRATION_IMAGE)
 

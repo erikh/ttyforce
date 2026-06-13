@@ -60,9 +60,13 @@ systemctl start systemd-networkd 2>/dev/null || \
     /usr/lib/systemd/systemd-networkd &
 
 echo "=== Starting systemd-resolved ==="
-# --dns=none in the container run command prevents the runtime from
-# bind-mounting /etc/resolv.conf, so resolved can manage it directly.
-ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+# With --network=host the runtime bind-mounts the host's /etc/resolv.conf into
+# the container, so it can't be replaced with a symlink directly ("Device or
+# resource busy"). Unmount it first — the container has its own mount namespace
+# so this does not affect the host — then point it at resolved's stub so
+# resolved manages DNS. Both steps are best-effort.
+umount /etc/resolv.conf 2>/dev/null || true
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
 systemctl start systemd-resolved 2>/dev/null || \
     /usr/lib/systemd/systemd-resolved &
 

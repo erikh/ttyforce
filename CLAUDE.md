@@ -14,6 +14,11 @@
 - integration tests should not alter the host, ever
 - tests: unless said otherwise, they perform with simulated input and produce output on the operations that would be performed. They never affect the running system.
 - running tests: use the make tasks every time.
+- all podman/container invocations (both `build` and `run`, in the Makefile or
+  anywhere else) MUST pass `--network=host`. The default podman bridge has no
+  working resolver in nested/sandboxed environments, so apt/rustup/cargo fail
+  without it. Note `--dns` is incompatible with host network mode and must be
+  omitted; host networking does not alter host config, so tests stay hermetic.
 - tests should always include the linting checks
 - lint checks should be a rust community standard of linters, run as the `lint` make tasks
 - never use `let _ = expr;` to suppress unused variable warnings or work around the borrow checker. Fix the actual problem: use the variable, remove the parameter, or restructure the code.
