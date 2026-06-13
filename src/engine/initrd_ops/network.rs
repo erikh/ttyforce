@@ -414,38 +414,129 @@ fn try_trigger_dhcp(interface: &str) -> OperationResult {
     }
 }
 
-/// Read DNS servers from the dhcpcd lease and write /etc/resolv.conf.
-/// Best-effort: if the lease can't be read, resolv.conf is left unchanged.
+/// dhcpcd run directories where, when not driving an external resolvconf,
+/// dhcpcd writes per-interface resolv.conf fragments (`<iface>.<proto>`).
+/// The newer `/run` path is tried first, then the legacy `/var/run` path.
+const DHCPCD_RESOLV_DIRS: [&str; 2] = ["/run/dhcpcd/resolv.conf", "/var/run/dhcpcd/resolv.conf"];
+
+/// Determine the DHCP-provided DNS for `interface` as resolv.conf content.
+///
+/// Sources, most reliable first:
+///   1. dhcpcd run-dir resolv fragments (`/run/dhcpcd/resolv.conf/<iface>.*`).
+///      These are already `nameserver`-formatted, keyed by interface, and
+///      need neither the lease database nor a version-specific dump
+///      subcommand — so they work even when `--dumplease` finds nothing.
+///   2. `dhcpcd --dumplease <iface>` (lease database, env format).
+///   3. `dhcpcd -U <iface>` (alternative dump format).
+///
+/// Returns None if no source yields a nameserver, leaving the caller to fall
+/// back to whatever is already in /etc/resolv.conf.
+fn dhcp_resolv_content(interface: &str) -> Option<String> {
+    if let Some(content) = read_dhcpcd_rundir_resolv(interface) {
+        return Some(content);
+    }
+    for args in [["--dumplease", interface], ["-U", interface]] {
+        if let Ok(output) = run_cmd("dhcpcd", &args) {
+            if let Some(content) = parse_dhcpcd_lease_dns(&output) {
+                return Some(content);
+            }
+        }
+    }
+    None
+}
+
+/// Read dhcpcd's per-interface resolv.conf fragments from its run directory
+/// and combine them into resolv.conf content. Returns None if no fragment
+/// with a nameserver exists.
+fn read_dhcpcd_rundir_resolv(interface: &str) -> Option<String> {
+    let fragments = read_resolv_fragments_from_dirs(&DHCPCD_RESOLV_DIRS, interface);
+    combine_resolv_fragments(&fragments)
+}
+
+/// Read the contents of every `<interface>.*` file in each of `dirs`.
+/// dhcpcd names its fragments `<iface>.dhcp`, `<iface>.ra`, etc. Missing or
+/// unreadable directories/files are silently skipped (best-effort).
+fn read_resolv_fragments_from_dirs(dirs: &[&str], interface: &str) -> Vec<String> {
+    let prefix = format!("{}.", interface);
+    let mut fragments = Vec::new();
+    for dir in dirs {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(&prefix) {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    fragments.push(content);
+                }
+            }
+        }
+    }
+    fragments
+}
+
+/// Combine resolv.conf fragments into a single resolv.conf body. Collects
+/// `nameserver` lines (de-duplicated, order preserved) and the first
+/// `search`/`domain` line seen. Returns None if no nameserver is present.
+fn combine_resolv_fragments(fragments: &[String]) -> Option<String> {
+    let mut nameservers: Vec<String> = Vec::new();
+    let mut search: Option<String> = None;
+
+    for frag in fragments {
+        for line in frag.lines() {
+            let line = line.trim();
+            if let Some(ns) = line.strip_prefix("nameserver") {
+                let ns = ns.trim();
+                if !ns.is_empty() && !nameservers.iter().any(|n| n == ns) {
+                    nameservers.push(ns.to_string());
+                }
+            } else if search.is_none() {
+                // dhcpcd fragments may carry the domain as `search` or `domain`.
+                let dom = line
+                    .strip_prefix("search")
+                    .or_else(|| line.strip_prefix("domain"));
+                if let Some(d) = dom {
+                    let d = d.trim();
+                    if !d.is_empty() {
+                        search = Some(d.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if nameservers.is_empty() {
+        return None;
+    }
+
+    let mut content = String::new();
+    if let Some(d) = search {
+        content.push_str(&format!("search {}\n", d));
+    }
+    for ns in &nameservers {
+        content.push_str(&format!("nameserver {}\n", ns));
+    }
+    Some(content)
+}
+
+/// Determine the DHCP-provided DNS and write /etc/resolv.conf.
+/// Best-effort: if no DHCP source yields a nameserver, leave any existing
+/// resolv.conf nameservers in place, and only as a last resort write the
+/// public fallback resolvers.
 fn write_resolv_conf_from_lease(interface: &str) {
-    // Try dhcpcd --dumplease first
-    if let Ok(output) = run_cmd("dhcpcd", &["--dumplease", interface]) {
-        if let Some(content) = parse_dhcpcd_lease_dns(&output) {
-            cmd_log_append("$ write /etc/resolv.conf from lease".to_string());
-            for line in content.lines() {
-                cmd_log_append(format!("  {}", line));
-            }
-            if let Err(e) = fs::write("/etc/resolv.conf", content) {
-                cmd_log_append(format!("  write resolv.conf failed: {}", e));
-            }
-            return;
+    if let Some(content) = dhcp_resolv_content(interface) {
+        cmd_log_append("$ write /etc/resolv.conf from DHCP DNS".to_string());
+        for line in content.lines() {
+            cmd_log_append(format!("  {}", line));
         }
+        if let Err(e) = fs::write("/etc/resolv.conf", &content) {
+            cmd_log_append(format!("  write resolv.conf failed: {}", e));
+        }
+        return;
     }
 
-    // Try dhcpcd -U (alternative dump format)
-    if let Ok(output) = run_cmd("dhcpcd", &["-U", interface]) {
-        if let Some(content) = parse_dhcpcd_lease_dns(&output) {
-            cmd_log_append("$ write /etc/resolv.conf from dhcpcd -U".to_string());
-            for line in content.lines() {
-                cmd_log_append(format!("  {}", line));
-            }
-            if let Err(e) = fs::write("/etc/resolv.conf", content) {
-                cmd_log_append(format!("  write resolv.conf failed: {}", e));
-            }
-            return;
-        }
-    }
-
-    // Check if resolv.conf already has nameservers (dhcpcd hooks may have written it)
+    // Fall back to resolv.conf if dhcpcd hooks already populated it.
     if let Ok(existing) = fs::read_to_string("/etc/resolv.conf") {
         if existing.lines().any(|l| l.trim().starts_with("nameserver")) {
             cmd_log_append("  /etc/resolv.conf already has nameservers".to_string());
@@ -654,21 +745,12 @@ fn get_nameserver() -> Option<String> {
     first_nameserver(&content)
 }
 
-/// Query the dhcpcd lease for `interface` and return the first DNS server it
-/// handed out. Tries `--dumplease` then `-U` (alternative dump format), the
-/// same chain used to write resolv.conf. Returns None if no lease DNS is
-/// available so the caller can fall back to /etc/resolv.conf.
+/// Return the first DNS server DHCP handed out for `interface`, using the
+/// same source chain as the resolv.conf writer (run-dir fragments, then
+/// `--dumplease`, then `-U`). Returns None if no DHCP DNS is available so the
+/// caller can fall back to /etc/resolv.conf.
 fn get_dhcp_nameserver(interface: &str) -> Option<String> {
-    for args in [["--dumplease", interface], ["-U", interface]] {
-        if let Ok(output) = run_cmd("dhcpcd", &args) {
-            if let Some(resolv) = parse_dhcpcd_lease_dns(&output) {
-                if let Some(ns) = first_nameserver(&resolv) {
-                    return Some(ns);
-                }
-            }
-        }
-    }
-    None
+    dhcp_resolv_content(interface).and_then(|resolv| first_nameserver(&resolv))
 }
 
 /// Return the first `nameserver` entry from resolv.conf-formatted content.
@@ -1227,6 +1309,92 @@ subnet_mask=255.255.255.0
         assert!(result.contains("search mynet.example.com\n"));
         assert!(!result.contains("'")); // quotes should be stripped
         Ok(())
+    }
+
+    // dhcpcd run-dir resolv fragment tests (the primary DNS source)
+
+    #[test]
+    fn test_combine_resolv_fragments_single() -> Result<(), String> {
+        let frags = vec!["nameserver 192.168.1.1\n".to_string()];
+        let out = combine_resolv_fragments(&frags).ok_or("expected Some")?;
+        assert_eq!(out, "nameserver 192.168.1.1\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_resolv_fragments_dedups_across_files() -> Result<(), String> {
+        // dhcpcd may write one fragment per protocol; the same resolver can
+        // appear in more than one. Order is preserved, duplicates dropped.
+        let frags = vec![
+            "nameserver 10.0.0.1\nnameserver 10.0.0.2\n".to_string(),
+            "nameserver 10.0.0.1\nnameserver 10.0.0.3\n".to_string(),
+        ];
+        let out = combine_resolv_fragments(&frags).ok_or("expected Some")?;
+        assert_eq!(out, "nameserver 10.0.0.1\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_resolv_fragments_keeps_search_and_domain() -> Result<(), String> {
+        let frags = vec!["search lan\nnameserver 192.168.1.1\n".to_string()];
+        let out = combine_resolv_fragments(&frags).ok_or("expected Some")?;
+        assert_eq!(out, "search lan\nnameserver 192.168.1.1\n");
+
+        // `domain` is normalized to a `search` line.
+        let frags = vec!["domain corp.example\nnameserver 10.1.1.1\n".to_string()];
+        let out = combine_resolv_fragments(&frags).ok_or("expected Some")?;
+        assert_eq!(out, "search corp.example\nnameserver 10.1.1.1\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_resolv_fragments_none_without_nameserver() {
+        // A search-only or empty fragment yields nothing — the caller then
+        // falls through to the lease dump and finally /etc/resolv.conf.
+        assert!(combine_resolv_fragments(&["search lan\n".to_string()]).is_none());
+        assert!(combine_resolv_fragments(&[]).is_none());
+        assert!(combine_resolv_fragments(&["".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_read_resolv_fragments_from_dirs_matches_interface() -> Result<(), String> {
+        // Build a hermetic dhcpcd run dir under the temp dir (never touches
+        // the host's real /run/dhcpcd) and confirm only the requested
+        // interface's fragments are read.
+        let base = unique_temp_dir("resolv-frags");
+        fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+        fs::write(base.join("eth0.dhcp"), "nameserver 192.168.50.1\n")
+            .map_err(|e| e.to_string())?;
+        fs::write(base.join("eth0.ra"), "nameserver fe80::1\n").map_err(|e| e.to_string())?;
+        fs::write(base.join("wlan0.dhcp"), "nameserver 10.9.9.9\n")
+            .map_err(|e| e.to_string())?;
+
+        let dir = base.to_string_lossy().to_string();
+        let frags = read_resolv_fragments_from_dirs(&[&dir], "eth0");
+        let combined = combine_resolv_fragments(&frags).ok_or("expected Some")?;
+        assert!(combined.contains("nameserver 192.168.50.1\n"));
+        assert!(combined.contains("nameserver fe80::1\n"));
+        assert!(!combined.contains("10.9.9.9"), "wlan0 must not leak into eth0");
+
+        fs::remove_dir_all(&base).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_resolv_fragments_from_dirs_missing_dir_is_empty() {
+        // A nonexistent run dir is not an error — returns no fragments so the
+        // source chain moves on to the lease dump.
+        let frags = read_resolv_fragments_from_dirs(&["/nonexistent/ttyforce/run"], "eth0");
+        assert!(frags.is_empty());
+    }
+
+    /// Build a process-unique path under the system temp dir for hermetic
+    /// filesystem tests. Avoids `Math.random`/clock use (forbidden in this
+    /// crate's harness) by combining the pid with a per-call counter.
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("ttyforce-{}-{}-{}", tag, std::process::id(), n))
     }
 
     // QR code parsing tests
