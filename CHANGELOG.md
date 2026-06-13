@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.2 (2026-06-13)
+
+### Fixes
+
+- initrd DNS resolution check now uses the nameserver DHCP actually handed out
+  instead of reading the first entry from `/etc/resolv.conf`, which can hold the
+  `1.1.1.1`/`8.8.8.8` fallback or stale entries. The DHCP nameserver is sourced
+  from the dhcpcd lease (`--dumplease`, then `-U`), falling back to
+  `/etc/resolv.conf` only when no lease DNS is available
+- Read DHCP DNS from dhcpcd's per-interface resolv.conf fragments under
+  `/run/dhcpcd/resolv.conf/<iface>.*` (legacy `/var/run` too) as the primary,
+  most reliable source. These are plain nameserver lines written straight from
+  the DHCP ACK, keyed by interface, and need neither the lease database nor a
+  version-specific dump subcommand — the lease dump frequently finds nothing in
+  a Town OS initrd. The resolv.conf writer and DNS check now share one source
+  chain: run-dir fragments → `--dumplease` → `-U` → existing `/etc/resolv.conf`
+  → public resolvers
+
+### Improvements
+
+- Run all podman invocations (build and run) with `--network=host` so
+  apt/rustup/cargo can resolve DNS in nested/sandboxed environments; document
+  the rule in CLAUDE.md
+- Add tests covering resolv fragment combination (single, cross-file dedup,
+  search/domain, none-without-nameserver), directory reads (interface-prefix
+  matching, missing-dir tolerance), and the shared `first_nameserver` helper
+
 ## 0.4.1 (2026-06-07)
 
 ### Features
