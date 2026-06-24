@@ -45,14 +45,19 @@ Name=dummy0
 Kind=dummy
 NETDEV
 
-# Configure it with a static address via a .network unit
+# Configure it with static addresses via a .network unit. Both an IPv4 and a
+# global-scope ULA IPv6 address are declared here (not just added with `ip`)
+# because networkd owns this link — `networkctl reconfigure` below flushes any
+# address that isn't in the unit, which would drop a manually-added IPv6.
 cat > /etc/systemd/network/10-dummy0.network <<NETWORK
 [Match]
 Name=dummy0
 
 [Network]
 Address=10.99.99.1/24
+Address=fd00:99::1/64
 DHCP=no
+IPv6AcceptRA=no
 NETWORK
 
 echo "=== Starting systemd-networkd ==="
@@ -79,10 +84,8 @@ systemctl start udisks2 2>/dev/null || \
 ip link add dummy0 type dummy 2>/dev/null || true
 ip link set dummy0 up
 ip addr add 10.99.99.1/24 dev dummy0 2>/dev/null || true
-# Add a global-scope ULA IPv6 address so the initrd dual-stack tests can verify
-# IPv6 detection. `nodad` skips duplicate-address-detection so the address is
-# immediately usable (avoids a brief "tentative" window on slow setups).
-ip -6 addr add fd00:99::1/64 dev dummy0 nodad 2>/dev/null || true
+# The IPv6 address is declared in the .network unit above (networkd would flush
+# a manually-added one on reconfigure), so nothing extra is added here.
 networkctl reconfigure dummy0 2>/dev/null || true
 sleep 1
 

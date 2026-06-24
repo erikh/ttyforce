@@ -658,21 +658,19 @@ fn integration_configure_dhcp_with_static_ip() {
 // real kernel.
 // ---------------------------------------------------------------------------
 
-/// Restores dummy0's IPv4 address on drop, so a test that temporarily removes
-/// it to simulate an IPv6-only interface always leaves shared state intact —
-/// even if it panics (Drop still runs during unwind).
-struct Ipv4Restore {
+/// Deletes a test-created network interface on drop, so a test that builds a
+/// throwaway interface always cleans up — even on panic (Drop runs on unwind).
+struct LinkGuard {
     iface: String,
-    cidr: String,
 }
 
-impl Drop for Ipv4Restore {
+impl Drop for LinkGuard {
     fn drop(&mut self) {
         if let Err(e) = std::process::Command::new("ip")
-            .args(["addr", "add", &self.cidr, "dev", &self.iface])
+            .args(["link", "del", &self.iface])
             .output()
         {
-            eprintln!("failed to restore IPv4 on {}: {}", self.iface, e);
+            eprintln!("failed to delete {}: {}", self.iface, e);
         }
     }
 }
@@ -710,32 +708,49 @@ fn integration_initrd_detects_global_ipv6() {
 }
 
 #[test]
-fn integration_initrd_check_ip_address_falls_back_to_ipv6() {
-    let iface = require_env!(test_iface());
+fn integration_initrd_check_ip_address_ipv6_only() {
+    require_env!(test_iface());
 
-    // Remove the IPv4 address to simulate an IPv6-only interface; the guard
-    // restores it when this test ends (success or panic).
-    let _guard = Ipv4Restore {
-        iface: iface.clone(),
-        cidr: "10.99.99.1/24".into(),
+    // Build a throwaway IPv6-only dummy interface. It has no matching networkd
+    // .network unit, so networkd leaves it unmanaged — it won't flush or re-add
+    // addresses — giving a stable IPv6-only link without disturbing dummy0.
+    let iface = "ttyf6";
+    let _guard = LinkGuard {
+        iface: iface.into(),
     };
-    let del = std::process::Command::new("ip")
-        .args(["addr", "del", "10.99.99.1/24", "dev", &iface])
-        .output();
-    if let Err(e) = del {
-        eprintln!("skipping (could not remove IPv4 address): {}", e);
-        return;
+
+    let setup: [&[&str]; 3] = [
+        &["link", "add", iface, "type", "dummy"],
+        &["link", "set", iface, "up"],
+        &["-6", "addr", "add", "fd00:6::1/64", "dev", iface],
+    ];
+    for args in setup {
+        match std::process::Command::new("ip").args(args).output() {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                eprintln!(
+                    "skipping (ip {:?} failed: {})",
+                    args,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("skipping (could not run ip: {})", e);
+                return;
+            }
+        }
     }
 
     let mut exec = InitrdExecutor::new();
     let result = exec.execute(&Operation::CheckIpAddress {
-        interface: iface.clone(),
+        interface: iface.into(),
     });
 
-    // With no IPv4 present, the check must report the global IPv6 address.
+    // No IPv4 on this link, so the check must report its global IPv6 address.
     match &result {
         OperationResult::IpAssigned(ip) => {
-            assert_eq!(ip, "fd00:99::1", "expected IPv6 fallback, got {}", ip);
+            assert_eq!(ip, "fd00:6::1", "expected IPv6-only address, got {}", ip);
         }
         other => panic!("expected IpAssigned (IPv6), got {:?}", other),
     }
