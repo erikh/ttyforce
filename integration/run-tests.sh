@@ -79,6 +79,10 @@ systemctl start udisks2 2>/dev/null || \
 ip link add dummy0 type dummy 2>/dev/null || true
 ip link set dummy0 up
 ip addr add 10.99.99.1/24 dev dummy0 2>/dev/null || true
+# Add a global-scope ULA IPv6 address so the initrd dual-stack tests can verify
+# IPv6 detection. `nodad` skips duplicate-address-detection so the address is
+# immediately usable (avoids a brief "tentative" window on slow setups).
+ip -6 addr add fd00:99::1/64 dev dummy0 nodad 2>/dev/null || true
 networkctl reconfigure dummy0 2>/dev/null || true
 sleep 1
 

@@ -1,5 +1,5 @@
 use std::fs;
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 
 use crate::detect::network::{parse_iw_scan, parse_iwlist_scan};
 use crate::engine::feedback::OperationResult;
@@ -285,25 +285,19 @@ pub fn configure_dhcp(interface: &str) -> OperationResult {
     result
 }
 
-/// Read `/proc/net/route` and return true if a default route is installed
-/// for `interface`. Used to confirm the DHCP handshake completed end-to-end.
+/// Return true if a default route (IPv4 *or* IPv6) is installed for
+/// `interface`. Used to confirm the DHCP handshake completed end-to-end. A
+/// dual-stack lease only needs one family's gateway to call the handshake done;
+/// the other family is allowed to settle on its own.
 fn check_default_route_proc(interface: &str) -> bool {
-    let content = match fs::read_to_string("/proc/net/route") {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    for line in content.lines().skip(1) {
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 3 {
-            continue;
+    if let Ok(content) = fs::read_to_string("/proc/net/route") {
+        if parse_ipv4_default_route(&content, interface).is_some() {
+            return true;
         }
-        if fields[0] != interface || fields[1] != "00000000" {
-            continue;
-        }
-        if let Ok(gw) = u32::from_str_radix(fields[2], 16) {
-            if gw != 0 {
-                return true;
-            }
+    }
+    if let Ok(content) = fs::read_to_string("/proc/net/ipv6_route") {
+        if parse_ipv6_default_route(&content, interface).is_some() {
+            return true;
         }
     }
     false
@@ -616,68 +610,135 @@ pub fn check_ip_address(interface: &str) -> OperationResult {
     check_ip_sysfs(interface)
 }
 
-/// Read the IPv4 address for an interface from the ioctl SIOCGIFADDR.
+/// Read the assigned address for an interface, accepting either family. IPv4 is
+/// preferred when present (it is what most install-time checks exercise first),
+/// but a global IPv6 address alone is enough to consider the interface
+/// addressed on an IPv6-only network.
 fn check_ip_sysfs(interface: &str) -> OperationResult {
-    cmd_log_append(format!("$ ioctl SIOCGIFADDR on {}", interface));
-    match super::syscall::get_interface_ipv4(interface) {
-        Some(ip) => {
-            cmd_log_append(format!("  -> {}", ip));
-            OperationResult::IpAssigned(ip.to_string())
-        }
-        None => {
-            cmd_log_append("  -> no IP assigned".to_string());
-            OperationResult::NoIp
-        }
+    cmd_log_append(format!("$ check IP address on {} (IPv4 + IPv6)", interface));
+    if let Some(ip) = super::syscall::get_interface_ipv4(interface) {
+        cmd_log_append(format!("  -> {} (IPv4)", ip));
+        return OperationResult::IpAssigned(ip.to_string());
     }
+    if let Some(ip) = super::syscall::get_interface_ipv6(interface) {
+        cmd_log_append(format!("  -> {} (IPv6)", ip));
+        return OperationResult::IpAssigned(ip.to_string());
+    }
+    cmd_log_append("  -> no IP assigned".to_string());
+    OperationResult::NoIp
 }
 
-/// Check for upstream router by parsing /proc/net/route.
+/// Check for an upstream router by parsing the kernel routing tables. An IPv4
+/// default route (`/proc/net/route`) is reported first; failing that, an IPv6
+/// default route (`/proc/net/ipv6_route`) is accepted so IPv6-only networks
+/// still pass the upstream-router gate.
 pub fn check_upstream_router(interface: &str) -> OperationResult {
-    cmd_log_append(format!("$ check default route for {} (/proc/net/route)", interface));
-    match fs::read_to_string("/proc/net/route") {
-        Ok(content) => {
-            for line in content.lines().skip(1) {
-                let fields: Vec<&str> = line.split('\t').collect();
-                if fields.len() < 3 {
-                    continue;
-                }
-                let iface = fields[0];
-                let destination = fields[1];
-                let gateway = fields[2];
-
-                // Default route: destination is 00000000
-                if iface == interface && destination == "00000000" {
-                    if let Ok(gw) = u32::from_str_radix(gateway, 16) {
-                        if gw != 0 {
-                            // /proc/net/route stores IPs in host byte order (little-endian on x86)
-                            let ip = Ipv4Addr::from(u32::from_be(gw.swap_bytes()));
-                            cmd_log_append(format!("  -> gateway {} via {}", ip, interface));
-                            return OperationResult::RouterFound(ip.to_string());
-                        }
-                    }
-                }
-            }
-            cmd_log_append(format!("  -> no default route on {}", interface));
-            OperationResult::NoRouter
-        }
-        Err(e) => {
-            cmd_log_append(format!("  -> read /proc/net/route failed: {}", e));
-            OperationResult::NoRouter
+    cmd_log_append(format!(
+        "$ check default route for {} (/proc/net/route + ipv6_route)",
+        interface
+    ));
+    if let Ok(content) = fs::read_to_string("/proc/net/route") {
+        if let Some(gw) = parse_ipv4_default_route(&content, interface) {
+            cmd_log_append(format!("  -> gateway {} via {} (IPv4)", gw, interface));
+            return OperationResult::RouterFound(gw.to_string());
         }
     }
+    if let Ok(content) = fs::read_to_string("/proc/net/ipv6_route") {
+        if let Some(gw) = parse_ipv6_default_route(&content, interface) {
+            cmd_log_append(format!("  -> gateway {} via {} (IPv6)", gw, interface));
+            return OperationResult::RouterFound(gw.to_string());
+        }
+    }
+    cmd_log_append(format!("  -> no default route on {}", interface));
+    OperationResult::NoRouter
 }
 
-/// Check internet routability by sending an ICMP echo request to 1.1.1.1.
-/// Uses a raw socket — requires CAP_NET_RAW or root.
+/// Parse `/proc/net/route` for the IPv4 default-route gateway on `interface`.
+/// The destination field is `00000000` for the default route; gateways are
+/// stored as little-endian hex on x86.
+fn parse_ipv4_default_route(content: &str, interface: &str) -> Option<Ipv4Addr> {
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        if fields[0] != interface || fields[1] != "00000000" {
+            continue;
+        }
+        if let Ok(gw) = u32::from_str_radix(fields[2], 16) {
+            if gw != 0 {
+                // /proc/net/route prints the gateway as the host-order (LE on
+                // x86/aarch64) integer of the network-order address, so the
+                // parsed value's octets are reversed — swap them back.
+                return Some(Ipv4Addr::from(gw.swap_bytes()));
+            }
+        }
+    }
+    None
+}
+
+/// Parse `/proc/net/ipv6_route` for the IPv6 default-route gateway on
+/// `interface`. Fields are whitespace-separated:
+///   dest_net dest_plen src_net src_plen next_hop metric refcnt use flags dev
+/// A default route has an all-zero destination with prefix length `00`; the
+/// gateway is the `next_hop` column (often the router's link-local address).
+fn parse_ipv6_default_route(content: &str, interface: &str) -> Option<Ipv6Addr> {
+    for line in content.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 10 {
+            continue;
+        }
+        if fields[9] != interface {
+            continue;
+        }
+        if fields[0] != "00000000000000000000000000000000" || fields[1] != "00" {
+            continue;
+        }
+        let gw = parse_proc_hex_ipv6(fields[4])?;
+        if !gw.is_unspecified() {
+            return Some(gw);
+        }
+    }
+    None
+}
+
+/// Parse a 32-hex-char IPv6 address as stored (no colons) in
+/// `/proc/net/ipv6_route`.
+fn parse_proc_hex_ipv6(hex: &str) -> Option<Ipv6Addr> {
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut octets = [0u8; 16];
+    for (i, octet) in octets.iter_mut().enumerate() {
+        *octet = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(Ipv6Addr::from(octets))
+}
+
+/// Check internet routability by pinging a well-known anycast resolver. IPv4
+/// (1.1.1.1) is tried first; if that fails, IPv6 (2606:4700:4700::1111) is
+/// tried, so a working connection on either stack is enough to proceed.
 pub fn check_internet_routability(_interface: &str) -> OperationResult {
-    cmd_log_append("$ ping 1.1.1.1 (ICMP echo)".to_string());
+    cmd_log_append("$ ping 1.1.1.1 (ICMPv4 echo)".to_string());
     match super::syscall::icmp_ping(Ipv4Addr::new(1, 1, 1, 1), std::time::Duration::from_secs(3)) {
         Ok(_) => {
-            cmd_log_append("  -> reply received".to_string());
+            cmd_log_append("  -> reply received (IPv4)".to_string());
+            return OperationResult::InternetReachable;
+        }
+        Err(e) => {
+            cmd_log_append(format!("  -> IPv4 unreachable: {}", e));
+        }
+    }
+
+    let v6 = Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111);
+    cmd_log_append(format!("$ ping {} (ICMPv6 echo)", v6));
+    match super::syscall::icmp_ping6(v6, std::time::Duration::from_secs(3)) {
+        Ok(_) => {
+            cmd_log_append("  -> reply received (IPv6)".to_string());
             OperationResult::InternetReachable
         }
         Err(e) => {
-            cmd_log_append(format!("  -> FAILED: {}", e));
+            cmd_log_append(format!("  -> IPv6 unreachable: {}", e));
             OperationResult::NoInternet
         }
     }
@@ -722,13 +783,15 @@ fn dns_resolve(interface: &str, hostname: &str) -> Result<String, String> {
 
     let query = build_dns_query(hostname).map_err(|e| format!("failed to build DNS query: {}", e))?;
 
-    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("bind: {}", e))?;
+    let dest = parse_nameserver_socket(&nameserver)
+        .ok_or_else(|| format!("invalid nameserver addr: {}", nameserver))?;
+
+    // Bind a socket of the same family as the nameserver — an IPv4 socket
+    // cannot send to an IPv6 resolver and vice versa.
+    let bind_addr = if dest.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let sock = UdpSocket::bind(bind_addr).map_err(|e| format!("bind: {}", e))?;
     sock.set_read_timeout(Some(std::time::Duration::from_secs(3)))
         .map_err(|e| format!("set_read_timeout: {}", e))?;
-
-    let dest: SocketAddr = format!("{}:53", nameserver)
-        .parse()
-        .map_err(|e| format!("invalid nameserver addr: {}", e))?;
 
     sock.send_to(&query, dest)
         .map_err(|e| format!("send: {}", e))?;
@@ -765,6 +828,31 @@ fn first_nameserver(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Parse a resolv.conf `nameserver` value into a UDP socket address on port 53.
+/// Accepts plain IPv4 (`1.1.1.1`), IPv6 (`2001:db8::1`), and zoned IPv6
+/// link-local addresses (`fe80::1%eth0`) — the zone is resolved to a kernel
+/// interface index so the query can be sent out the right link.
+fn parse_nameserver_socket(nameserver: &str) -> Option<SocketAddr> {
+    if let Some((addr, zone)) = nameserver.split_once('%') {
+        let ip: Ipv6Addr = addr.parse().ok()?;
+        let scope_id = ifindex_for_zone(zone).unwrap_or(0);
+        Some(SocketAddr::V6(SocketAddrV6::new(ip, 53, 0, scope_id)))
+    } else {
+        let ip: IpAddr = nameserver.parse().ok()?;
+        Some(SocketAddr::new(ip, 53))
+    }
+}
+
+/// Resolve an IPv6 zone identifier to a kernel interface index. A purely
+/// numeric zone is used directly; a name is looked up via sysfs.
+fn ifindex_for_zone(zone: &str) -> Option<u32> {
+    if let Ok(idx) = zone.parse::<u32>() {
+        return Some(idx);
+    }
+    let content = fs::read_to_string(format!("/sys/class/net/{}/ifindex", zone)).ok()?;
+    content.trim().parse().ok()
 }
 
 /// Build a minimal DNS A record query for a hostname.
@@ -947,18 +1035,21 @@ pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &
 /// Uses MACAddress matching so the config works regardless of interface naming
 /// scheme (initrd may use eth0 while booted system uses enp3s0).
 pub fn generate_persist_network_config(interface: &str, mac_address: &str) -> String {
-    if mac_address.is_empty() || mac_address == "00:00:00:00:00:00" {
+    // `DHCP=yes` enables both the DHCPv4 client and the DHCPv6 client, and
+    // `IPv6AcceptRA=yes` brings up SLAAC/RA-based IPv6 — so the installed system
+    // comes up dual-stack regardless of which family the network offers. DNS is
+    // suppressed on both clients (UseDNS=no) because resolution is handled
+    // separately during install.
+    let match_section = if mac_address.is_empty() || mac_address == "00:00:00:00:00:00" {
         // Fallback to name matching if MAC is unavailable
-        format!(
-            "[Match]\nName={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDNS=no\n",
-            interface
-        )
+        format!("[Match]\nName={}\n", interface)
     } else {
-        format!(
-            "[Match]\nMACAddress={}\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDNS=no\n",
-            mac_address
-        )
-    }
+        format!("[Match]\nMACAddress={}\n", mac_address)
+    };
+    format!(
+        "{}\n[Network]\nDHCP=yes\nIPv6AcceptRA=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDNS=no\n\n[DHCPv6]\nUseDNS=no\n",
+        match_section
+    )
 }
 
 /// Generate a wpa_supplicant config for a wifi network.
@@ -984,6 +1075,140 @@ mod tests {
         assert!(config.contains("DHCP=yes"));
         assert!(config.contains("[DHCPv4]"));
         assert!(config.contains("UseDNS=no"));
+    }
+
+    #[test]
+    fn test_generate_persist_network_config_handles_ipv6() {
+        // DHCP=yes covers both families; RA + DHCPv6 must be present so the
+        // installed system comes up dual-stack.
+        let config = generate_persist_network_config("eth0", "aa:bb:cc:dd:ee:ff");
+        assert!(config.contains("IPv6AcceptRA=yes"), "missing IPv6AcceptRA");
+        assert!(config.contains("[DHCPv6]"), "missing [DHCPv6] section");
+        // UseDNS=no must appear for both v4 and v6 clients.
+        assert_eq!(config.matches("UseDNS=no").count(), 2, "config: {}", config);
+    }
+
+    #[test]
+    fn test_generate_persist_network_config_name_fallback_handles_ipv6() {
+        let config = generate_persist_network_config("wlan0", "");
+        assert!(config.contains("Name=wlan0"));
+        assert!(config.contains("IPv6AcceptRA=yes"));
+        assert!(config.contains("[DHCPv6]"));
+    }
+
+    // ── IPv4/IPv6 default-route parsing ─────────────────────────────────
+
+    #[test]
+    fn test_parse_ipv4_default_route_found() {
+        // dest=00000000 (default), gateway 0102A8C0 = 192.168.2.1 little-endian.
+        let content = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask
+eth0\t0002A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF
+eth0\t00000000\t0102A8C0\t0003\t0\t0\t0\t00000000";
+        assert_eq!(
+            parse_ipv4_default_route(content, "eth0"),
+            Some("192.168.2.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv4_default_route_wrong_interface() {
+        let content = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask
+eth0\t00000000\t0102A8C0\t0003\t0\t0\t0\t00000000";
+        assert_eq!(parse_ipv4_default_route(content, "wlan0"), None);
+    }
+
+    #[test]
+    fn test_parse_ipv4_default_route_none_when_no_default() {
+        let content = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask
+eth0\t0002A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF";
+        assert_eq!(parse_ipv4_default_route(content, "eth0"), None);
+    }
+
+    #[test]
+    fn test_parse_ipv6_default_route_found() {
+        // Default route (all-zero dest, plen 00) with a link-local gateway.
+        let line = "00000000000000000000000000000000 00 \
+00000000000000000000000000000000 00 \
+fe800000000000000000000000000001 \
+00000400 00000001 00000000 00000003 eth0";
+        assert_eq!(
+            parse_ipv6_default_route(line, "eth0"),
+            Some("fe80::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv6_default_route_global_gateway() {
+        let line = "00000000000000000000000000000000 00 \
+00000000000000000000000000000000 00 \
+20010db8000000000000000000000001 \
+00000400 00000001 00000000 00000003 eth0";
+        assert_eq!(
+            parse_ipv6_default_route(line, "eth0"),
+            Some("2001:db8::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv6_default_route_skips_non_default_and_other_iface() {
+        // A /64 connected route (plen 40 hex = 64) and a default on wlan0.
+        let content = "\
+20010db8000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000099 00000400 00000001 00000000 00000003 wlan0";
+        assert_eq!(parse_ipv6_default_route(content, "eth0"), None);
+        assert_eq!(
+            parse_ipv6_default_route(content, "wlan0"),
+            Some("fe80::99".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_proc_hex_ipv6_roundtrip() {
+        assert_eq!(
+            parse_proc_hex_ipv6("20010db8000000000000000000000001"),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        assert_eq!(parse_proc_hex_ipv6("tooshort"), None);
+        assert_eq!(parse_proc_hex_ipv6("zz010db8000000000000000000000001"), None);
+    }
+
+    // ── Nameserver socket parsing (IPv4 / IPv6 / zoned) ─────────────────
+
+    #[test]
+    fn test_parse_nameserver_socket_ipv4() {
+        let s = parse_nameserver_socket("1.1.1.1").expect("ipv4 ns");
+        assert!(s.is_ipv4());
+        assert_eq!(s.port(), 53);
+        assert_eq!(s.ip().to_string(), "1.1.1.1");
+    }
+
+    #[test]
+    fn test_parse_nameserver_socket_ipv6() {
+        let s = parse_nameserver_socket("2606:4700:4700::1111").expect("ipv6 ns");
+        assert!(s.is_ipv6());
+        assert_eq!(s.port(), 53);
+    }
+
+    #[test]
+    fn test_parse_nameserver_socket_ipv6_zoned_numeric() {
+        // A numeric zone is used directly as the scope id.
+        let s = parse_nameserver_socket("fe80::1%2").expect("zoned ns");
+        match s {
+            SocketAddr::V6(v6) => {
+                assert_eq!(v6.scope_id(), 2);
+                assert_eq!(v6.port(), 53);
+            }
+            _ => panic!("expected V6, got {:?}", s),
+        }
+    }
+
+    #[test]
+    fn test_parse_nameserver_socket_rejects_garbage() {
+        assert!(parse_nameserver_socket("not-an-ip").is_none());
+        assert!(parse_nameserver_socket("").is_none());
     }
 
     #[test]

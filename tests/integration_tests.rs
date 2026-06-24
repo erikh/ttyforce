@@ -14,7 +14,7 @@
 //! Skip when not in the container:
 //!   cargo test --test integration_tests  (will skip all tests gracefully)
 
-use ttyforce::engine::executor::{OperationExecutor, SystemdExecutor};
+use ttyforce::engine::executor::{InitrdExecutor, OperationExecutor, SystemdExecutor};
 use ttyforce::engine::feedback::OperationResult;
 use ttyforce::operations::Operation;
 
@@ -645,4 +645,138 @@ fn integration_configure_dhcp_with_static_ip() {
         "expected Success (static IP should be found by poll), got {:?}",
         result
     );
+}
+
+// ---------------------------------------------------------------------------
+// InitrdExecutor — network (syscall/sysfs path, IPv4 + IPv6)
+//
+// These mirror the SystemdExecutor network tests above but drive the
+// InitrdExecutor, which uses `ip`/sysfs/`/proc/net/*` directly instead of
+// systemd dbus. The dummy0 interface is configured by run-tests.sh with both
+// an IPv4 address (10.99.99.1/24) and a global ULA IPv6 address
+// (fd00:99::1/64), so the dual-stack code paths can be exercised against a
+// real kernel.
+// ---------------------------------------------------------------------------
+
+/// Restores dummy0's IPv4 address on drop, so a test that temporarily removes
+/// it to simulate an IPv6-only interface always leaves shared state intact —
+/// even if it panics (Drop still runs during unwind).
+struct Ipv4Restore {
+    iface: String,
+    cidr: String,
+}
+
+impl Drop for Ipv4Restore {
+    fn drop(&mut self) {
+        if let Err(e) = std::process::Command::new("ip")
+            .args(["addr", "add", &self.cidr, "dev", &self.iface])
+            .output()
+        {
+            eprintln!("failed to restore IPv4 on {}: {}", self.iface, e);
+        }
+    }
+}
+
+#[test]
+fn integration_initrd_check_ip_address_prefers_ipv4() {
+    let iface = require_env!(test_iface());
+    let mut exec = InitrdExecutor::new();
+
+    let result = exec.execute(&Operation::CheckIpAddress {
+        interface: iface.clone(),
+    });
+
+    // dummy0 has both families; IPv4 is preferred when present.
+    match &result {
+        OperationResult::IpAssigned(ip) => {
+            assert_eq!(ip, "10.99.99.1", "expected IPv4 to be preferred, got {}", ip);
+        }
+        other => panic!("expected IpAssigned, got {:?}", other),
+    }
+}
+
+#[test]
+fn integration_initrd_detects_global_ipv6() {
+    require_env!(test_iface());
+
+    // Directly exercise the real `ip -6` query + parser against the kernel.
+    let v6 = ttyforce::engine::initrd_ops::syscall::get_interface_ipv6("dummy0");
+    assert_eq!(
+        v6,
+        Some("fd00:99::1".parse().unwrap()),
+        "expected the configured global ULA address, got {:?}",
+        v6
+    );
+}
+
+#[test]
+fn integration_initrd_check_ip_address_falls_back_to_ipv6() {
+    let iface = require_env!(test_iface());
+
+    // Remove the IPv4 address to simulate an IPv6-only interface; the guard
+    // restores it when this test ends (success or panic).
+    let _guard = Ipv4Restore {
+        iface: iface.clone(),
+        cidr: "10.99.99.1/24".into(),
+    };
+    let del = std::process::Command::new("ip")
+        .args(["addr", "del", "10.99.99.1/24", "dev", &iface])
+        .output();
+    if let Err(e) = del {
+        eprintln!("skipping (could not remove IPv4 address): {}", e);
+        return;
+    }
+
+    let mut exec = InitrdExecutor::new();
+    let result = exec.execute(&Operation::CheckIpAddress {
+        interface: iface.clone(),
+    });
+
+    // With no IPv4 present, the check must report the global IPv6 address.
+    match &result {
+        OperationResult::IpAssigned(ip) => {
+            assert_eq!(ip, "fd00:99::1", "expected IPv6 fallback, got {}", ip);
+        }
+        other => panic!("expected IpAssigned (IPv6), got {:?}", other),
+    }
+}
+
+#[test]
+fn integration_initrd_check_upstream_router_no_route() {
+    let iface = require_env!(test_iface());
+    let mut exec = InitrdExecutor::new();
+
+    // dummy0 has neither an IPv4 nor an IPv6 default route, so both the
+    // /proc/net/route and /proc/net/ipv6_route scans must come up empty.
+    let result = exec.execute(&Operation::CheckUpstreamRouter {
+        interface: iface.clone(),
+    });
+    assert!(
+        matches!(result, OperationResult::NoRouter),
+        "expected NoRouter, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn integration_initrd_check_dns_resolution() {
+    let iface = require_env!(test_iface());
+    let mut exec = InitrdExecutor::new();
+
+    // Exercises the real UDP DNS path (nameserver-socket binding + query).
+    // A minimal container may have no working upstream resolver, so a failure
+    // is acceptable — what matters is that the code path runs without panicking.
+    let result = exec.execute(&Operation::CheckDnsResolution {
+        interface: iface.clone(),
+        hostname: "example.com".into(),
+    });
+    match &result {
+        OperationResult::DnsResolved(ip) => {
+            assert!(!ip.is_empty(), "resolved to empty string");
+        }
+        OperationResult::DnsFailed(msg) => {
+            eprintln!("DNS resolution failed (acceptable in minimal container): {}", msg);
+        }
+        other => panic!("unexpected result: {:?}", other),
+    }
 }
