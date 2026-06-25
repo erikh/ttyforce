@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.3 (2026-06-25)
+
+### Fixes
+
+- initrd network checks are now dual-stack: bring up one interface, run DHCP
+  (dhcpcd covers v4 + v6), and treat the interface as online if either family
+  reaches connectivity. `check_ip_address` reports an IPv4 address, else a
+  global IPv6 address; `check_upstream_router` and the DHCP route wait scan
+  both `/proc/net/route` and `/proc/net/ipv6_route`; `check_internet_routability`
+  pings `1.1.1.1`, falling back to `2606:4700:4700::1111`; DNS accepts IPv6
+  (and zoned link-local) nameservers, binding a socket of the matching family
+- Persisted network config now sets `IPv6AcceptRA=yes` and `[DHCPv6] UseDNS=no`
+  so the installed system comes up dual-stack
+- Fix a latent endianness bug in the IPv4 gateway decode
+  (`u32::from_be(gw.swap_bytes())` was a double-swap on little-endian hosts,
+  yielding a byte-reversed gateway) — now a single `swap_bytes()`
+
+### Improvements
+
+- Add `make help`, a self-documenting target that lists all targets with
+  descriptions generated from `## ` annotations so it stays in sync; bare
+  `make` still builds
+- Add InitrdExecutor integration tests covering IPv4 preference, IPv6
+  detection, IPv6-only fallback, no-route, and the real UDP DNS path, plus
+  unit tests for the v4/v6 route parsers, the IPv6 address parser, and
+  nameserver socket parsing; fix the IPv6 integration tests to declare
+  addresses in the networkd `.network` unit so `networkctl reconfigure`
+  does not flush them
+
 ## 0.4.2 (2026-06-13)
 
 ### Fixes
