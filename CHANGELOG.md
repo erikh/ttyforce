@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.4 (2026-06-25)
+
+### Fixes
+
+- The initrd internet check no longer hardcodes `1.1.1.1`, which failed on
+  networks that filter outbound DNS to public resolvers (libvirt NAT, guest/
+  captive WiFi) while the DHCP-offered resolver answers fine. Hostnames now
+  resolve against an ordered candidate list — DHCP-offered resolvers first,
+  then `/etc/resolv.conf`, then the public fallback — trying each until one
+  returns an A record (`resolve_via`/`order_nameservers`)
+- ttyforce now creates the dhcpcd run/lease directories (`prepare_dhcpcd_dirs`)
+  before launching dhcpcd so the lease — and its offered DNS — persists and is
+  readable, rather than relying on initrd or dhcpcd hook scripts
+
+### Improvements
+
+- Centralize the public resolvers in `crate::network::PUBLIC_FALLBACK_DNS`
+  (`8.8.8.8 8.8.4.4 1.1.1.1`) and use it everywhere those addresses appeared:
+  the candidate list, the resolv.conf fallback, the routability pings (initrd
+  + real_ops), and the getty online check
+- Add integration tests: `resolve_via` fallback against a mock UDP DNS server,
+  and dhcpcd directory population
+
 ## 0.4.3 (2026-06-25)
 
 ### Fixes
