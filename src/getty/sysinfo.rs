@@ -245,13 +245,19 @@ fn parse_hex_ip(hex: &str) -> String {
     }
 }
 
-/// Check if the machine is online by attempting a TCP connect to 1.1.1.1:53.
+/// Check if the machine is online by attempting a TCP connect to the public
+/// fallback resolvers on port 53. Each is tried in turn; the first successful
+/// connect means we're online.
 pub fn check_online() -> bool {
-    TcpStream::connect_timeout(
-        &std::net::SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53),
-        Duration::from_millis(500),
-    )
-    .is_ok()
+    crate::network::PUBLIC_FALLBACK_DNS.iter().any(|addr| {
+        addr.parse::<Ipv4Addr>().is_ok_and(|ip| {
+            TcpStream::connect_timeout(
+                &std::net::SocketAddr::new(std::net::IpAddr::V4(ip), 53),
+                Duration::from_millis(500),
+            )
+            .is_ok()
+        })
+    })
 }
 
 /// Read Town OS version from a version file.

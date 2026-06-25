@@ -6,6 +6,7 @@ use zbus::zvariant::ObjectPath;
 use crate::detect::network::{parse_iw_scan, parse_iwlist_scan};
 use crate::engine::feedback::OperationResult;
 use crate::network::wifi::WifiNetwork;
+use crate::network::PUBLIC_FALLBACK_DNS;
 
 use super::{cmd_log_append, run_cmd};
 
@@ -628,12 +629,15 @@ fn check_router_via_command(interface: &str) -> OperationResult {
     }
 }
 
-/// Check internet routability by pinging 1.1.1.1.
+/// Check internet routability by pinging the public fallback resolvers. Each
+/// is tried in turn; the first reply means we're reachable.
 pub fn check_internet_routability(_interface: &str) -> OperationResult {
-    match run_cmd("ping", &["-c1", "-W3", "1.1.1.1"]) {
-        Ok(_) => OperationResult::InternetReachable,
-        Err(_) => OperationResult::NoInternet,
+    for addr in PUBLIC_FALLBACK_DNS {
+        if run_cmd("ping", &["-c1", "-W3", addr]).is_ok() {
+            return OperationResult::InternetReachable;
+        }
     }
+    OperationResult::NoInternet
 }
 
 /// Check DNS resolution for a hostname.

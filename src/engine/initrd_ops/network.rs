@@ -1,9 +1,11 @@
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
+use std::path::{Path, PathBuf};
 
 use crate::detect::network::{parse_iw_scan, parse_iwlist_scan};
 use crate::engine::feedback::OperationResult;
 use crate::network::wifi::WifiNetwork;
+use crate::network::PUBLIC_FALLBACK_DNS;
 
 use crate::engine::real_ops::{cmd_log_append, run_cmd};
 
@@ -395,8 +397,44 @@ fn configure_dhcp_with(
     OperationResult::Success
 }
 
+/// Directories dhcpcd needs before it can obtain and persist a lease in the
+/// initrd. The initrd root is a fresh tmpfs with none of these present, and
+/// dhcpcd will not write its lease database (read back by `--dumplease`/`-U`)
+/// or create its run dir / control socket without them. Without the lease the
+/// DHCP-offered DNS is unreadable and the resolver check has to fall back to
+/// the public servers — so ttyforce creates these itself rather than relying on
+/// the initrd's hook script or on dhcpcd's own hook scripts, which are not
+/// bundled in the initrd.
+const DHCPCD_DIRS: [&str; 3] = ["/run/dhcpcd", "/run/dhcpcd/resolv.conf", "/var/db/dhcpcd"];
+
+/// Create the dhcpcd directories under `root`, returning the paths created (or
+/// that already existed). Split out from [`prepare_dhcpcd_dirs`] so tests can
+/// point it at a temporary root instead of the real filesystem.
+pub fn prepare_dhcpcd_dirs_in(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut made = Vec::new();
+    for dir in DHCPCD_DIRS {
+        // Strip the leading '/' so the join stays under `root` — joining an
+        // absolute path would discard `root` entirely.
+        let path = root.join(dir.trim_start_matches('/'));
+        fs::create_dir_all(&path).map_err(|e| format!("mkdir {}: {}", path.display(), e))?;
+        made.push(path);
+    }
+    Ok(made)
+}
+
+/// Create the dhcpcd directories on the real initrd filesystem. Best-effort:
+/// failures are logged but do not abort DHCP, since `dhcpcd -U` against the
+/// running daemon can still yield the lease without the on-disk database.
+fn prepare_dhcpcd_dirs() {
+    match prepare_dhcpcd_dirs_in(Path::new("/")) {
+        Ok(_) => cmd_log_append("$ prepared dhcpcd dirs (/run/dhcpcd, /var/db/dhcpcd)".to_string()),
+        Err(e) => cmd_log_append(format!("  prepare dhcpcd dirs: {}", e)),
+    }
+}
+
 /// Trigger DHCP on an interface via dhcpcd.
 fn try_trigger_dhcp(interface: &str) -> OperationResult {
+    prepare_dhcpcd_dirs();
     if let Err(e) = run_cmd("dhcpcd", &["--release", interface]) {
         cmd_log_append(format!("  dhcpcd release: {}", e));
     }
@@ -538,10 +576,13 @@ fn write_resolv_conf_from_lease(interface: &str) {
         }
     }
 
-    // Last resort: write a default resolv.conf
+    // Last resort: write a default resolv.conf from the shared public list.
     cmd_log_append("$ write /etc/resolv.conf with fallback nameservers".to_string());
-    let fallback = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n";
-    if let Err(e) = fs::write("/etc/resolv.conf", fallback) {
+    let fallback: String = PUBLIC_FALLBACK_DNS
+        .iter()
+        .map(|ns| format!("nameserver {}\n", ns))
+        .collect();
+    if let Err(e) = fs::write("/etc/resolv.conf", &fallback) {
         cmd_log_append(format!("  write resolv.conf failed: {}", e));
     }
 }
@@ -715,18 +756,25 @@ fn parse_proc_hex_ipv6(hex: &str) -> Option<Ipv6Addr> {
     Some(Ipv6Addr::from(octets))
 }
 
-/// Check internet routability by pinging a well-known anycast resolver. IPv4
-/// (1.1.1.1) is tried first; if that fails, IPv6 (2606:4700:4700::1111) is
-/// tried, so a working connection on either stack is enough to proceed.
+/// Check internet routability by pinging the public fallback resolvers. Each
+/// IPv4 resolver in the shared list is tried in turn; if none reply, IPv6
+/// (2606:4700:4700::1111) is tried, so a working connection on either stack is
+/// enough to proceed.
 pub fn check_internet_routability(_interface: &str) -> OperationResult {
-    cmd_log_append("$ ping 1.1.1.1 (ICMPv4 echo)".to_string());
-    match super::syscall::icmp_ping(Ipv4Addr::new(1, 1, 1, 1), std::time::Duration::from_secs(3)) {
-        Ok(_) => {
-            cmd_log_append("  -> reply received (IPv4)".to_string());
-            return OperationResult::InternetReachable;
-        }
-        Err(e) => {
-            cmd_log_append(format!("  -> IPv4 unreachable: {}", e));
+    for addr in PUBLIC_FALLBACK_DNS {
+        let ip: Ipv4Addr = match addr.parse() {
+            Ok(ip) => ip,
+            Err(_) => continue,
+        };
+        cmd_log_append(format!("$ ping {} (ICMPv4 echo)", ip));
+        match super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)) {
+            Ok(_) => {
+                cmd_log_append("  -> reply received (IPv4)".to_string());
+                return OperationResult::InternetReachable;
+            }
+            Err(e) => {
+                cmd_log_append(format!("  -> {} unreachable: {}", ip, e));
+            }
         }
     }
 
@@ -767,67 +815,128 @@ pub fn check_dns_resolution(interface: &str, hostname: &str) -> OperationResult 
     }
 }
 
-/// Resolve a hostname by sending a DNS query to the DHCP-provided nameserver.
+/// Resolve a hostname, trying nameservers in priority order: every DHCP-offered
+/// resolver first, then anything already in /etc/resolv.conf, then the public
+/// fallback resolvers. The first server that returns an A record wins; a server
+/// that is filtered, times out, or errors is skipped and the next is tried.
+/// This is what lets the check succeed on a network that drops queries to
+/// 1.1.1.1 but runs its own resolver (handed out via DHCP) — e.g. the libvirt
+/// NAT's dnsmasq at 192.168.122.1.
 fn dns_resolve(interface: &str, hostname: &str) -> Result<String, String> {
-    let nameserver = match get_dhcp_nameserver(interface) {
-        Some(ns) => {
-            cmd_log_append(format!("  using DHCP nameserver {} (lease for {})", ns, interface));
-            ns
-        }
-        None => {
-            let ns = get_nameserver().ok_or("no nameserver found")?;
-            cmd_log_append(format!("  using nameserver {} (/etc/resolv.conf)", ns));
-            ns
+    let candidates = nameserver_candidates(interface);
+    if candidates.is_empty() {
+        return Err("no nameserver found".to_string());
+    }
+    cmd_log_append(format!("  nameservers (in order): {}", candidates.join(", ")));
+
+    let dests: Vec<SocketAddr> = candidates
+        .iter()
+        .filter_map(|ns| match parse_nameserver_socket(ns) {
+            Some(d) => Some(d),
+            None => {
+                cmd_log_append(format!("  skipping invalid nameserver: {}", ns));
+                None
+            }
+        })
+        .collect();
+
+    resolve_via(&dests, hostname, std::time::Duration::from_secs(3))
+}
+
+/// Build the ordered, deduplicated nameserver candidate list for `interface`:
+/// DHCP-offered resolvers, then /etc/resolv.conf, then the public fallback.
+fn nameserver_candidates(interface: &str) -> Vec<String> {
+    let dhcp = dhcp_resolv_content(interface)
+        .map(|c| all_nameservers(&c))
+        .unwrap_or_default();
+    let resolv = fs::read_to_string("/etc/resolv.conf")
+        .ok()
+        .map(|c| all_nameservers(&c))
+        .unwrap_or_default();
+    order_nameservers(&dhcp, &resolv, &PUBLIC_FALLBACK_DNS)
+}
+
+/// Merge nameserver sources into one ordered, deduplicated list. DHCP-offered
+/// resolvers come first (the local network's own resolver, which answers even
+/// when public DNS is filtered), then /etc/resolv.conf, then the public
+/// fallback resolvers as a last resort. Duplicates are dropped keeping the
+/// first (highest-priority) occurrence, so the priority order is preserved.
+pub fn order_nameservers(dhcp: &[String], resolv: &[String], fallback: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let push = |ns: &str, out: &mut Vec<String>| {
+        let ns = ns.trim();
+        if !ns.is_empty() && !out.iter().any(|n| n == ns) {
+            out.push(ns.to_string());
         }
     };
-
-    let query = build_dns_query(hostname).map_err(|e| format!("failed to build DNS query: {}", e))?;
-
-    let dest = parse_nameserver_socket(&nameserver)
-        .ok_or_else(|| format!("invalid nameserver addr: {}", nameserver))?;
-
-    // Bind a socket of the same family as the nameserver — an IPv4 socket
-    // cannot send to an IPv6 resolver and vice versa.
-    let bind_addr = if dest.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
-    let sock = UdpSocket::bind(bind_addr).map_err(|e| format!("bind: {}", e))?;
-    sock.set_read_timeout(Some(std::time::Duration::from_secs(3)))
-        .map_err(|e| format!("set_read_timeout: {}", e))?;
-
-    sock.send_to(&query, dest)
-        .map_err(|e| format!("send: {}", e))?;
-
-    let mut buf = [0u8; 512];
-    let n = sock.recv(&mut buf).map_err(|e| format!("recv: {}", e))?;
-
-    parse_dns_response(&buf[..n])
+    for ns in dhcp {
+        push(ns, &mut out);
+    }
+    for ns in resolv {
+        push(ns, &mut out);
+    }
+    for ns in fallback {
+        push(ns, &mut out);
+    }
+    out
 }
 
-/// Read the first nameserver from /etc/resolv.conf.
-fn get_nameserver() -> Option<String> {
-    let content = fs::read_to_string("/etc/resolv.conf").ok()?;
-    first_nameserver(&content)
-}
-
-/// Return the first DNS server DHCP handed out for `interface`, using the
-/// same source chain as the resolv.conf writer (run-dir fragments, then
-/// `--dumplease`, then `-U`). Returns None if no DHCP DNS is available so the
-/// caller can fall back to /etc/resolv.conf.
-fn get_dhcp_nameserver(interface: &str) -> Option<String> {
-    dhcp_resolv_content(interface).and_then(|resolv| first_nameserver(&resolv))
-}
-
-/// Return the first `nameserver` entry from resolv.conf-formatted content.
-fn first_nameserver(content: &str) -> Option<String> {
-    for line in content.lines() {
-        let line = line.trim();
-        if let Some(ns) = line.strip_prefix("nameserver") {
-            let ns = ns.trim();
-            if !ns.is_empty() {
-                return Some(ns.to_string());
+/// Try each nameserver in order, returning the first hostname resolution that
+/// succeeds. A server that is filtered, times out, or errors is logged and
+/// skipped, and the next candidate is tried. Returns the last error if every
+/// server fails. `timeout` bounds the wait for each individual server's reply.
+pub fn resolve_via(
+    candidates: &[SocketAddr],
+    hostname: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    let query =
+        build_dns_query(hostname).map_err(|e| format!("failed to build DNS query: {}", e))?;
+    let mut last_err = "no nameservers to try".to_string();
+    for dest in candidates {
+        match query_one(*dest, &query, timeout) {
+            Ok(ip) => {
+                cmd_log_append(format!("  resolved via {}", dest));
+                return Ok(ip);
+            }
+            Err(e) => {
+                cmd_log_append(format!("  {} failed: {}", dest, e));
+                last_err = e;
             }
         }
     }
-    None
+    Err(last_err)
+}
+
+/// Send a single DNS A query to `dest` and parse the first A record from the
+/// reply. Binds an ephemeral socket of the same family as `dest` (an IPv4
+/// socket cannot send to an IPv6 resolver and vice versa).
+fn query_one(
+    dest: SocketAddr,
+    query: &[u8],
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    let bind_addr = if dest.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let sock = UdpSocket::bind(bind_addr).map_err(|e| format!("bind: {}", e))?;
+    sock.set_read_timeout(Some(timeout))
+        .map_err(|e| format!("set_read_timeout: {}", e))?;
+    sock.send_to(query, dest).map_err(|e| format!("send: {}", e))?;
+    let mut buf = [0u8; 512];
+    let n = sock.recv(&mut buf).map_err(|e| format!("recv: {}", e))?;
+    parse_dns_response(&buf[..n])
+}
+
+/// Collect every `nameserver` value from resolv.conf-formatted content, in
+/// order of appearance. Empty values are skipped. Used to gather all
+/// DHCP-offered and /etc/resolv.conf resolvers as fallback candidates.
+fn all_nameservers(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("nameserver"))
+        .map(str::trim)
+        .filter(|ns| !ns.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Parse a resolv.conf `nameserver` value into a UDP socket address on port 53.
@@ -1294,9 +1403,9 @@ fe800000000000000000000000000001 \
     }
 
     #[test]
-    fn test_get_nameserver_parsing() -> Result<(), String> {
-        // This test verifies the parsing logic, not actual /etc/resolv.conf
-        // The function reads from the filesystem so we test the format expectations
+    fn test_nameserver_line_parsing() -> Result<(), String> {
+        // Verifies the `nameserver` line format expectations that
+        // all_nameservers relies on, independent of any filesystem read.
         let line = "nameserver 8.8.8.8";
         let ns = line
             .strip_prefix("nameserver")
@@ -1307,24 +1416,75 @@ fe800000000000000000000000000001 \
     }
 
     #[test]
-    fn test_first_nameserver_skips_search_line() {
+    fn test_all_nameservers_collects_in_order() {
         let content = "search lan\nnameserver 192.168.1.1\nnameserver 192.168.1.2\n";
-        assert_eq!(first_nameserver(content), Some("192.168.1.1".to_string()));
+        assert_eq!(
+            all_nameservers(content),
+            vec!["192.168.1.1".to_string(), "192.168.1.2".to_string()]
+        );
     }
 
     #[test]
-    fn test_first_nameserver_none_when_empty() {
-        assert_eq!(first_nameserver("search lan\n"), None);
-        assert_eq!(first_nameserver(""), None);
+    fn test_all_nameservers_none_when_empty() {
+        assert!(all_nameservers("search lan\n").is_empty());
+        assert!(all_nameservers("").is_empty());
     }
 
     #[test]
-    fn test_first_nameserver_matches_dhcp_lease() {
-        // The DNS check feeds the parsed lease through first_nameserver, so the
-        // server it queries is the one DHCP handed out, not a hardcoded fallback.
+    fn test_order_nameservers_dhcp_first_fallback_last() {
+        // The DHCP-offered resolver leads; the public fallback trails, so a
+        // filtered public resolver is never tried ahead of the working one.
+        let dhcp = vec!["192.168.122.1".to_string()];
+        let resolv: Vec<String> = vec![];
+        let order = order_nameservers(&dhcp, &resolv, &["1.1.1.1", "8.8.8.8"]);
+        assert_eq!(
+            order,
+            vec![
+                "192.168.122.1".to_string(),
+                "1.1.1.1".to_string(),
+                "8.8.8.8".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_order_nameservers_dedups_keeping_first_position() {
+        // A resolver that appears in more than one source is listed once, at
+        // its highest-priority (earliest) position.
+        let dhcp = vec!["192.168.122.1".to_string()];
+        let resolv = vec!["192.168.122.1".to_string(), "8.8.8.8".to_string()];
+        let order = order_nameservers(&dhcp, &resolv, &["1.1.1.1", "8.8.8.8"]);
+        assert_eq!(
+            order,
+            vec![
+                "192.168.122.1".to_string(),
+                "8.8.8.8".to_string(),
+                "1.1.1.1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_order_nameservers_skips_blank_entries() {
+        let dhcp: Vec<String> = vec![];
+        let resolv = vec!["".to_string(), "   ".to_string()];
+        let order = order_nameservers(&dhcp, &resolv, &["1.1.1.1"]);
+        assert_eq!(order, vec!["1.1.1.1".to_string()]);
+    }
+
+    #[test]
+    fn test_dhcp_lease_nameservers_lead_candidate_order() {
+        // The DNS check feeds the parsed lease through all_nameservers, so the
+        // servers it queries first are the ones DHCP handed out, ahead of the
+        // public fallback — not a hardcoded resolver.
         let lease = "domain_name_servers=10.0.0.1 10.0.0.2\ndomain_name='lan'\n";
         let resolv = parse_dhcpcd_lease_dns(lease).expect("lease has DNS");
-        assert_eq!(first_nameserver(&resolv), Some("10.0.0.1".to_string()));
+        let dhcp = all_nameservers(&resolv);
+        assert_eq!(dhcp, vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
+
+        let order = order_nameservers(&dhcp, &[], &PUBLIC_FALLBACK_DNS);
+        assert_eq!(order.first(), Some(&"10.0.0.1".to_string()));
+        assert_eq!(order.last(), Some(&"1.1.1.1".to_string()));
     }
 
     // DHCP polling tests

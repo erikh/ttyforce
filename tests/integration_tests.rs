@@ -795,3 +795,135 @@ fn integration_initrd_check_dns_resolution() {
         other => panic!("unexpected result: {:?}", other),
     }
 }
+
+// ---------------------------------------------------------------------------
+// DNS resolver fallback (resolve_via)
+//
+// Exercises the real UDP socket path against a local mock resolver. These are
+// hermetic (loopback only) and need no container env, so they run under a
+// plain `cargo test` as well as in the integration container. They cover the
+// behavior added for filtered public DNS: try each nameserver in order and
+// fall through to the next when one is dead/filtered (e.g. a blocked 1.1.1.1),
+// which is what lets the DHCP-offered resolver win.
+// ---------------------------------------------------------------------------
+
+/// Spawn a one-shot mock DNS server on loopback that answers the next query
+/// with an A record for `ip`. Returns the address it bound to.
+fn spawn_mock_dns(ip: [u8; 4]) -> std::net::SocketAddr {
+    let sock = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind mock dns");
+    let addr = sock.local_addr().expect("mock dns local_addr");
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 512];
+        if let Ok((n, peer)) = sock.recv_from(&mut buf) {
+            // Echo the request, then flip it into a response with one A answer:
+            //   flags -> response + recursion-available, ANCOUNT -> 1,
+            //   answer -> name compression pointer to the question (0xc00c),
+            //            TYPE=A, CLASS=IN, TTL=60, RDLENGTH=4, the IP.
+            let mut resp = buf[..n].to_vec();
+            resp[2] = 0x81;
+            resp[3] = 0x80;
+            resp[6] = 0x00;
+            resp[7] = 0x01;
+            resp.extend_from_slice(&[
+                0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04,
+            ]);
+            resp.extend_from_slice(&ip);
+            let _ = sock.send_to(&resp, peer);
+        }
+    });
+    addr
+}
+
+/// A loopback address with no listener: sends go nowhere and recv hits the
+/// read timeout — the stand-in for a filtered/dead resolver like 1.1.1.1 here.
+fn dead_dns() -> std::net::SocketAddr {
+    "127.0.0.1:1".parse().expect("parse dead dns addr")
+}
+
+#[test]
+fn integration_resolve_via_falls_back_past_dead_server() {
+    // First candidate is dead (filtered public DNS); the second is the working
+    // DHCP-style resolver. resolve_via must skip the dead one and return the
+    // working server's answer.
+    let good = spawn_mock_dns([93, 184, 216, 34]);
+    let candidates = [dead_dns(), good];
+    let result = ttyforce::engine::initrd_ops::network::resolve_via(
+        &candidates,
+        "example.com",
+        std::time::Duration::from_millis(300),
+    );
+    assert_eq!(result, Ok("93.184.216.34".to_string()));
+}
+
+#[test]
+fn integration_resolve_via_uses_first_working_server() {
+    // When the first candidate answers, it is used directly.
+    let good = spawn_mock_dns([10, 1, 2, 3]);
+    let candidates = [good, dead_dns()];
+    let result = ttyforce::engine::initrd_ops::network::resolve_via(
+        &candidates,
+        "example.com",
+        std::time::Duration::from_millis(300),
+    );
+    assert_eq!(result, Ok("10.1.2.3".to_string()));
+}
+
+#[test]
+fn integration_resolve_via_errors_when_all_dead() {
+    // Every candidate filtered/dead -> an error (the last failure), not a hang.
+    let candidates = [dead_dns(), dead_dns()];
+    let result = ttyforce::engine::initrd_ops::network::resolve_via(
+        &candidates,
+        "example.com",
+        std::time::Duration::from_millis(200),
+    );
+    assert!(result.is_err(), "expected error when all servers are dead, got {:?}", result);
+}
+
+// ---------------------------------------------------------------------------
+// dhcpcd directory population (prepare_dhcpcd_dirs_in)
+//
+// In the initrd, ttyforce must create the run/lease directories dhcpcd needs
+// before launching it — otherwise dhcpcd never persists a lease and the
+// DHCP-offered DNS can't be read back. These tests create the dirs under a
+// throwaway temp root (never the real /run or /var) and assert they exist.
+// ---------------------------------------------------------------------------
+
+/// Unique temp dir for a dhcpcd-dirs test, isolated per-test by `tag`.
+fn dhcpcd_dirs_temp_root(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ttyforce-dhcpcd-{}-{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[test]
+fn integration_prepare_dhcpcd_dirs_creates_run_and_lease_dirs() {
+    let root = dhcpcd_dirs_temp_root("create");
+    let made = ttyforce::engine::initrd_ops::network::prepare_dhcpcd_dirs_in(&root)
+        .expect("prepare dhcpcd dirs");
+
+    // The lease DB (for --dumplease), the run dir (control socket), and the
+    // resolv-fragment dir must all exist as directories under the root.
+    for sub in ["run/dhcpcd", "run/dhcpcd/resolv.conf", "var/db/dhcpcd"] {
+        let p = root.join(sub);
+        assert!(p.is_dir(), "expected {} to be a directory", p.display());
+    }
+    // Every created path stays under the root — no absolute-join escape.
+    assert_eq!(made.len(), 3);
+    assert!(made.iter().all(|p| p.starts_with(&root)), "paths escaped root: {:?}", made);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn integration_prepare_dhcpcd_dirs_is_idempotent() {
+    let root = dhcpcd_dirs_temp_root("idempotent");
+    // Running twice (e.g. a DHCP retry) must not fail on already-existing dirs.
+    ttyforce::engine::initrd_ops::network::prepare_dhcpcd_dirs_in(&root)
+        .expect("first prepare");
+    ttyforce::engine::initrd_ops::network::prepare_dhcpcd_dirs_in(&root)
+        .expect("second prepare is idempotent");
+    assert!(root.join("var/db/dhcpcd").is_dir());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
