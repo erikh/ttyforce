@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.6 (2026-06-26)
+
+### Fixes
+
+- initrd IPv6 routability probe is now gated on a global-*unicast* address
+  (`2000::/3`) rather than any global-scope address. `get_interface_ipv6`
+  accepts ULA (`fc00::/7`), which is global in scope but not internet-routable
+  (e.g. a SLAAC ULA from libvirt's NAT bridge), so the v0.4.5 gate still let the
+  IPv6 ping run on a ULA-only stack and pinged a public anycast the ULA can
+  never reach. New `interface_has_global_unicast_ipv6` /
+  `parse_has_global_unicast_ipv6` helpers back the gate; `get_interface_ipv6` is
+  unchanged since a ULA is a legitimate address to report for the guest
+
 ## 0.4.5 (2026-06-26)
 
 ### Fixes
