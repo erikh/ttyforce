@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.5 (2026-06-26)
+
+### Fixes
+
+- initrd internet check no longer probes IPv6 on IPv4-only stacks.
+  `check_internet_routability` ignored its interface argument and always fell
+  through to an IPv6 ping (`2606:4700:4700::1111`) after the IPv4 public-resolver
+  pings failed — even with no IPv6 in the stack. On networks that filter outbound
+  ICMP to public resolvers this surfaced a spurious `ping -6` and an "IPv6
+  unreachable" result. The IPv6 fallback is now gated on the interface carrying a
+  global IPv6 address (`get_interface_ipv6`); with no IPv6 present the probe is
+  skipped entirely. Logic moved into a `check_internet_routability_inner` helper
+  with injected probes and covered by unit tests
+
 ## 0.4.4 (2026-06-25)
 
 ### Fixes
