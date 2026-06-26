@@ -758,23 +758,25 @@ fn parse_proc_hex_ipv6(hex: &str) -> Option<Ipv6Addr> {
 
 /// Check internet routability by pinging the public fallback resolvers. Each
 /// IPv4 resolver in the shared list is tried in turn; if none reply, IPv6
-/// (2606:4700:4700::1111) is tried *only when the interface actually carries a
-/// global IPv6 address*, so a working connection on either stack is enough to
-/// proceed while IPv4-only stacks never wait on (or report failures for) an
-/// IPv6 probe that cannot possibly succeed.
+/// (2606:4700:4700::1111) is tried *only when the interface carries a global
+/// **unicast** IPv6 address (2000::/3)*, so a working connection on either stack
+/// is enough to proceed while IPv4-only stacks — and stacks with only a
+/// non-routable ULA (e.g. the dev VM's SLAAC ULA from libvirt's NAT bridge) —
+/// never wait on (or report failures for) an IPv6 probe that cannot succeed.
 pub fn check_internet_routability(interface: &str) -> OperationResult {
     check_internet_routability_inner(
         interface,
         |ip| super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)),
-        |iface| super::syscall::get_interface_ipv6(iface).is_some(),
+        super::syscall::interface_has_global_unicast_ipv6,
         |ip| super::syscall::icmp_ping6(ip, std::time::Duration::from_secs(3)),
     )
 }
 
 /// Testable core of [`check_internet_routability`] with injected probes.
 ///
-/// `has_ipv6` gates the IPv6 fallback: when the interface has no global IPv6
-/// address there is no IPv6 in the stack, so `ping6` is never invoked.
+/// `has_ipv6` gates the IPv6 fallback: when the interface has no global-unicast
+/// IPv6 address there is no routable IPv6 in the stack, so `ping6` is never
+/// invoked.
 fn check_internet_routability_inner(
     interface: &str,
     ping4: impl Fn(Ipv4Addr) -> Result<(), String>,

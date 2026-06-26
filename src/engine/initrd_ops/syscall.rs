@@ -60,6 +60,43 @@ pub fn parse_ipv6_addr_output(output: &str) -> Option<Ipv6Addr> {
     None
 }
 
+/// True if `interface` has a globally-routable IPv6 unicast address (2000::/3).
+///
+/// Stricter than [`get_interface_ipv6`], which also accepts unique-local
+/// addresses (fc00::/7). A ULA is global *scope* but NOT reachable on the
+/// global IPv6 internet — e.g. the dev VM's SLAAC ULA from libvirt's NAT
+/// bridge — so it must not gate an internet-routability probe, otherwise the
+/// probe pings a public anycast resolver that the ULA-only stack can never
+/// reach. Only an address in 2000::/3 (global unicast) means real IPv6 is in
+/// the stack.
+pub fn interface_has_global_unicast_ipv6(interface: &str) -> bool {
+    run_cmd("ip", &["-6", "-o", "addr", "show", interface, "scope", "global"])
+        .ok()
+        .map(|out| parse_has_global_unicast_ipv6(&out))
+        .unwrap_or(false)
+}
+
+/// Scan `ip -6 -o addr show` output for any global-unicast (2000::/3) address.
+pub fn parse_has_global_unicast_ipv6(output: &str) -> bool {
+    for line in output.lines() {
+        if let Some(inet_pos) = line.find("inet6 ") {
+            let after_inet = &line[inet_pos + 6..];
+            let addr_str = match after_inet.split('/').next() {
+                Some(s) => s.trim(),
+                None => continue,
+            };
+            if let Ok(addr) = addr_str.parse::<Ipv6Addr>() {
+                // 2000::/3 is the global-unicast range; everything else
+                // (link-local, ULA fc00::/7, loopback, multicast) is excluded.
+                if (addr.segments()[0] & 0xe000) == 0x2000 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Send an ICMP echo request and wait for a reply using the `ping` command.
 pub fn icmp_ping(addr: Ipv4Addr, timeout: std::time::Duration) -> Result<(), String> {
     let timeout_secs = timeout.as_secs().max(1);
@@ -142,5 +179,50 @@ mod tests {
     fn test_parse_ipv6_addr_output_empty() {
         assert_eq!(parse_ipv6_addr_output(""), None);
         assert_eq!(parse_ipv6_addr_output("2: eth0    inet 192.168.1.5/24"), None);
+    }
+
+    #[test]
+    fn test_global_unicast_accepts_2000_slash_3() {
+        let out = "2: eth0    inet6 2001:db8::5/64 scope global dynamic";
+        assert!(parse_has_global_unicast_ipv6(out));
+    }
+
+    #[test]
+    fn test_global_unicast_rejects_ula() {
+        // fc00::/7 is global *scope* but not internet-routable — this is the
+        // dev VM's SLAAC ULA from libvirt's NAT bridge, which must NOT count.
+        let out = "3: eth0    inet6 fd00:c0a8:7a::5054:ff:fe99:7710/64 scope global";
+        assert!(!parse_has_global_unicast_ipv6(out));
+    }
+
+    #[test]
+    fn test_global_unicast_rejects_link_local_only() {
+        let out = "2: eth0    inet6 fe80::5054:ff:fe99:7710/64 scope link";
+        assert!(!parse_has_global_unicast_ipv6(out));
+    }
+
+    #[test]
+    fn test_global_unicast_rejects_ula_plus_link_local() {
+        // The exact dev-VM stack: a ULA and a link-local, no global unicast.
+        let out = "\
+2: eth0    inet6 fd00:c0a8:7a::5054:ff:fe99:7710/64 scope global
+2: eth0    inet6 fe80::5054:ff:fe99:7710/64 scope link";
+        assert!(!parse_has_global_unicast_ipv6(out));
+    }
+
+    #[test]
+    fn test_global_unicast_true_when_real_address_present() {
+        // A global unicast alongside a ULA/link-local still counts.
+        let out = "\
+2: eth0    inet6 fd00:abcd::7/64 scope global
+2: eth0    inet6 2001:db8::42/64 scope global dynamic
+2: eth0    inet6 fe80::1/64 scope link";
+        assert!(parse_has_global_unicast_ipv6(out));
+    }
+
+    #[test]
+    fn test_global_unicast_empty() {
+        assert!(!parse_has_global_unicast_ipv6(""));
+        assert!(!parse_has_global_unicast_ipv6("2: eth0    inet 192.168.1.5/24"));
     }
 }
