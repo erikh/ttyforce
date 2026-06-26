@@ -876,14 +876,36 @@ fn dns_resolve(interface: &str, hostname: &str) -> Result<String, String> {
 /// Build the ordered, deduplicated nameserver candidate list for `interface`:
 /// DHCP-offered resolvers, then /etc/resolv.conf, then the public fallback.
 fn nameserver_candidates(interface: &str) -> Vec<String> {
-    let dhcp = dhcp_resolv_content(interface)
+    // DHCP-offered resolvers first, then the default gateway, then anything in
+    // /etc/resolv.conf, then the public fallback. The gateway belongs in the
+    // local tier because in NAT and home-router setups it runs a DNS forwarder
+    // (e.g. the libvirt dev VM's dnsmasq at 192.168.122.1, which forwards to the
+    // host's real resolvers) — and on networks that filter outbound DNS to
+    // public resolvers it is frequently the ONLY resolver that answers. Folding
+    // it in here means it's tried even when the DHCP lease's DNS can't be read
+    // back (no hook fragments / no lease DB), which is exactly the dev-VM case.
+    let mut local = dhcp_resolv_content(interface)
         .map(|c| all_nameservers(&c))
         .unwrap_or_default();
+    if let Some(gw) = default_gateway_v4(interface) {
+        if !local.contains(&gw) {
+            local.push(gw);
+        }
+    }
     let resolv = fs::read_to_string("/etc/resolv.conf")
         .ok()
         .map(|c| all_nameservers(&c))
         .unwrap_or_default();
-    order_nameservers(&dhcp, &resolv, &PUBLIC_FALLBACK_DNS)
+    order_nameservers(&local, &resolv, &PUBLIC_FALLBACK_DNS)
+}
+
+/// The IPv4 default-route gateway for `interface`, as a string, if any. In NAT
+/// and home-router setups the gateway runs a DNS forwarder, so it's a useful
+/// resolver candidate — and on networks that filter public DNS it may be the
+/// only one that works (e.g. the libvirt dev VM's dnsmasq at 192.168.122.1).
+fn default_gateway_v4(interface: &str) -> Option<String> {
+    let content = fs::read_to_string("/proc/net/route").ok()?;
+    parse_ipv4_default_route(&content, interface).map(|gw| gw.to_string())
 }
 
 /// Merge nameserver sources into one ordered, deduplicated list. DHCP-offered
@@ -1566,6 +1588,39 @@ fe800000000000000000000000000001 \
         let resolv = vec!["".to_string(), "   ".to_string()];
         let order = order_nameservers(&dhcp, &resolv, &["1.1.1.1"]);
         assert_eq!(order, vec!["1.1.1.1".to_string()]);
+    }
+
+    #[test]
+    fn test_gateway_resolver_tried_before_public_fallback() {
+        // The dev-VM case: the DHCP lease's DNS can't be read back, so the local
+        // group is just the gateway (nameserver_candidates folds it into the
+        // first arg). It must be tried before the public fallback, which on a
+        // DNS-filtering network is the only way the check can succeed.
+        let local = vec!["192.168.122.1".to_string()]; // gateway, no DHCP DNS
+        let resolv: Vec<String> = vec![]; // bootstrap resolv elided for clarity
+        let order = order_nameservers(&local, &resolv, &PUBLIC_FALLBACK_DNS);
+        assert_eq!(order.first(), Some(&"192.168.122.1".to_string()));
+        let gw_pos = order.iter().position(|n| n == "192.168.122.1").unwrap();
+        let pub_pos = order.iter().position(|n| n == "8.8.8.8").unwrap();
+        assert!(gw_pos < pub_pos, "gateway must precede public fallback: {:?}", order);
+    }
+
+    #[test]
+    fn test_dhcp_dns_still_leads_gateway() {
+        // When the DHCP DNS *is* readable, it stays ahead of the gateway (both
+        // in the local group, DHCP pushed first by nameserver_candidates).
+        let local = vec!["10.0.0.53".to_string(), "192.168.122.1".to_string()];
+        let order = order_nameservers(&local, &[], &PUBLIC_FALLBACK_DNS);
+        assert_eq!(
+            order,
+            vec![
+                "10.0.0.53".to_string(),
+                "192.168.122.1".to_string(),
+                "8.8.8.8".to_string(),
+                "8.8.4.4".to_string(),
+                "1.1.1.1".to_string(),
+            ]
+        );
     }
 
     #[test]
