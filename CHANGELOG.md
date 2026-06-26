@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.7 (2026-06-26)
+
+### Fixes
+
+- initrd DNS check now folds the default gateway into the resolver candidate
+  list (DHCP-offered → gateway → `/etc/resolv.conf` → public fallback). In
+  NAT/home-router setups the gateway runs a DNS forwarder and, on networks that
+  filter outbound DNS to public resolvers, is frequently the only resolver that
+  answers — so the check works even when the DHCP lease's DNS cannot be read
+  back from dhcpcd (e.g. the libvirt dev VM, where the gateway is dnsmasq
+  forwarding to the host's resolvers)
+
 ## 0.4.6 (2026-06-26)
 
 ### Fixes
