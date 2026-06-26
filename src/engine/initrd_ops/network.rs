@@ -756,20 +756,104 @@ fn parse_proc_hex_ipv6(hex: &str) -> Option<Ipv6Addr> {
     Some(Ipv6Addr::from(octets))
 }
 
-/// Check internet routability by pinging the public fallback resolvers. Each
-/// IPv4 resolver in the shared list is tried in turn; if none reply, IPv6
-/// (2606:4700:4700::1111) is tried *only when the interface carries a global
-/// **unicast** IPv6 address (2000::/3)*, so a working connection on either stack
-/// is enough to proceed while IPv4-only stacks — and stacks with only a
-/// non-routable ULA (e.g. the dev VM's SLAAC ULA from libvirt's NAT bridge) —
-/// never wait on (or report failures for) an IPv6 probe that cannot succeed.
+/// Host resolved through the local resolver(s) to prove end-to-end internet
+/// routability. Resolving an external name forces the local resolver to recurse
+/// out to the internet, so a successful answer means we're actually online — a
+/// stronger and quieter signal than an ICMP ping to a public anycast that many
+/// networks drop.
+const ROUTABILITY_PROBE_HOST: &str = "example.com";
+
+/// Check internet routability, preferring the **local resolver** over a ping to
+/// the public free servers.
+///
+/// On networks that filter outbound traffic to public resolvers (libvirt NAT,
+/// guest/captive WiFi) the local resolver — handed out by DHCP, or the gateway's
+/// own forwarder — is frequently the only path to the internet, while pinging
+/// `1.1.1.1` simply fails and burns the connectivity retries. So we first try to
+/// resolve [`ROUTABILITY_PROBE_HOST`] through the local resolver(s); a successful
+/// answer proves we're online. Only when no local resolver answers do we fall
+/// back to ICMP-pinging the static list of public free servers
+/// ([`PUBLIC_FALLBACK_DNS`]), then a gated IPv6 ping.
 pub fn check_internet_routability(interface: &str) -> OperationResult {
-    check_internet_routability_inner(
-        interface,
-        |ip| super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)),
-        super::syscall::interface_has_global_unicast_ipv6,
-        |ip| super::syscall::icmp_ping6(ip, std::time::Duration::from_secs(3)),
+    let locals = local_resolver_sockets(interface);
+    routability_local_first(
+        &locals,
+        ROUTABILITY_PROBE_HOST,
+        std::time::Duration::from_secs(3),
+        || {
+            check_internet_routability_inner(
+                interface,
+                |ip| super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)),
+                super::syscall::interface_has_global_unicast_ipv6,
+                |ip| super::syscall::icmp_ping6(ip, std::time::Duration::from_secs(3)),
+            )
+        },
     )
+}
+
+/// Internet-routability check that resolves `hostname` through the
+/// caller-supplied local resolvers first, only invoking `ping_fallback` (the
+/// static public free-server probe) when there is no local resolver or none of
+/// them answer. Factored out so the local-first ordering is integration-tested
+/// against a mock DNS server without needing the host's real DHCP/gateway state.
+pub fn routability_local_first(
+    local_resolvers: &[SocketAddr],
+    hostname: &str,
+    resolve_timeout: std::time::Duration,
+    ping_fallback: impl Fn() -> OperationResult,
+) -> OperationResult {
+    if local_resolvers.is_empty() {
+        cmd_log_append(
+            "  no local resolver available, falling back to public free servers".to_string(),
+        );
+    } else {
+        let listed: Vec<String> = local_resolvers.iter().map(|s| s.to_string()).collect();
+        cmd_log_append(format!(
+            "$ resolve {} via local resolver(s): {}",
+            hostname,
+            listed.join(", ")
+        ));
+        match resolve_via(local_resolvers, hostname, resolve_timeout) {
+            Ok(ip) => {
+                cmd_log_append(format!("  -> {} (local resolver, reachable)", ip));
+                return OperationResult::InternetReachable;
+            }
+            Err(e) => {
+                cmd_log_append(format!(
+                    "  -> local resolver did not answer ({}), trying public free servers",
+                    e
+                ));
+            }
+        }
+    }
+    ping_fallback()
+}
+
+/// The local-network resolvers for `interface`, parsed to socket addresses: the
+/// DHCP-offered nameservers plus the default gateway (which commonly runs a DNS
+/// forwarder). Deliberately excludes the public fallback so these form the
+/// "local first" tier of [`check_internet_routability`].
+fn local_resolver_sockets(interface: &str) -> Vec<SocketAddr> {
+    local_resolver_candidates(interface)
+        .iter()
+        .filter_map(|ns| parse_nameserver_socket(ns))
+        .collect()
+}
+
+/// The ordered, deduplicated local-resolver candidate list for `interface`:
+/// DHCP-offered nameservers first, then the default gateway. No `/etc/resolv.conf`
+/// and no public fallback — those belong to the broader DNS candidate list
+/// ([`nameserver_candidates`]), not the "local resolver" tier.
+fn local_resolver_candidates(interface: &str) -> Vec<String> {
+    let mut local = dhcp_resolv_content(interface)
+        .map(|c| all_nameservers(&c))
+        .unwrap_or_default();
+    if let Some(gw) = default_gateway_v4(interface) {
+        if !local.contains(&gw) {
+            local.push(gw);
+        }
+    }
+    order_nameservers(&local, &[], &[])
 }
 
 /// Testable core of [`check_internet_routability`] with injected probes.
@@ -874,24 +958,15 @@ fn dns_resolve(interface: &str, hostname: &str) -> Result<String, String> {
 }
 
 /// Build the ordered, deduplicated nameserver candidate list for `interface`:
-/// DHCP-offered resolvers, then /etc/resolv.conf, then the public fallback.
+/// the local resolvers (DHCP-offered + gateway, see [`local_resolver_candidates`]),
+/// then anything in /etc/resolv.conf, then the public fallback. The gateway is in
+/// the local tier because in NAT and home-router setups it runs a DNS forwarder
+/// (e.g. the libvirt dev VM's dnsmasq at 192.168.122.1, which forwards to the
+/// host's real resolvers) — and on networks that filter outbound DNS to public
+/// resolvers it is frequently the ONLY resolver that answers, so it is tried even
+/// when the DHCP lease's DNS can't be read back (no hook fragments / no lease DB).
 fn nameserver_candidates(interface: &str) -> Vec<String> {
-    // DHCP-offered resolvers first, then the default gateway, then anything in
-    // /etc/resolv.conf, then the public fallback. The gateway belongs in the
-    // local tier because in NAT and home-router setups it runs a DNS forwarder
-    // (e.g. the libvirt dev VM's dnsmasq at 192.168.122.1, which forwards to the
-    // host's real resolvers) — and on networks that filter outbound DNS to
-    // public resolvers it is frequently the ONLY resolver that answers. Folding
-    // it in here means it's tried even when the DHCP lease's DNS can't be read
-    // back (no hook fragments / no lease DB), which is exactly the dev-VM case.
-    let mut local = dhcp_resolv_content(interface)
-        .map(|c| all_nameservers(&c))
-        .unwrap_or_default();
-    if let Some(gw) = default_gateway_v4(interface) {
-        if !local.contains(&gw) {
-            local.push(gw);
-        }
-    }
+    let local = local_resolver_candidates(interface);
     let resolv = fs::read_to_string("/etc/resolv.conf")
         .ok()
         .map(|c| all_nameservers(&c))

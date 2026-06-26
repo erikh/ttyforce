@@ -881,6 +881,80 @@ fn integration_resolve_via_errors_when_all_dead() {
 }
 
 // ---------------------------------------------------------------------------
+// Internet routability prefers the local resolver (routability_local_first)
+//
+// The initrd connectivity check must NOT ping 1.1.1.1 first. On networks that
+// filter outbound traffic to public resolvers, resolving an external name
+// through the local resolver (DHCP-offered / gateway forwarder) is the only
+// path that proves we're online — so it is tried first, and the static public
+// free-server probe is only the fallback. These exercise the real UDP path
+// against a loopback mock resolver and are hermetic.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_routability_resolves_via_local_resolver_first() {
+    // A working local resolver answers, so routability succeeds WITHOUT ever
+    // touching the public free-server fallback.
+    let local = spawn_mock_dns([93, 184, 216, 34]);
+    let fallback_called = std::sync::atomic::AtomicBool::new(false);
+    let result = ttyforce::engine::initrd_ops::network::routability_local_first(
+        &[local],
+        "example.com",
+        std::time::Duration::from_millis(300),
+        || {
+            fallback_called.store(true, std::sync::atomic::Ordering::SeqCst);
+            OperationResult::NoInternet
+        },
+    );
+    assert!(
+        matches!(result, OperationResult::InternetReachable),
+        "expected InternetReachable via local resolver, got {:?}",
+        result
+    );
+    assert!(
+        !fallback_called.load(std::sync::atomic::Ordering::SeqCst),
+        "public free-server fallback must NOT run when the local resolver answers"
+    );
+}
+
+#[test]
+fn integration_routability_falls_back_to_free_servers_when_local_dead() {
+    // The local resolver is filtered/dead, so routability falls back to the
+    // static public free-server probe and uses its result.
+    let result = ttyforce::engine::initrd_ops::network::routability_local_first(
+        &[dead_dns()],
+        "example.com",
+        std::time::Duration::from_millis(200),
+        || OperationResult::InternetReachable,
+    );
+    assert!(
+        matches!(result, OperationResult::InternetReachable),
+        "expected fallback to public free servers to succeed, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn integration_routability_falls_back_when_no_local_resolver() {
+    // With no local resolver at all, the fallback probe is consulted directly.
+    let fallback_called = std::sync::atomic::AtomicBool::new(false);
+    let result = ttyforce::engine::initrd_ops::network::routability_local_first(
+        &[],
+        "example.com",
+        std::time::Duration::from_millis(200),
+        || {
+            fallback_called.store(true, std::sync::atomic::Ordering::SeqCst);
+            OperationResult::NoInternet
+        },
+    );
+    assert!(
+        fallback_called.load(std::sync::atomic::Ordering::SeqCst),
+        "fallback must run when there is no local resolver"
+    );
+    assert!(matches!(result, OperationResult::NoInternet));
+}
+
+// ---------------------------------------------------------------------------
 // dhcpcd directory population (prepare_dhcpcd_dirs_in)
 //
 // In the initrd, ttyforce must create the run/lease directories dhcpcd needs
