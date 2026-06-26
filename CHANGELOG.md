@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.8 (2026-06-26)
+
+### Fixes
+
+- initrd internet-routability check now prefers the local resolver over a ping
+  to the public free servers. Step 5 of the connectivity flow used to ICMP-ping
+  `1.1.1.1`/`8.8.8.8`/`8.8.4.4` first, which on networks that filter outbound
+  traffic to public resolvers (libvirt NAT, captive/guest WiFi) simply fails and
+  burns the connectivity retries even though the local resolver answers fine.
+  `check_internet_routability` now resolves a probe host (`example.com`) through
+  the local resolver(s) — the DHCP-offered nameservers plus the gateway's
+  forwarder — first; a successful answer proves end-to-end internet without ever
+  touching `1.1.1.1`. Only when no local resolver answers does it fall back to
+  the public free-server ICMP ping and the gated IPv6 probe. Added hermetic
+  integration tests against a loopback mock resolver
+
 ## 0.4.7 (2026-06-26)
 
 ### Fixes
