@@ -758,16 +758,36 @@ fn parse_proc_hex_ipv6(hex: &str) -> Option<Ipv6Addr> {
 
 /// Check internet routability by pinging the public fallback resolvers. Each
 /// IPv4 resolver in the shared list is tried in turn; if none reply, IPv6
-/// (2606:4700:4700::1111) is tried, so a working connection on either stack is
-/// enough to proceed.
-pub fn check_internet_routability(_interface: &str) -> OperationResult {
+/// (2606:4700:4700::1111) is tried *only when the interface actually carries a
+/// global IPv6 address*, so a working connection on either stack is enough to
+/// proceed while IPv4-only stacks never wait on (or report failures for) an
+/// IPv6 probe that cannot possibly succeed.
+pub fn check_internet_routability(interface: &str) -> OperationResult {
+    check_internet_routability_inner(
+        interface,
+        |ip| super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)),
+        |iface| super::syscall::get_interface_ipv6(iface).is_some(),
+        |ip| super::syscall::icmp_ping6(ip, std::time::Duration::from_secs(3)),
+    )
+}
+
+/// Testable core of [`check_internet_routability`] with injected probes.
+///
+/// `has_ipv6` gates the IPv6 fallback: when the interface has no global IPv6
+/// address there is no IPv6 in the stack, so `ping6` is never invoked.
+fn check_internet_routability_inner(
+    interface: &str,
+    ping4: impl Fn(Ipv4Addr) -> Result<(), String>,
+    has_ipv6: impl Fn(&str) -> bool,
+    ping6: impl Fn(Ipv6Addr) -> Result<(), String>,
+) -> OperationResult {
     for addr in PUBLIC_FALLBACK_DNS {
         let ip: Ipv4Addr = match addr.parse() {
             Ok(ip) => ip,
             Err(_) => continue,
         };
         cmd_log_append(format!("$ ping {} (ICMPv4 echo)", ip));
-        match super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)) {
+        match ping4(ip) {
             Ok(_) => {
                 cmd_log_append("  -> reply received (IPv4)".to_string());
                 return OperationResult::InternetReachable;
@@ -778,9 +798,17 @@ pub fn check_internet_routability(_interface: &str) -> OperationResult {
         }
     }
 
+    if !has_ipv6(interface) {
+        cmd_log_append(format!(
+            "  -> no global IPv6 address on {}, skipping IPv6 routability check",
+            interface
+        ));
+        return OperationResult::NoInternet;
+    }
+
     let v6 = Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111);
     cmd_log_append(format!("$ ping {} (ICMPv6 echo)", v6));
-    match super::syscall::icmp_ping6(v6, std::time::Duration::from_secs(3)) {
+    match ping6(v6) {
         Ok(_) => {
             cmd_log_append("  -> reply received (IPv6)".to_string());
             OperationResult::InternetReachable
@@ -1174,6 +1202,72 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn test_routability_ipv4_reachable_skips_ipv6() {
+        // First IPv4 ping succeeds: never reaches the IPv6 probe.
+        let ping6_calls = AtomicU32::new(0);
+        let result = check_internet_routability_inner(
+            "eth0",
+            |_| Ok(()),
+            |_| panic!("has_ipv6 must not be consulted when IPv4 is reachable"),
+            |_| {
+                ping6_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(matches!(result, OperationResult::InternetReachable));
+        assert_eq!(ping6_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_routability_no_ipv6_in_stack_skips_ipv6_probe() {
+        // All IPv4 pings fail and the interface has no global IPv6 address, so
+        // the IPv6 probe must be skipped entirely (no `ping -6`).
+        let ping6_calls = AtomicU32::new(0);
+        let result = check_internet_routability_inner(
+            "eth0",
+            |_| Err("filtered".to_string()),
+            |_| false,
+            |_| {
+                ping6_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(matches!(result, OperationResult::NoInternet));
+        assert_eq!(
+            ping6_calls.load(Ordering::SeqCst),
+            0,
+            "IPv6 must not be probed when there is no IPv6 in the stack"
+        );
+    }
+
+    #[test]
+    fn test_routability_ipv6_used_when_present_and_ipv4_fails() {
+        let ping6_calls = AtomicU32::new(0);
+        let result = check_internet_routability_inner(
+            "eth0",
+            |_| Err("no v4".to_string()),
+            |_| true,
+            |_| {
+                ping6_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(matches!(result, OperationResult::InternetReachable));
+        assert_eq!(ping6_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_routability_ipv6_present_but_unreachable_is_no_internet() {
+        let result = check_internet_routability_inner(
+            "eth0",
+            |_| Err("no v4".to_string()),
+            |_| true,
+            |_| Err("no v6".to_string()),
+        );
+        assert!(matches!(result, OperationResult::NoInternet));
+    }
 
     #[test]
     fn test_generate_persist_network_config_with_mac() {
