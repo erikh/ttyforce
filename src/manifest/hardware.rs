@@ -73,6 +73,13 @@ pub struct DiskSpec {
     /// Used for grouping disks by attachment type for RAID.
     #[serde(default = "default_transport")]
     pub transport: String,
+    /// Whether the kernel marks this disk as removable (the `/sys/block/<dev>/
+    /// removable` flag) — true for SD cards and other hot-plug media. USB sticks
+    /// also set it, but USB is identified by `transport` independently. Removable
+    /// disks are demoted to last-resort install targets; soldered eMMC reports
+    /// non-removable and so stays a normal fixed-storage candidate.
+    #[serde(default)]
+    pub removable: bool,
 }
 
 fn default_transport() -> String {

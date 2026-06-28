@@ -157,33 +157,52 @@ pub fn detect_disks() -> anyhow::Result<Vec<DiskSpec>> {
     Ok(prefer_fixed_disks(disks))
 }
 
-/// Drop USB-attached disks from the candidate list whenever at least one fixed
-/// (non-USB) disk is available. A USB stick is removable and usually slow — it
-/// should only be an installation target as a LAST RESORT, when the machine has
-/// no internal NVMe/SATA/etc. storage to install onto instead. Applying this at
-/// the single detection chokepoint means both the manual TUI list and Easy
-/// mode's automatic "largest group" pick only ever see USB drives when nothing
-/// fixed exists. The disk the system booted from is already excluded upstream
-/// (`read_boot_disks`); this governs the OTHER USB drives a user may have
-/// plugged in. When every candidate is USB the list is returned unchanged so the
-/// install can still proceed on removable media.
+/// A disk is "last-resort" — only an install target when nothing better exists —
+/// if it is USB-attached OR the kernel marks it removable (SD cards and other
+/// hot-plug media). USB external SSDs report non-removable yet are still caught
+/// by the transport check; soldered eMMC reports non-removable and is NOT
+/// removable, so it stays a normal fixed candidate.
+fn is_last_resort_disk(d: &DiskSpec) -> bool {
+    d.transport == "usb" || d.removable
+}
+
+/// Drop last-resort disks (USB and removable SD/hot-plug media) from the
+/// candidate list whenever at least one fixed disk is available. Such media is
+/// removable and usually slow — it should only be an installation target when
+/// the machine has no internal NVMe/SATA/eMMC/etc. storage to install onto
+/// instead. Applying this at the single detection chokepoint means both the
+/// manual TUI list and Easy mode's automatic "largest group" pick only ever see
+/// these drives when nothing fixed exists. The disk the system booted from is
+/// already excluded upstream (`read_boot_disks`); this governs the OTHER
+/// removable drives a user may have plugged in. When every candidate is
+/// last-resort the list is returned unchanged so the install can still proceed.
 fn prefer_fixed_disks(disks: Vec<DiskSpec>) -> Vec<DiskSpec> {
     use crate::engine::real_ops::cmd_log_append;
 
-    let has_fixed = disks.iter().any(|d| d.transport != "usb");
+    let has_fixed = disks.iter().any(|d| !is_last_resort_disk(d));
     if !has_fixed {
         return disks;
     }
 
-    let (fixed, usb): (Vec<DiskSpec>, Vec<DiskSpec>) =
-        disks.into_iter().partition(|d| d.transport != "usb");
-    for d in &usb {
+    let (fixed, demoted): (Vec<DiskSpec>, Vec<DiskSpec>) =
+        disks.into_iter().partition(|d| !is_last_resort_disk(d));
+    for d in &demoted {
         cmd_log_append(format!(
-            "  demote {} (USB; fixed disk(s) present — USB is last-resort only)",
-            d.device
+            "  demote {} (transport={} removable={}; fixed disk(s) present — last-resort only)",
+            d.device, d.transport, d.removable
         ));
     }
     fixed
+}
+
+/// Read the kernel removable flag for a block device from its sysfs directory
+/// (`<dev>/removable` == "1"). Missing/unreadable is treated as non-removable so
+/// a disk is never demoted on uncertainty. Parameterized by the device dir so
+/// the sysfs scan can be tested hermetically against a temp tree.
+fn removable_from_dir(dev_path: &Path) -> bool {
+    read_sysfs_trimmed(&dev_path.join("removable"))
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// Detect disks via UDisks2 dbus (org.freedesktop.UDisks2).
@@ -307,6 +326,11 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
                 )
             };
 
+        // Removability: read the kernel flag from sysfs by device name (the same
+        // signal the sysfs detection path uses), so SD cards are flagged
+        // consistently regardless of which detection backend found the disk.
+        let removable = removable_from_dir(&Path::new("/sys/block").join(dev_name));
+
         disks.push(DiskSpec {
             device,
             make,
@@ -314,6 +338,7 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
             size_bytes: size,
             serial,
             transport,
+            removable,
         });
     }
 
@@ -459,10 +484,11 @@ fn detect_disks_sysfs_in(
         let make = read_disk_vendor(&dev_path, &name);
         let serial = read_disk_serial(&dev_path, &name);
         let transport = detect_transport_sysfs(&dev_path, &name);
+        let removable = removable_from_dir(&dev_path);
 
         cmd_log_append(format!(
-            "    accept {} make={} model={} transport={}",
-            name, make, model, transport
+            "    accept {} make={} model={} transport={} removable={}",
+            name, make, model, transport, removable
         ));
 
         disks.push(DiskSpec {
@@ -472,6 +498,7 @@ fn detect_disks_sysfs_in(
             size_bytes,
             serial,
             transport,
+            removable,
         });
     }
 
@@ -898,6 +925,10 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
     }
 
     fn spec(device: &str, transport: &str) -> DiskSpec {
+        spec_rm(device, transport, false)
+    }
+
+    fn spec_rm(device: &str, transport: &str, removable: bool) -> DiskSpec {
         DiskSpec {
             device: device.to_string(),
             make: "Test".to_string(),
@@ -905,6 +936,7 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
             size_bytes: 256_000_000_000,
             serial: None,
             transport: transport.to_string(),
+            removable,
         }
     }
 
@@ -933,5 +965,50 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
             .map(|d| d.device)
             .collect();
         assert_eq!(kept, vec!["/dev/sdb", "/dev/sdc"]);
+    }
+
+    #[test]
+    fn test_prefer_fixed_disks_drops_removable_sd_keeps_emmc() {
+        // mmc covers both: a removable SD card is demoted, but soldered eMMC
+        // (non-removable) stays a normal fixed candidate alongside the NVMe.
+        let disks = vec![
+            spec("/dev/nvme0n1", "nvme"),
+            spec_rm("/dev/mmcblk0", "mmc", false), // eMMC — fixed
+            spec_rm("/dev/mmcblk1", "mmc", true),  // SD card — removable
+        ];
+        let kept: Vec<String> = prefer_fixed_disks(disks)
+            .into_iter()
+            .map(|d| d.device)
+            .collect();
+        assert_eq!(kept, vec!["/dev/nvme0n1", "/dev/mmcblk0"]);
+    }
+
+    #[test]
+    fn test_prefer_fixed_disks_keeps_sd_when_only_removable() {
+        // Only removable media present (SD card + USB stick, no fixed storage):
+        // everything stays so the install can still proceed.
+        let disks = vec![
+            spec_rm("/dev/mmcblk1", "mmc", true),
+            spec("/dev/sdb", "usb"),
+        ];
+        let kept: Vec<String> = prefer_fixed_disks(disks)
+            .into_iter()
+            .map(|d| d.device)
+            .collect();
+        assert_eq!(kept, vec!["/dev/mmcblk1", "/dev/sdb"]);
+    }
+
+    #[test]
+    fn test_removable_from_dir() {
+        let tmp = std::env::temp_dir().join("ttyforce-removable-test");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        // No removable file -> treated as non-removable.
+        assert!(!removable_from_dir(&tmp));
+        fs::write(tmp.join("removable"), "1\n").unwrap();
+        assert!(removable_from_dir(&tmp));
+        fs::write(tmp.join("removable"), "0\n").unwrap();
+        assert!(!removable_from_dir(&tmp));
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
