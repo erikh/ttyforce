@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.9 (2026-06-28)
+
+### Features
+
+- getty gains a `--sledgehammer-tryboot` flag for triggering the sledgehammer
+  wipe boot on hardware without GRUB (e.g. Raspberry Pi). When set, the wipe is
+  triggered with `reboot "0 tryboot"`, which one-shot-boots the Pi firmware's
+  `[tryboot]` config section (Town OS points it at a cmdline that adds
+  `town.sledgehammer`) and auto-reverts on the next boot — the wipe itself is
+  still driven by `town.sledgehammer` on the kernel cmdline, identical to the
+  GRUB path. The flag takes precedence over `--sledgehammer-grub-entry` and is
+  skipped in mock mode so it never reboots a test host
+
+### Fixes
+
+- detect now demotes removable media to last-resort install targets. USB-attached
+  drives and kernel-removable disks (SD cards and other hot-plug media) were
+  offered on equal footing with internal NVMe/SATA: the manual TUI listed them
+  sorted only by device name, and Easy mode auto-picked the largest disk group
+  regardless of transport, so a big USB stick or SD card could be selected over a
+  fixed disk. A new `prefer_fixed_disks()` step at the `detect_disks()` chokepoint
+  drops any disk that is USB-transport or kernel-removable whenever at least one
+  fixed disk is present, so both detection backends and both the manual and
+  Easy-mode flows only ever see removable media when nothing fixed exists (a
+  USB/SD-only machine can still be installed). Soldered eMMC reports
+  non-removable and stays a normal fixed candidate; `mmc` transport alone is not
+  used to demote since it covers both eMMC and SD cards. A `removable` flag is
+  added to `DiskSpec`, populated from `/sys/block/<dev>/removable` in both the
+  sysfs and UDisks2 paths, defaulting to false on uncertainty so a disk is never
+  demoted when its removability cannot be read. The disk the system booted from
+  is still excluded upstream via `read_boot_disks`. Added hermetic unit tests
+
 ## 0.4.8 (2026-06-26)
 
 ### Fixes
