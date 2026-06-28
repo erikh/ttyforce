@@ -136,19 +136,54 @@ pub fn detect_disks() -> anyhow::Result<Vec<DiskSpec>> {
     use crate::engine::real_ops::cmd_log_append;
     cmd_log_append("$ detect disks (UDisks2 dbus → sysfs fallback)".to_string());
     // Try UDisks2 dbus first
-    match detect_disks_udisks2() {
+    let disks = match detect_disks_udisks2() {
         Some(disks) if !disks.is_empty() => {
             cmd_log_append(format!(
                 "  -> UDisks2 returned {} disk(s)",
                 disks.len()
             ));
-            return Ok(disks);
+            disks
         }
-        Some(_) => cmd_log_append("  -> UDisks2 returned no disks; falling back to sysfs".to_string()),
-        None => cmd_log_append("  -> UDisks2 unavailable; falling back to sysfs".to_string()),
+        Some(_) => {
+            cmd_log_append("  -> UDisks2 returned no disks; falling back to sysfs".to_string());
+            detect_disks_sysfs()?
+        }
+        None => {
+            cmd_log_append("  -> UDisks2 unavailable; falling back to sysfs".to_string());
+            detect_disks_sysfs()?
+        }
+    };
+
+    Ok(prefer_fixed_disks(disks))
+}
+
+/// Drop USB-attached disks from the candidate list whenever at least one fixed
+/// (non-USB) disk is available. A USB stick is removable and usually slow — it
+/// should only be an installation target as a LAST RESORT, when the machine has
+/// no internal NVMe/SATA/etc. storage to install onto instead. Applying this at
+/// the single detection chokepoint means both the manual TUI list and Easy
+/// mode's automatic "largest group" pick only ever see USB drives when nothing
+/// fixed exists. The disk the system booted from is already excluded upstream
+/// (`read_boot_disks`); this governs the OTHER USB drives a user may have
+/// plugged in. When every candidate is USB the list is returned unchanged so the
+/// install can still proceed on removable media.
+fn prefer_fixed_disks(disks: Vec<DiskSpec>) -> Vec<DiskSpec> {
+    use crate::engine::real_ops::cmd_log_append;
+
+    let has_fixed = disks.iter().any(|d| d.transport != "usb");
+    if !has_fixed {
+        return disks;
     }
 
-    detect_disks_sysfs()
+    let (fixed, usb): (Vec<DiskSpec>, Vec<DiskSpec>) =
+        disks.into_iter().partition(|d| d.transport != "usb");
+    for d in &usb {
+        cmd_log_append(format!(
+            "  demote {} (USB; fixed disk(s) present — USB is last-resort only)",
+            d.device
+        ));
+    }
+    fixed
 }
 
 /// Detect disks via UDisks2 dbus (org.freedesktop.UDisks2).
@@ -860,5 +895,43 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
 
         let _cleanup = fs::remove_dir_all(&tmp);
         Ok(())
+    }
+
+    fn spec(device: &str, transport: &str) -> DiskSpec {
+        DiskSpec {
+            device: device.to_string(),
+            make: "Test".to_string(),
+            model: "Drive".to_string(),
+            size_bytes: 256_000_000_000,
+            serial: None,
+            transport: transport.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_prefer_fixed_disks_drops_usb_when_fixed_present() {
+        // A USB drive alongside internal NVMe/SATA: USB is dropped so it is never
+        // offered or auto-picked while fixed storage exists.
+        let disks = vec![
+            spec("/dev/nvme0n1", "nvme"),
+            spec("/dev/sda", "sata"),
+            spec("/dev/sdb", "usb"),
+        ];
+        let kept: Vec<String> = prefer_fixed_disks(disks)
+            .into_iter()
+            .map(|d| d.device)
+            .collect();
+        assert_eq!(kept, vec!["/dev/nvme0n1", "/dev/sda"]);
+    }
+
+    #[test]
+    fn test_prefer_fixed_disks_keeps_usb_when_only_usb() {
+        // No fixed storage at all — USB stays so the install can still proceed.
+        let disks = vec![spec("/dev/sdb", "usb"), spec("/dev/sdc", "usb")];
+        let kept: Vec<String> = prefer_fixed_disks(disks)
+            .into_iter()
+            .map(|d| d.device)
+            .collect();
+        assert_eq!(kept, vec!["/dev/sdb", "/dev/sdc"]);
     }
 }
