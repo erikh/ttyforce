@@ -70,6 +70,11 @@ enum Command {
         /// GRUB menu entry for sledgehammer wipe boot (e.g. "2")
         #[arg(long)]
         sledgehammer_grub_entry: Option<String>,
+        /// Raspberry Pi sledgehammer: trigger the wipe boot via the firmware
+        /// `tryboot` one-shot (`reboot "0 tryboot"`) instead of grub-reboot, since
+        /// the Pi has no GRUB. Takes precedence over --sledgehammer-grub-entry.
+        #[arg(long)]
+        sledgehammer_tryboot: bool,
         /// System users to import SSH keys for (comma-separated, e.g. "root,erikh")
         #[arg(long)]
         ssh_user: Option<String>,
@@ -109,9 +114,9 @@ fn main() {
                 ssh_user.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock, log } => {
+        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, sledgehammer_tryboot, ssh_user, mock, log } => {
             run_getty(GettyConfig {
-                etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, ssh_user, mock, log,
+                etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, sledgehammer_tryboot, ssh_user, mock, log,
             });
         }
     }
@@ -284,6 +289,7 @@ struct GettyConfig {
     quit: bool,
     initrd: bool,
     sledgehammer_grub_entry: Option<String>,
+    sledgehammer_tryboot: bool,
     ssh_user: Option<String>,
     mock: bool,
     log: bool,
@@ -295,6 +301,7 @@ fn run_getty(cfg: GettyConfig) {
     app.quit_enabled = cfg.quit;
     app.initrd_mode = cfg.initrd;
     app.sledgehammer_grub_entry = cfg.sledgehammer_grub_entry;
+    app.sledgehammer_tryboot = cfg.sledgehammer_tryboot;
     app.mock_mode = cfg.mock;
     app.show_full_log = cfg.log;
     if let Some(users) = cfg.ssh_user {

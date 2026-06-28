@@ -121,6 +121,10 @@ pub struct GettyApp {
     pub initrd_mode: bool,
     /// GRUB menu entry number for sledgehammer wipe boot.
     pub sledgehammer_grub_entry: Option<String>,
+    /// Raspberry Pi: trigger the sledgehammer wipe boot via the firmware `tryboot`
+    /// one-shot (`reboot "0 tryboot"`) instead of grub-reboot. Takes precedence
+    /// over `sledgehammer_grub_entry` when set.
+    pub sledgehammer_tryboot: bool,
     /// System users for SSH key import (from --ssh-user).
     pub ssh_users: Vec<String>,
     /// Whether the reconfigure submenu is active.
@@ -191,6 +195,7 @@ impl GettyApp {
             quit_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
+            sledgehammer_tryboot: false,
             ssh_users: Vec::new(),
             reconfigure_menu: false,
             ssh_input: None,
@@ -898,6 +903,23 @@ impl GettyApp {
     }
 
     fn execute_sledgehammer(&mut self, executor: &mut dyn OperationExecutor) {
+        // Raspberry Pi (no GRUB): use the firmware `tryboot` one-shot. `reboot
+        // "0 tryboot"` boots config.txt's [tryboot] section once, which selects
+        // cmdline_sledge.txt (adds town.sledgehammer); the firmware auto-reverts
+        // on the next boot. The wipe is then driven by town.sledgehammer on the
+        // kernel cmdline exactly as on the GRUB path.
+        if self.sledgehammer_tryboot {
+            cmd_log_append("sledgehammer: rebooting into Pi firmware tryboot (0 tryboot)".to_string());
+            if self.mock_mode {
+                cmd_log_append("  -> mock: skipping tryboot reboot".to_string());
+                return;
+            }
+            if let Err(e) = crate::engine::real_ops::run_cmd("reboot", &["0 tryboot"]) {
+                cmd_log_append(format!("  -> FAILED: reboot 0 tryboot: {}", e));
+            }
+            return;
+        }
+
         let entry = match &self.sledgehammer_grub_entry {
             Some(e) => e.clone(),
             None => {
@@ -1967,6 +1989,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_execute_sledgehammer_tryboot_mock() {
+        // Tryboot mode triggers the wipe boot with `reboot "0 tryboot"` directly
+        // (not through the executor). Mock mode must skip the real reboot, so no
+        // operations are recorded and the test host is never rebooted. Tryboot also
+        // takes precedence over a configured grub entry.
+        let mut app = test_app();
+        app.sledgehammer_tryboot = true;
+        app.sledgehammer_grub_entry = Some("2".to_string());
+        app.mock_mode = true;
+        let mut executor = MockExecutor::new(vec![]);
+        app.execute_action(&GettyAction::Sledgehammer, &mut executor);
+        assert!(executor.recorded_operations().is_empty());
+    }
+
     fn test_app() -> GettyApp {
         GettyApp {
             system_info: SystemInfo {
@@ -2005,6 +2042,7 @@ mod tests {
             quit_enabled: false,
             initrd_mode: false,
             sledgehammer_grub_entry: None,
+            sledgehammer_tryboot: false,
             ssh_users: Vec::new(),
             reconfigure_menu: false,
             ssh_input: None,
