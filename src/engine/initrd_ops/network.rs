@@ -280,8 +280,15 @@ pub fn configure_dhcp(interface: &str) -> OperationResult {
     );
 
     if result.is_success() {
-        // IP and route are both up — write resolv.conf from the lease now
+        // IP and route are both up — write resolv.conf from the lease now, then
+        // verify it actually resolves and repair it with the DHCP/gateway DNS if
+        // not. dhcpcd's resolvconf hook (bundled in the Town OS initrd) normally
+        // populates resolv.conf with the working DHCP DNS before this runs, but on
+        // networks that block public DNS the seeded public servers can survive; the
+        // test->modify->test step below makes sure curl (e.g. fetching GitHub SSH
+        // keys) ends up pointed at a resolver that actually works.
         write_resolv_conf_from_lease(interface);
+        ensure_working_resolver(interface);
     }
 
     result
@@ -584,6 +591,94 @@ fn write_resolv_conf_from_lease(interface: &str) {
         .collect();
     if let Err(e) = fs::write("/etc/resolv.conf", &fallback) {
         cmd_log_append(format!("  write resolv.conf failed: {}", e));
+    }
+}
+
+/// Read the `nameserver` entries currently in `/etc/resolv.conf`, in order.
+fn resolv_conf_nameservers() -> Vec<String> {
+    fs::read_to_string("/etc/resolv.conf")
+        .map(|c| all_nameservers(&c))
+        .unwrap_or_default()
+}
+
+/// Decide which resolvers `/etc/resolv.conf` should hold: keep `current` if it
+/// already resolves (per the injected `probe`), otherwise the `local` set
+/// (DHCP-offered DNS + default gateway) with `public` appended as trailing
+/// last-ditch entries.
+///
+/// The key property — and the reason this is its own pure function — is that when
+/// the current resolvers do NOT work, the result ALWAYS includes the local
+/// resolvers (the gateway in particular), and never collapses to "just the
+/// blocked public seed". On NAT/captive networks the gateway is the only resolver
+/// that works, so keeping the public-only seed (the old behavior) left curl
+/// unable to resolve anything. `probe` takes the nameserver strings so this is
+/// trivially unit-testable without real sockets.
+fn select_working_resolvers(
+    current: &[String],
+    local: &[String],
+    public: &[&str],
+    probe: impl Fn(&[String]) -> bool,
+) -> Vec<String> {
+    if !current.is_empty() && probe(current) {
+        return current.to_vec();
+    }
+    let mut out = local.to_vec();
+    for p in public {
+        if !out.iter().any(|n| n == p) {
+            out.push((*p).to_string());
+        }
+    }
+    out
+}
+
+/// Verify `/etc/resolv.conf` actually resolves and repair it if not: test ->
+/// (modify) -> test. Runs after [`write_resolv_conf_from_lease`], so the DHCP
+/// DNS (or dhcpcd's own resolvconf-hook write) is already in place; this is the
+/// safety net for networks where that ended up pointing at a blocked public
+/// resolver. Best-effort and side-effecting (reads/writes `/etc/resolv.conf`);
+/// the decision logic lives in the pure [`select_working_resolvers`].
+fn ensure_working_resolver(interface: &str) {
+    let timeout = std::time::Duration::from_secs(3);
+    // Probe: can these nameservers resolve our routability probe host? This
+    // mirrors exactly what curl needs (it resolves via /etc/resolv.conf).
+    let probe = |ns: &[String]| -> bool {
+        let socks: Vec<SocketAddr> =
+            ns.iter().filter_map(|n| parse_nameserver_socket(n)).collect();
+        !socks.is_empty() && resolve_via(&socks, ROUTABILITY_PROBE_HOST, timeout).is_ok()
+    };
+
+    cmd_log_append(format!(
+        "$ verify resolver: resolve {} via /etc/resolv.conf",
+        ROUTABILITY_PROBE_HOST
+    ));
+    let current = resolv_conf_nameservers();
+    let local = local_resolver_candidates(interface);
+    let chosen = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, probe);
+
+    if chosen == current {
+        cmd_log_append("  -> /etc/resolv.conf already resolves; leaving it".to_string());
+        return;
+    }
+
+    // Modify: the current resolvers didn't answer — rewrite with the DHCP/gateway
+    // resolvers (public trailing) so a working resolver is present.
+    cmd_log_append(format!(
+        "  -> current resolver(s) [{}] did not answer; repairing with [{}]",
+        current.join(" "),
+        chosen.join(" ")
+    ));
+    let content: String = chosen.iter().map(|ns| format!("nameserver {}\n", ns)).collect();
+    if let Err(e) = fs::write("/etc/resolv.conf", &content) {
+        cmd_log_append(format!("  repair resolv.conf failed: {}", e));
+        return;
+    }
+
+    // Test again: confirm the repaired set resolves, for the log/manifest.
+    let socks: Vec<SocketAddr> =
+        chosen.iter().filter_map(|n| parse_nameserver_socket(n)).collect();
+    match resolve_via(&socks, ROUTABILITY_PROBE_HOST, timeout) {
+        Ok(ip) => cmd_log_append(format!("  -> repaired resolver works ({})", ip)),
+        Err(e) => cmd_log_append(format!("  -> still no resolution after repair: {}", e)),
     }
 }
 
@@ -1638,6 +1733,53 @@ fe800000000000000000000000000001 \
                 "8.8.8.8".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_select_working_resolvers_keeps_current_when_it_resolves() {
+        // When the resolvers already in /etc/resolv.conf answer, keep them as-is.
+        let current = vec!["192.168.122.1".to_string()];
+        let local = vec!["192.168.122.1".to_string()];
+        let out = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, |_| true);
+        assert_eq!(out, current);
+    }
+
+    #[test]
+    fn test_select_working_resolvers_repairs_with_gateway_when_current_fails() {
+        // The blocked public seed is current; the gateway (local) is what works.
+        // The repaired list must lead with the gateway and keep public trailing.
+        let current = vec!["8.8.8.8".to_string()];
+        let local = vec!["192.168.122.1".to_string()];
+        // Probe succeeds only for a set that includes the gateway.
+        let out = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, |ns| {
+            ns.iter().any(|n| n == "192.168.122.1")
+        });
+        assert_eq!(out.first(), Some(&"192.168.122.1".to_string()));
+        let gw = out.iter().position(|n| n == "192.168.122.1").unwrap();
+        let pubp = out.iter().position(|n| n == "8.8.8.8").unwrap();
+        assert!(gw < pubp, "gateway must come before public fallback: {:?}", out);
+    }
+
+    #[test]
+    fn test_select_working_resolvers_never_retains_blocked_only() {
+        // Even when nothing resolves, the result must include the local (gateway)
+        // resolver and never collapse to just the blocked public seed.
+        let current = vec!["8.8.8.8".to_string()];
+        let local = vec!["192.168.122.1".to_string()];
+        let out = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, |_| false);
+        assert!(out.iter().any(|n| n == "192.168.122.1"), "must include gateway: {:?}", out);
+        assert_ne!(out, current, "must not retain the blocked-only seed");
+    }
+
+    #[test]
+    fn test_select_working_resolvers_empty_current_skips_probe_and_repairs() {
+        // No nameservers at all (empty resolv.conf): don't treat as "works";
+        // build the local+public set.
+        let current: Vec<String> = vec![];
+        let local = vec!["192.168.122.1".to_string()];
+        // Probe would return true, but empty current must NOT short-circuit.
+        let out = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, |_| true);
+        assert!(out.iter().any(|n| n == "192.168.122.1"), "must include gateway: {:?}", out);
     }
 
     #[test]
