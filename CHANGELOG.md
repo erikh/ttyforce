@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.10 (2026-06-30)
+
+### Fixes
+
+- initrd now verifies and repairs `/etc/resolv.conf` after DHCP so the GitHub
+  SSH-key fetch works on networks that block public DNS over UDP/53 (libvirt NAT,
+  captive/guest WiFi). On such networks the only working resolver is the
+  DHCP/gateway one, but when the lease's DNS could not be read back,
+  `write_resolv_conf_from_lease` retained the seeded public servers
+  (`8.8.8.8`/`1.1.1.1`) — which are blocked there — so `curl https://github.com/
+  <user>.keys` resolved nothing. After writing resolv.conf from the lease,
+  `configure_dhcp` now calls `ensure_working_resolver()`: it tests whether the
+  current nameservers actually resolve `example.com`, and if not, rewrites
+  resolv.conf from the local resolver candidates (DHCP DNS + default gateway)
+  with the public servers trailing, then re-tests. This guarantees the
+  gateway/DHCP resolver is present and the blocked public seed is never retained
+  on its own. The decision logic is a pure, mock-injectable
+  `select_working_resolvers()` with unit tests. Scope is the initrd path; the
+  booted system is handled separately by `town-os-resolved-bootstrap`
+
 ## 0.4.9 (2026-06-28)
 
 ### Features
