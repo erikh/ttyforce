@@ -14,7 +14,11 @@ impl RaidConfig {
             1 => vec![RaidConfig::Single],
             2 => vec![RaidConfig::Single, RaidConfig::BtrfsRaid1],
             _ => {
-                vec![RaidConfig::Single, RaidConfig::BtrfsRaid1, RaidConfig::BtrfsRaid5]
+                vec![
+                    RaidConfig::Single,
+                    RaidConfig::BtrfsRaid1,
+                    RaidConfig::BtrfsRaid5,
+                ]
             }
         }
     }
@@ -39,7 +43,9 @@ impl RaidConfig {
         match self {
             RaidConfig::Single => "All data on one drive. No redundancy. Full capacity available.",
             RaidConfig::BtrfsRaid1 => "Mirrored. Survives one drive failure. 50% usable capacity.",
-            RaidConfig::BtrfsRaid5 => "Striped with parity. Survives one drive failure. (N-1)/N usable capacity.",
+            RaidConfig::BtrfsRaid5 => {
+                "Striped with parity. Survives one drive failure. (N-1)/N usable capacity."
+            }
         }
     }
 

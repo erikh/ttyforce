@@ -88,8 +88,7 @@ impl TownApiClient {
     pub fn from_env(etc_prefix: Option<&str>) -> Self {
         let token = std::env::var("TTYFORCE_API_TOKEN").ok().or_else(|| {
             let paths = [
-                etc_prefix
-                    .map(|p| format!("{}/ttyforce/api-token", p)),
+                etc_prefix.map(|p| format!("{}/ttyforce/api-token", p)),
                 Some("/etc/ttyforce/api-token".to_string()),
             ];
             for path in paths.into_iter().flatten() {
@@ -169,10 +168,7 @@ impl TownApiClient {
             .map_err(|e| format!("read failed: {}", e))?;
 
         // Find the body after the HTTP headers (\r\n\r\n separator)
-        let body_start = response
-            .find("\r\n\r\n")
-            .map(|i| i + 4)
-            .unwrap_or(0);
+        let body_start = response.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
         let body = &response[body_start..];
 
         // Check for HTTP error status
@@ -220,10 +216,7 @@ impl TownApiClient {
             .read_to_string(&mut response)
             .map_err(|e| format!("read failed: {}", e))?;
 
-        let body_start = response
-            .find("\r\n\r\n")
-            .map(|i| i + 4)
-            .unwrap_or(0);
+        let body_start = response.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
         let body = &response[body_start..];
 
         if let Some(status_line) = response.lines().next() {
@@ -243,9 +236,7 @@ impl TownApiClient {
 /// Parse the JSON response from the /systemd/units endpoint into ServiceInfo structs.
 /// Handles both paginated format `{ "entries": [...] }` and bare array `[...]`.
 pub fn parse_units_json(body: &str) -> Result<Vec<ServiceInfo>, String> {
-    let units: Vec<RawUnit> = if let Ok(paginated) =
-        serde_json::from_str::<PaginatedUnits>(body)
-    {
+    let units: Vec<RawUnit> = if let Ok(paginated) = serde_json::from_str::<PaginatedUnits>(body) {
         paginated.entries
     } else {
         serde_json::from_str::<Vec<RawUnit>>(body).map_err(|e| {
@@ -326,19 +317,18 @@ pub fn format_detail_json(detail: &str) -> String {
 /// Response format: `{ "entries": [...], "has_more": bool, ... }`
 /// Each entry has: action, path, detail, success, error, created_at, account.
 pub fn parse_audit_log_json(body: &str) -> Result<Vec<AuditEntry>, String> {
-    let entries: Vec<RawAuditEntry> = if let Ok(paginated) =
-        serde_json::from_str::<PaginatedAuditLog>(body)
-    {
-        paginated.entries
-    } else {
-        serde_json::from_str::<Vec<RawAuditEntry>>(body).map_err(|e| {
-            if serde_json::from_str::<serde_json::Value>(body).is_ok() {
-                "expected entries array or JSON array".to_string()
-            } else {
-                format!("JSON parse error: {}", e)
-            }
-        })?
-    };
+    let entries: Vec<RawAuditEntry> =
+        if let Ok(paginated) = serde_json::from_str::<PaginatedAuditLog>(body) {
+            paginated.entries
+        } else {
+            serde_json::from_str::<Vec<RawAuditEntry>>(body).map_err(|e| {
+                if serde_json::from_str::<serde_json::Value>(body).is_ok() {
+                    "expected entries array or JSON array".to_string()
+                } else {
+                    format!("JSON parse error: {}", e)
+                }
+            })?
+        };
 
     let result = entries
         .into_iter()
@@ -437,7 +427,8 @@ mod tests {
 
     #[test]
     fn test_parse_units_json_lowercase_fields() -> Result<(), String> {
-        let json = r#"[{"name": "test.service", "active_state": "failed", "description": "A test"}]"#;
+        let json =
+            r#"[{"name": "test.service", "active_state": "failed", "description": "A test"}]"#;
         let services = parse_units_json(json)?;
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "test.service");
@@ -526,7 +517,8 @@ mod tests {
 
     #[test]
     fn test_parse_audit_log_skips_empty_action() -> Result<(), String> {
-        let json = r#"[{"action": "", "success": true}, {"action": "Real entry", "success": true}]"#;
+        let json =
+            r#"[{"action": "", "success": true}, {"action": "Real entry", "success": true}]"#;
         let entries = parse_audit_log_json(json)?;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].action, "Real entry");
@@ -557,7 +549,8 @@ mod tests {
 
     #[test]
     fn test_parse_audit_log_timestamp_with_timezone_offset() -> Result<(), String> {
-        let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00+05:00", "success": true}]"#;
+        let json =
+            r#"[{"action": "test", "created_at": "2024-01-15T12:00:00+05:00", "success": true}]"#;
         let entries = parse_audit_log_json(json)?;
         assert_eq!(entries[0].timestamp, "2024-01-15 12:00:00");
         assert_eq!(entries[0].action, "test");
@@ -566,7 +559,8 @@ mod tests {
 
     #[test]
     fn test_parse_audit_log_timestamp_with_negative_timezone_offset() -> Result<(), String> {
-        let json = r#"[{"action": "test", "created_at": "2024-01-15T12:00:00-05:00", "success": true}]"#;
+        let json =
+            r#"[{"action": "test", "created_at": "2024-01-15T12:00:00-05:00", "success": true}]"#;
         let entries = parse_audit_log_json(json)?;
         assert_eq!(entries[0].timestamp, "2024-01-15 12:00:00");
         Ok(())

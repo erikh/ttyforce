@@ -41,18 +41,21 @@ impl Screen for WifiPasswordScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // SSID banner
-                Constraint::Length(1),  // spacer
-                Constraint::Length(3),  // security info
-                Constraint::Length(1),  // spacer
-                Constraint::Length(3),  // password field
-                Constraint::Min(1),     // spacer / error
-                Constraint::Length(3),  // hints
+                Constraint::Length(3), // SSID banner
+                Constraint::Length(1), // spacer
+                Constraint::Length(3), // security info
+                Constraint::Length(1), // spacer
+                Constraint::Length(3), // password field
+                Constraint::Min(1),    // spacer / error
+                Constraint::Length(3), // hints
             ])
             .split(inner);
 
@@ -62,24 +65,21 @@ impl Screen for WifiPasswordScreen {
             .as_deref()
             .unwrap_or("<unknown network>");
 
-        let ssid_text = vec![
-            Line::from(vec![
-                Span::styled("Network: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    ssid,
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-        ];
+        let ssid_text = vec![Line::from(vec![
+            Span::styled("Network: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                ssid,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])];
 
-        let ssid_para = Paragraph::new(ssid_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
-            );
+        let ssid_para = Paragraph::new(ssid_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue)),
+        );
         f.render_widget(ssid_para, chunks[0]);
 
         // --- Security info ---
@@ -93,13 +93,16 @@ impl Screen for WifiPasswordScreen {
                     n.security_display(),
                     n.signal_display(),
                     n.signal_strength,
-                    if n.frequency_mhz >= 5000 { "5 GHz" } else { "2.4 GHz" }
+                    if n.frequency_mhz >= 5000 {
+                        "5 GHz"
+                    } else {
+                        "2.4 GHz"
+                    }
                 )
             })
             .unwrap_or_else(|| "Security: unknown".to_string());
 
-        let security_para = Paragraph::new(security_text)
-            .style(Style::default().fg(Color::Yellow));
+        let security_para = Paragraph::new(security_text).style(Style::default().fg(Color::Yellow));
         f.render_widget(security_para, chunks[2]);
 
         // --- Password field ---

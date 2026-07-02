@@ -93,13 +93,17 @@ fn test_workstation_select_crucial_btrfs_raid5() -> Result<(), String> {
             _ => None,
         })
         .collect();
-    assert_eq!(partitions, vec!["/dev/sda", "/dev/sdb", "/dev/sdc", "/dev/sdd"]);
+    assert_eq!(
+        partitions,
+        vec!["/dev/sda", "/dev/sdb", "/dev/sdc", "/dev/sdd"]
+    );
 
     // Should have btrfs raid setup
     let has_btrfs_raid = ops.iter().any(|r| match &r.operation {
-        Operation::BtrfsRaidSetup { devices, raid_level } => {
-            devices.len() == 4 && raid_level == "raid5"
-        }
+        Operation::BtrfsRaidSetup {
+            devices,
+            raid_level,
+        } => devices.len() == 4 && raid_level == "raid5",
         _ => false,
     });
     assert!(has_btrfs_raid);
@@ -155,9 +159,10 @@ fn test_workstation_select_wd_btrfs_mirror() -> Result<(), String> {
     assert_eq!(partitions, vec!["/dev/sde", "/dev/sdf"]);
 
     let has_btrfs_raid = ops.iter().any(|r| match &r.operation {
-        Operation::BtrfsRaidSetup { devices, raid_level } => {
-            devices.len() == 2 && raid_level == "raid1"
-        }
+        Operation::BtrfsRaidSetup {
+            devices,
+            raid_level,
+        } => devices.len() == 2 && raid_level == "raid1",
         _ => false,
     });
     assert!(has_btrfs_raid);

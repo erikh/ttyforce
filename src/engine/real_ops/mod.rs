@@ -55,10 +55,9 @@ pub fn execute(op: &Operation) -> OperationResult {
             ssid,
             password,
         } => network::configure_wifi_ssid_auth(interface, ssid, password),
-        Operation::ConfigureWifiQrCode {
-            interface,
-            qr_data,
-        } => network::configure_wifi_qr_code(interface, qr_data),
+        Operation::ConfigureWifiQrCode { interface, qr_data } => {
+            network::configure_wifi_qr_code(interface, qr_data)
+        }
         Operation::ConfigureDhcp { interface } => network::configure_dhcp(interface),
         Operation::SelectPrimaryInterface { interface } => {
             network::select_primary_interface(interface)
@@ -70,9 +69,7 @@ pub fn execute(op: &Operation) -> OperationResult {
             network::check_link_availability(interface)
         }
         Operation::CheckIpAddress { interface } => network::check_ip_address(interface),
-        Operation::CheckUpstreamRouter { interface } => {
-            network::check_upstream_router(interface)
-        }
+        Operation::CheckUpstreamRouter { interface } => network::check_upstream_router(interface),
         Operation::CheckInternetRoutability { interface } => {
             network::check_internet_routability(interface)
         }
@@ -134,12 +131,8 @@ pub fn execute(op: &Operation) -> OperationResult {
         } => crate::ssh::execute_import_ssh_keys(mount_point, system_user, github_username),
 
         // Cleanup
-        Operation::CleanupNetworkConfig { interface } => {
-            network::cleanup_network_config(interface)
-        }
-        Operation::CleanupWpaSupplicant { interface } => {
-            network::cleanup_wpa_supplicant(interface)
-        }
+        Operation::CleanupNetworkConfig { interface } => network::cleanup_network_config(interface),
+        Operation::CleanupWpaSupplicant { interface } => network::cleanup_wpa_supplicant(interface),
         Operation::CleanupUnmount { mount_point } => disk::cleanup_unmount(mount_point),
 
         // Getty operations
@@ -159,14 +152,11 @@ pub fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     };
     cmd_log_append(format!("$ {}", cmd_str));
 
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| {
-            let msg = format!("{}: {}", program, e);
-            cmd_log_append(format!("  error: {}", msg));
-            msg
-        })?;
+    let output = Command::new(program).args(args).output().map_err(|e| {
+        let msg = format!("{}: {}", program, e);
+        cmd_log_append(format!("  error: {}", msg));
+        msg
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -187,7 +177,10 @@ pub fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     }
 
     if output.status.success() {
-        cmd_log_append(format!("  -> ok (exit {})", output.status.code().unwrap_or(0)));
+        cmd_log_append(format!(
+            "  -> ok (exit {})",
+            output.status.code().unwrap_or(0)
+        ));
         Ok(stdout)
     } else {
         let code = output.status.code().unwrap_or(-1);
@@ -213,8 +206,12 @@ mod tests {
         let result = run_cmd("echo", &["unique_success_marker_42"]);
         assert!(result.is_ok());
         let log = cmd_log();
-        assert!(log.iter().any(|l| l.contains("$ echo unique_success_marker_42")));
-        assert!(log.iter().any(|l| l.contains("unique_success_marker_42") && !l.starts_with('$')));
+        assert!(log
+            .iter()
+            .any(|l| l.contains("$ echo unique_success_marker_42")));
+        assert!(log
+            .iter()
+            .any(|l| l.contains("unique_success_marker_42") && !l.starts_with('$')));
     }
 
     #[test]
@@ -231,8 +228,12 @@ mod tests {
         let result = run_cmd("nonexistent_command_xyz_99", &[]);
         assert!(result.is_err());
         let log = cmd_log();
-        assert!(log.iter().any(|l| l.contains("$ nonexistent_command_xyz_99")));
-        assert!(log.iter().any(|l| l.contains("error:") && l.contains("nonexistent_command_xyz_99")));
+        assert!(log
+            .iter()
+            .any(|l| l.contains("$ nonexistent_command_xyz_99")));
+        assert!(log
+            .iter()
+            .any(|l| l.contains("error:") && l.contains("nonexistent_command_xyz_99")));
     }
 
     #[test]

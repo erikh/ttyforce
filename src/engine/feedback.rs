@@ -67,7 +67,10 @@ impl OperationResult {
     pub fn to_outcome(&self) -> crate::manifest::OperationOutcome {
         if self.is_success() {
             crate::manifest::OperationOutcome::Success
-        } else if matches!(self, OperationResult::Timeout | OperationResult::WifiTimeout) {
+        } else if matches!(
+            self,
+            OperationResult::Timeout | OperationResult::WifiTimeout
+        ) {
             crate::manifest::OperationOutcome::Timeout
         } else {
             crate::manifest::OperationOutcome::Error(format!("{:?}", self))

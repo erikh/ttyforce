@@ -11,7 +11,9 @@ use super::{cmd_log_append, run_cmd};
 pub fn partition_disk(device: &str) -> OperationResult {
     if let Err(e) = run_cmd(
         "parted",
-        &["-s", device, "mklabel", "gpt", "mkpart", "primary", "1MiB", "100%"],
+        &[
+            "-s", device, "mklabel", "gpt", "mkpart", "primary", "1MiB", "100%",
+        ],
     ) {
         return OperationResult::Error(format!("failed to partition {}: {}", device, e));
     }
@@ -71,7 +73,12 @@ pub fn create_btrfs_subvolume(mount_point: &str, name: &str) -> OperationResult 
 
 /// Mount a filesystem at the given mount point, creating the directory if needed.
 /// For btrfs, runs `btrfs device scan` first so RAID members are discovered.
-pub fn mount_filesystem(device: &str, mount_point: &str, fs_type: &str, options: Option<&str>) -> OperationResult {
+pub fn mount_filesystem(
+    device: &str,
+    mount_point: &str,
+    fs_type: &str,
+    options: Option<&str>,
+) -> OperationResult {
     if let Err(e) = fs::create_dir_all(mount_point) {
         return OperationResult::Error(format!(
             "failed to create mount point {}: {}",
@@ -137,14 +144,8 @@ pub fn generate_fstab(mount_point: &str, device: &str, fs_type: &str) -> Operati
     // Use a relative symlink so it survives pivot_root — the wants dir
     // is one level below the unit dir, so "../<service>" resolves correctly
     // regardless of how /etc is mounted (overlay, bind, etc.).
-    if let Err(e) = std::os::unix::fs::symlink(
-        format!("../{}", service_name),
-        &symlink_path,
-    ) {
-        return OperationResult::Error(format!(
-            "failed to enable {}: {}",
-            service_name, e
-        ));
+    if let Err(e) = std::os::unix::fs::symlink(format!("../{}", service_name), &symlink_path) {
+        return OperationResult::Error(format!("failed to enable {}: {}", service_name, e));
     }
 
     OperationResult::Success
@@ -197,7 +198,10 @@ mod tests {
         assert!(content.contains("/dev/sda1"), "missing device");
         assert!(content.contains("/town-os"), "missing mount point");
         assert!(content.contains("subvol=@"), "missing subvol option");
-        assert!(content.contains("Before=local-fs.target multi-user.target"), "missing ordering");
+        assert!(
+            content.contains("Before=local-fs.target multi-user.target"),
+            "missing ordering"
+        );
         assert!(content.contains("btrfs device scan"), "missing device scan");
         assert!(content.contains("mkdir -p /town-os"), "missing mkdir");
         assert!(

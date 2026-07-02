@@ -207,7 +207,11 @@ mod tests {
             make_disk("/dev/sdb", "WD", "Blue", size_1tb_plus_5gb),
         ];
         let groups = DiskGroup::from_disks(&disks);
-        assert_eq!(groups.len(), 1, "similar-size same-transport disks should merge");
+        assert_eq!(
+            groups.len(),
+            1,
+            "similar-size same-transport disks should merge"
+        );
         assert_eq!(groups[0].disk_count(), 2);
         assert_eq!(groups[0].make, "Mixed");
     }
@@ -263,8 +267,16 @@ mod tests {
         let groups = DiskGroup::from_disks(&disks);
         assert_eq!(groups.len(), 1);
         let name = groups[0].display_name();
-        assert!(name.contains("Samsung 870 EVO"), "display should list models: {}", name);
-        assert!(name.contains("WD Blue"), "display should list models: {}", name);
+        assert!(
+            name.contains("Samsung 870 EVO"),
+            "display should list models: {}",
+            name
+        );
+        assert!(
+            name.contains("WD Blue"),
+            "display should list models: {}",
+            name
+        );
         assert!(name.contains("2x"), "display should show count: {}", name);
     }
 
@@ -277,7 +289,11 @@ mod tests {
             make_disk("/dev/sdc", "Crucial", "MX500", size + 2 * 1_073_741_824),
         ];
         let groups = DiskGroup::from_disks(&disks);
-        assert_eq!(groups.len(), 1, "three similar-size sata disks should merge");
+        assert_eq!(
+            groups.len(),
+            1,
+            "three similar-size sata disks should merge"
+        );
         assert_eq!(groups[0].disk_count(), 3);
     }
 

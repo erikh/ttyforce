@@ -36,39 +36,42 @@ impl Screen for RaidConfigScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // context: disk group + fs
-                Constraint::Min(4),     // option list
-                Constraint::Length(6),  // description panel
-                Constraint::Length(3),  // hints
+                Constraint::Length(3), // context: disk group + fs
+                Constraint::Min(4),    // option list
+                Constraint::Length(6), // description panel
+                Constraint::Length(3), // hints
             ])
             .split(inner);
 
         // --- Context header ---
-        let (group_summary, disk_count, total_bytes) =
-            if let Some(idx) = state.selected_disk_group {
-                if let Some(group) = state.disk_groups.get(idx) {
-                    (
-                        format!(
-                            "{} {}  ×{}  {}",
-                            group.make,
-                            group.model,
-                            group.disk_count(),
-                            group.total_human()
-                        ),
+        let (group_summary, disk_count, total_bytes) = if let Some(idx) = state.selected_disk_group
+        {
+            if let Some(group) = state.disk_groups.get(idx) {
+                (
+                    format!(
+                        "{} {}  ×{}  {}",
+                        group.make,
+                        group.model,
                         group.disk_count(),
-                        group.total_bytes(),
-                    )
-                } else {
-                    ("No group selected".to_string(), 0, 0)
-                }
+                        group.total_human()
+                    ),
+                    group.disk_count(),
+                    group.total_bytes(),
+                )
             } else {
                 ("No group selected".to_string(), 0, 0)
-            };
+            }
+        } else {
+            ("No group selected".to_string(), 0, 0)
+        };
 
         let context_text = format!(
             "Disks: {}   Filesystem: {}",
@@ -115,9 +118,10 @@ impl Screen for RaidConfigScreen {
             .collect();
 
         let list = if items.is_empty() {
-            let empty =
-                vec![ListItem::new("  No RAID options available (no disks selected).")
-                    .style(Style::default().fg(Color::DarkGray))];
+            let empty = vec![
+                ListItem::new("  No RAID options available (no disks selected).")
+                    .style(Style::default().fg(Color::DarkGray)),
+            ];
             List::new(empty)
         } else {
             List::new(items)
@@ -155,10 +159,8 @@ impl Screen for RaidConfigScreen {
                 .wrap(Wrap { trim: true });
             f.render_widget(err_widget, chunks[3]);
         } else {
-            let hints = Paragraph::new(
-                "Enter/Space: select  ↑/↓: move  Esc: back  q: quit",
-            )
-            .style(Style::default().fg(Color::DarkGray));
+            let hints = Paragraph::new("Enter/Space: select  ↑/↓: move  Esc: back  q: quit")
+                .style(Style::default().fg(Color::DarkGray));
             f.render_widget(hints, chunks[3]);
         }
     }

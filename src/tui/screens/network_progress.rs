@@ -29,7 +29,10 @@ fn ethernet_steps() -> Vec<(NetworkState, &'static str)> {
         (NetworkState::DhcpConfiguring, "Configuring DHCP"),
         (NetworkState::IpAssigned, "IP address assigned"),
         (NetworkState::CheckingRouter, "Checking upstream router"),
-        (NetworkState::CheckingInternet, "Checking internet routability"),
+        (
+            NetworkState::CheckingInternet,
+            "Checking internet routability",
+        ),
         (NetworkState::CheckingDns, "Checking DNS resolution"),
         (NetworkState::Online, "Online"),
     ]
@@ -45,7 +48,10 @@ fn wifi_steps() -> Vec<(NetworkState, &'static str)> {
         (NetworkState::DhcpConfiguring, "Configuring DHCP"),
         (NetworkState::IpAssigned, "IP address assigned"),
         (NetworkState::CheckingRouter, "Checking upstream router"),
-        (NetworkState::CheckingInternet, "Checking internet routability"),
+        (
+            NetworkState::CheckingInternet,
+            "Checking internet routability",
+        ),
         (NetworkState::CheckingDns, "Checking DNS resolution"),
         (NetworkState::Online, "Online"),
     ]
@@ -69,24 +75,24 @@ impl Screen for NetworkProgressScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),  // interface / ssid summary
-                Constraint::Min(8),     // step list
-                Constraint::Length(4),  // status block
-                Constraint::Length(3),  // hints
+                Constraint::Length(2), // interface / ssid summary
+                Constraint::Min(8),    // step list
+                Constraint::Length(4), // status block
+                Constraint::Length(3), // hints
             ])
             .split(inner);
 
         // --- Interface / SSID summary ---
-        let is_waiting_for_carrier =
-            matches!(state.network_state, NetworkState::WaitingForCarrier);
-        let iface_label_owned = if is_waiting_for_carrier
-            && !state.carrier_candidates.is_empty()
-        {
+        let is_waiting_for_carrier = matches!(state.network_state, NetworkState::WaitingForCarrier);
+        let iface_label_owned = if is_waiting_for_carrier && !state.carrier_candidates.is_empty() {
             state.carrier_candidates.join(", ")
         } else {
             state
@@ -105,13 +111,16 @@ impl Screen for NetworkProgressScreen {
             "Interface"
         };
         let iface_text = format!("{}: {}{}", label_prefix, iface_label_owned, ssid_part);
-        let iface_para = Paragraph::new(iface_text)
-            .style(Style::default().fg(Color::Yellow));
+        let iface_para = Paragraph::new(iface_text).style(Style::default().fg(Color::Yellow));
         f.render_widget(iface_para, chunks[0]);
 
         // --- Step list ---
         let is_wifi = state.selected_ssid.is_some();
-        let steps = if is_wifi { wifi_steps() } else { ethernet_steps() };
+        let steps = if is_wifi {
+            wifi_steps()
+        } else {
+            ethernet_steps()
+        };
         let is_error = matches!(&state.network_state, NetworkState::Error(_));
         let current_rank = state_rank(&state.network_state, &steps);
 
@@ -120,10 +129,7 @@ impl Screen for NetworkProgressScreen {
             .enumerate()
             .map(|(i, (_, label))| {
                 let (symbol, style) = match current_rank {
-                    Some(rank) if i < rank => (
-                        "✓",
-                        Style::default().fg(Color::Green),
-                    ),
+                    Some(rank) if i < rank => ("✓", Style::default().fg(Color::Green)),
                     Some(rank) if i == rank && !is_error => (
                         "▶",
                         Style::default()
@@ -134,10 +140,7 @@ impl Screen for NetworkProgressScreen {
                         "✗",
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     ),
-                    _ => (
-                        "○",
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    _ => ("○", Style::default().fg(Color::DarkGray)),
                 };
                 ListItem::new(format!("  {}  {}", symbol, label)).style(style)
             })
@@ -161,7 +164,9 @@ impl Screen for NetworkProgressScreen {
                 .unwrap_or_else(|| "unknown".to_string());
             (
                 format!("Status: Online   IP: {}", ip),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
             )
         } else if let NetworkState::Error(msg) = &state.network_state {
             (
@@ -194,8 +199,7 @@ impl Screen for NetworkProgressScreen {
             "Waiting for network...  Esc: cancel  q: quit"
         };
 
-        let hints = Paragraph::new(hint_text)
-            .style(Style::default().fg(Color::DarkGray));
+        let hints = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
         f.render_widget(hints, chunks[3]);
     }
 }

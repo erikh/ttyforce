@@ -36,7 +36,10 @@ impl Screen for RebootScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -71,19 +74,21 @@ impl Screen for RebootScreen {
                 "Installation Failed",
                 // body is built below — we need to own it
                 "",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             InstallerFinalState::Rebooted => (
                 "Rebooting...",
                 "The system is rebooting now.",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             InstallerFinalState::Exited => (
                 "Exiting...",
                 "Returning to the shell.",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         };
 
@@ -140,7 +145,9 @@ impl Screen for RebootScreen {
 
         let reboot_label = match &state.action_manifest.final_state {
             InstallerFinalState::Installed => "  [ Reboot Now ]  ",
-            InstallerFinalState::Aborted | InstallerFinalState::Error(_) => "  [ Reboot / Retry ]  ",
+            InstallerFinalState::Aborted | InstallerFinalState::Error(_) => {
+                "  [ Reboot / Retry ]  "
+            }
             InstallerFinalState::Rebooted | InstallerFinalState::Exited => "  [ Reboot ]  ",
         };
 
@@ -162,10 +169,8 @@ impl Screen for RebootScreen {
         f.render_widget(abort_btn, button_chunks[2]);
 
         // --- Hints ---
-        let hints = Paragraph::new(
-            "Tab/←/→: switch button  Enter: confirm  q: quit",
-        )
-        .style(Style::default().fg(Color::DarkGray));
+        let hints = Paragraph::new("Tab/←/→: switch button  Enter: confirm  q: quit")
+            .style(Style::default().fg(Color::DarkGray));
         f.render_widget(hints, chunks[2]);
     }
 }

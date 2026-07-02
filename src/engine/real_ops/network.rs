@@ -58,8 +58,7 @@ pub fn scan_wifi_networks(interface: &str) -> OperationResult {
             match run_cmd("iwlist", &[interface, "scan"]) {
                 Ok(output) => {
                     let specs = parse_iwlist_scan(&output);
-                    let networks: Vec<WifiNetwork> =
-                        specs.iter().map(WifiNetwork::from).collect();
+                    let networks: Vec<WifiNetwork> = specs.iter().map(WifiNetwork::from).collect();
                     OperationResult::WifiScanResults(networks)
                 }
                 Err(_) => {
@@ -119,8 +118,9 @@ pub fn authenticate_wifi(interface: &str, ssid: &str, password: &str) -> Operati
             );
 
             if let Ok(reply) = add_result {
-                if let Ok(network_path) =
-                    reply.body().deserialize::<zbus::zvariant::OwnedObjectPath>()
+                if let Ok(network_path) = reply
+                    .body()
+                    .deserialize::<zbus::zvariant::OwnedObjectPath>()
                 {
                     // SelectNetwork
                     let select_result = conn.call_method(
@@ -154,10 +154,7 @@ pub fn authenticate_wifi(interface: &str, ssid: &str, password: &str) -> Operati
     }
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    match run_cmd(
-        "wpa_supplicant",
-        &["-B", "-i", interface, "-c", &conf_path],
-    ) {
+    match run_cmd("wpa_supplicant", &["-B", "-i", interface, "-c", &conf_path]) {
         Ok(_) => {
             std::thread::sleep(std::time::Duration::from_secs(3));
             OperationResult::WifiAuthenticated
@@ -310,7 +307,10 @@ fn configure_dhcp_with(
     }
 
     if check_route(interface) {
-        cmd_log_append(format!("  -> {} default route already installed", interface));
+        cmd_log_append(format!(
+            "  -> {} default route already installed",
+            interface
+        ));
         return OperationResult::Success;
     }
     for attempt in 1..=route_attempts {
@@ -373,10 +373,9 @@ fn try_trigger_dhcp(interface: &str) -> OperationResult {
     // Reconfigure the link to apply DHCP
     match run_cmd("networkctl", &["reconfigure", interface]) {
         Ok(_) => OperationResult::Success,
-        Err(e) => OperationResult::Error(format!(
-            "DHCP configuration failed on {}: {}",
-            interface, e
-        )),
+        Err(e) => {
+            OperationResult::Error(format!("DHCP configuration failed on {}: {}", interface, e))
+        }
     }
 }
 
@@ -669,10 +668,9 @@ pub fn check_dns_resolution(_interface: &str, hostname: &str) -> OperationResult
                 OperationResult::DnsFailed(format!("no result for {}", hostname))
             }
         }
-        Err(e) => OperationResult::DnsFailed(format!(
-            "DNS resolution failed for {}: {}",
-            hostname, e
-        )),
+        Err(e) => {
+            OperationResult::DnsFailed(format!("DNS resolution failed for {}: {}", hostname, e))
+        }
     }
 }
 
@@ -695,8 +693,7 @@ fn resolve_via_resolved(
 
     // Parse the first address from the result
     type ResolvedAddresses = (Vec<(i32, i32, Vec<u8>)>, String, u64);
-    let (addresses, _canonical, _flags): ResolvedAddresses =
-        reply.body().deserialize().ok()?;
+    let (addresses, _canonical, _flags): ResolvedAddresses = reply.body().deserialize().ok()?;
 
     if let Some((_ifindex, family, addr_bytes)) = addresses.first() {
         let ip = match *family {
@@ -776,7 +773,9 @@ fn get_networkd_property(
 }
 
 /// Construct the wpa_supplicant dbus object path for an interface.
-fn wpa_supplicant_iface_path(interface: &str) -> Result<ObjectPath<'static>, zbus::zvariant::Error> {
+fn wpa_supplicant_iface_path(
+    interface: &str,
+) -> Result<ObjectPath<'static>, zbus::zvariant::Error> {
     let escaped: String = interface
         .chars()
         .map(|c| {
@@ -851,11 +850,7 @@ mod tests {
             TEST_ATTEMPTS,
             TEST_INTERVAL,
         );
-        assert!(
-            result.is_success(),
-            "expected Success, got {:?}",
-            result
-        );
+        assert!(result.is_success(), "expected Success, got {:?}", result);
     }
 
     #[test]
@@ -870,11 +865,7 @@ mod tests {
             5,
             TEST_INTERVAL,
         );
-        assert!(
-            result.is_success(),
-            "expected Success, got {:?}",
-            result
-        );
+        assert!(result.is_success(), "expected Success, got {:?}", result);
     }
 
     #[test]
@@ -1027,7 +1018,10 @@ mod tests {
         assert!(config.contains("Name=eth0"), "missing Name=eth0");
         assert!(config.contains("[Network]"), "missing [Network] section");
         assert!(config.contains("DHCP=yes"), "missing DHCP=yes");
-        assert!(config.contains("MulticastDNS=yes"), "missing MulticastDNS=yes");
+        assert!(
+            config.contains("MulticastDNS=yes"),
+            "missing MulticastDNS=yes"
+        );
         assert!(config.contains("[DHCPv4]"), "missing [DHCPv4]");
         assert!(config.contains("UseDNS=no"), "missing UseDNS=no");
     }
@@ -1050,9 +1044,15 @@ mod tests {
         assert!(result.contains("Name=eth0"), "missing Name=eth0");
         assert!(result.contains("[Network]"), "missing [Network]");
         assert!(result.contains("DHCP=yes"), "missing DHCP=yes");
-        assert!(result.contains("MulticastDNS=yes"), "missing MulticastDNS=yes");
+        assert!(
+            result.contains("MulticastDNS=yes"),
+            "missing MulticastDNS=yes"
+        );
         assert!(result.contains("[DHCPv4]"), "missing [DHCPv4]");
-        assert!(result.contains("RouteMetric=100"), "missing RouteMetric=100");
+        assert!(
+            result.contains("RouteMetric=100"),
+            "missing RouteMetric=100"
+        );
         assert!(result.contains("UseDNS=no"), "missing UseDNS=no");
     }
 
@@ -1061,7 +1061,10 @@ mod tests {
         let existing = "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n";
         let result = merge_primary_interface_config("eth0", existing);
         assert!(result.contains("[DHCPv4]"), "missing [DHCPv4]");
-        assert!(result.contains("RouteMetric=100"), "missing RouteMetric=100");
+        assert!(
+            result.contains("RouteMetric=100"),
+            "missing RouteMetric=100"
+        );
         assert!(result.contains("UseDNS=no"), "missing UseDNS=no");
         // Should preserve existing content
         assert!(result.contains("[Match]"));
@@ -1077,13 +1080,15 @@ mod tests {
             "RouteMetric should be inserted right after [DHCPv4], got:\n{}",
             result
         );
-        assert!(result.contains("UseDNS=true"), "should preserve existing keys");
+        assert!(
+            result.contains("UseDNS=true"),
+            "should preserve existing keys"
+        );
     }
 
     #[test]
     fn test_merge_primary_existing_dhcpv4_with_route_metric() {
-        let existing =
-            "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nRouteMetric=500\n";
+        let existing = "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nRouteMetric=500\n";
         let result = merge_primary_interface_config("eth0", existing);
         assert!(
             result.contains("RouteMetric=100"),
@@ -1100,7 +1105,11 @@ mod tests {
         let existing = "[Match]\nName=eth0\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\nRouteMetric=200\n";
         let result = merge_primary_interface_config("eth0", existing);
         let count = result.matches("[DHCPv4]").count();
-        assert_eq!(count, 1, "should have exactly one [DHCPv4] section, got {}", count);
+        assert_eq!(
+            count, 1,
+            "should have exactly one [DHCPv4] section, got {}",
+            count
+        );
     }
 
     #[test]

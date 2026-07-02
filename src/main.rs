@@ -7,9 +7,9 @@ use clap::{Parser, Subcommand};
 
 use ttyforce::engine::executor::{InitrdExecutor, RealExecutor, SimulatedResponse, TestExecutor};
 use ttyforce::engine::state_machine::InstallerStateMachine;
-use ttyforce::tui::GettyApp;
 use ttyforce::manifest::HardwareManifest;
 use ttyforce::tui::App;
+use ttyforce::tui::GettyApp;
 
 #[derive(Parser)]
 #[command(name = "ttyforce", about = "Town OS installer TUI")]
@@ -102,9 +102,20 @@ fn main() {
             run_output(cli.input.as_deref(), cli.output.as_deref());
         }
         Command::Run => {
-            run_installer(cli.input.as_deref(), cli.output.as_deref(), false, None, None, None);
+            run_installer(
+                cli.input.as_deref(),
+                cli.output.as_deref(),
+                false,
+                None,
+                None,
+                None,
+            );
         }
-        Command::Initrd { etc_prefix, tty, ssh_user } => {
+        Command::Initrd {
+            etc_prefix,
+            tty,
+            ssh_user,
+        } => {
             run_installer(
                 cli.input.as_deref(),
                 cli.output.as_deref(),
@@ -114,9 +125,29 @@ fn main() {
                 ssh_user.as_deref(),
             );
         }
-        Command::Getty { etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, sledgehammer_tryboot, ssh_user, mock, log } => {
+        Command::Getty {
+            etc_prefix,
+            tty,
+            console,
+            quit,
+            initrd,
+            sledgehammer_grub_entry,
+            sledgehammer_tryboot,
+            ssh_user,
+            mock,
+            log,
+        } => {
             run_getty(GettyConfig {
-                etc_prefix, tty, console, quit, initrd, sledgehammer_grub_entry, sledgehammer_tryboot, ssh_user, mock, log,
+                etc_prefix,
+                tty,
+                console,
+                quit,
+                initrd,
+                sledgehammer_grub_entry,
+                sledgehammer_tryboot,
+                ssh_user,
+                mock,
+                log,
             });
         }
     }

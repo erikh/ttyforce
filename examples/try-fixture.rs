@@ -13,11 +13,7 @@ fn main() {
             "Ethernet + 1 disk",
             "fixtures/hardware/ethernet_1disk.toml",
         ),
-        (
-            "3",
-            "WiFi + 1 disk",
-            "fixtures/hardware/wifi_1disk.toml",
-        ),
+        ("3", "WiFi + 1 disk", "fixtures/hardware/wifi_1disk.toml"),
         (
             "4",
             "WiFi (crowded neighborhood) + 1 disk",
@@ -101,9 +97,7 @@ fn main() {
         println!("Hardware manifest: {}", path);
         println!();
 
-        let status = Command::new("cargo")
-            .args(["run", "--", path])
-            .status();
+        let status = Command::new("cargo").args(["run", "--", path]).status();
 
         match status {
             Ok(s) if s.success() => {}

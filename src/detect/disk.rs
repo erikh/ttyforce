@@ -138,10 +138,7 @@ pub fn detect_disks() -> anyhow::Result<Vec<DiskSpec>> {
     // Try UDisks2 dbus first
     let disks = match detect_disks_udisks2() {
         Some(disks) if !disks.is_empty() => {
-            cmd_log_append(format!(
-                "  -> UDisks2 returned {} disk(s)",
-                disks.len()
-            ));
+            cmd_log_append(format!("  -> UDisks2 returned {} disk(s)", disks.len()));
             disks
         }
         Some(_) => {
@@ -239,8 +236,7 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
             let model = get_string_prop(drive_props, "Model").unwrap_or_default();
             let serial = get_string_prop(drive_props, "Serial");
             let size = get_u64_prop(drive_props, "Size").unwrap_or(0);
-            let connection_bus =
-                get_string_prop(drive_props, "ConnectionBus").unwrap_or_default();
+            let connection_bus = get_string_prop(drive_props, "ConnectionBus").unwrap_or_default();
 
             drive_info.insert(
                 path_str.to_string(),
@@ -301,30 +297,28 @@ fn detect_disks_udisks2() -> Option<Vec<DiskSpec>> {
         // Get drive reference and metadata
         let drive_path = get_string_prop(block_props, "Drive").unwrap_or_default();
 
-        let (make, model, serial, transport) =
-            if let Some(drive) = drive_info.get(&drive_path) {
-                let make = if drive.vendor.is_empty() {
-                    extract_vendor_from_model(&drive.model)
-                        .unwrap_or_else(|| "Unknown".to_string())
-                } else {
-                    drive.vendor.clone()
-                };
-                let model = if drive.model.is_empty() {
-                    "Unknown Model".to_string()
-                } else {
-                    drive.model.clone()
-                };
-                let transport = udisks2_bus_to_transport(&drive.connection_bus, dev_name);
-                (make, model, drive.serial.clone(), transport)
+        let (make, model, serial, transport) = if let Some(drive) = drive_info.get(&drive_path) {
+            let make = if drive.vendor.is_empty() {
+                extract_vendor_from_model(&drive.model).unwrap_or_else(|| "Unknown".to_string())
             } else {
-                let transport = transport_from_device_name(dev_name);
-                (
-                    "Unknown".to_string(),
-                    "Unknown Model".to_string(),
-                    None,
-                    transport,
-                )
+                drive.vendor.clone()
             };
+            let model = if drive.model.is_empty() {
+                "Unknown Model".to_string()
+            } else {
+                drive.model.clone()
+            };
+            let transport = udisks2_bus_to_transport(&drive.connection_bus, dev_name);
+            (make, model, drive.serial.clone(), transport)
+        } else {
+            let transport = transport_from_device_name(dev_name);
+            (
+                "Unknown".to_string(),
+                "Unknown Model".to_string(),
+                None,
+                transport,
+            )
+        };
 
         // Removability: read the kernel flag from sysfs by device name (the same
         // signal the sysfs detection path uses), so SD cards are flagged
@@ -370,18 +364,13 @@ fn get_string_prop(
 }
 
 /// Extract a u64 property from a dbus properties map.
-fn get_u64_prop(
-    props: &HashMap<String, zbus::zvariant::OwnedValue>,
-    key: &str,
-) -> Option<u64> {
+fn get_u64_prop(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<u64> {
     let value = props.get(key)?;
     value.try_to_owned().ok()?.try_into().ok()
 }
 
 /// Extract device path from UDisks2 PreferredDevice property (ay — null-terminated byte array).
-fn get_device_path(
-    props: &HashMap<String, zbus::zvariant::OwnedValue>,
-) -> Option<String> {
+fn get_device_path(props: &HashMap<String, zbus::zvariant::OwnedValue>) -> Option<String> {
     let value = props.get("PreferredDevice")?;
     let bytes: Vec<u8> = value.try_to_owned().ok()?.try_into().ok()?;
     // Strip null terminator
@@ -527,7 +516,8 @@ fn is_real_disk(name: &str) -> bool {
         || name.starts_with("vd")
         || name.starts_with("hd")
         || name.starts_with("xvd")    // Xen virtual disks
-        || name.starts_with("mmcblk")  // eMMC/SD cards
+        || name.starts_with("mmcblk")
+    // eMMC/SD cards
     {
         return true;
     }
@@ -612,9 +602,23 @@ fn read_disk_serial(dev_path: &Path, _name: &str) -> Option<String> {
 
 fn extract_vendor_from_model(model: &str) -> Option<String> {
     let known_vendors = [
-        "Samsung", "Western Digital", "WD", "Seagate", "Toshiba", "Kingston",
-        "Crucial", "Intel", "SK Hynix", "KIOXIA", "Micron", "SanDisk",
-        "Sabrent", "ADATA", "PNY", "Corsair", "Transcend",
+        "Samsung",
+        "Western Digital",
+        "WD",
+        "Seagate",
+        "Toshiba",
+        "Kingston",
+        "Crucial",
+        "Intel",
+        "SK Hynix",
+        "KIOXIA",
+        "Micron",
+        "SanDisk",
+        "Sabrent",
+        "ADATA",
+        "PNY",
+        "Corsair",
+        "Transcend",
     ];
     let model_upper = model.to_uppercase();
     for vendor in &known_vendors {
@@ -737,10 +741,7 @@ mod tests {
             extract_vendor_from_model("WD Blue SN570"),
             Some("WD".to_string())
         );
-        assert_eq!(
-            extract_vendor_from_model("UNKNOWN_DRIVE_XYZ"),
-            None
-        );
+        assert_eq!(extract_vendor_from_model("UNKNOWN_DRIVE_XYZ"), None);
     }
 
     #[test]
@@ -771,7 +772,10 @@ mod tests {
 
     #[test]
     fn test_parent_disk_of_dev() {
-        assert_eq!(parent_disk_of_dev("/dev/sda1"), Some("/dev/sda".to_string()));
+        assert_eq!(
+            parent_disk_of_dev("/dev/sda1"),
+            Some("/dev/sda".to_string())
+        );
         assert_eq!(parent_disk_of_dev("/dev/sda"), Some("/dev/sda".to_string()));
         assert_eq!(
             parent_disk_of_dev("/dev/nvme0n1p3"),
@@ -864,8 +868,7 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
     fn make_fake_disk(block_dir: &Path, name: &str, size_sectors: u64) -> Result<(), String> {
         let dev = block_dir.join(name);
         fs::create_dir_all(dev.join("device")).map_err(|e| e.to_string())?;
-        fs::write(dev.join("size"), format!("{}\n", size_sectors))
-            .map_err(|e| e.to_string())?;
+        fs::write(dev.join("size"), format!("{}\n", size_sectors)).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -881,7 +884,7 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
         make_fake_disk(&tmp, "nvme0n1", 209_715_200)?; // boot disk
         make_fake_disk(&tmp, "sda", 209_715_200)?; // internal SATA
         make_fake_disk(&tmp, "sdb", 209_715_200)?; // USB data drive
-        // A tiny NVMe namespace that must be dropped by the <1GB filter.
+                                                   // A tiny NVMe namespace that must be dropped by the <1GB filter.
         make_fake_disk(&tmp, "nvme0n2", 6_144)?;
 
         // The running system booted from nvme0n1 (as computed by read_boot_disks).
@@ -898,7 +901,10 @@ tmpfs /run tmpfs rw,nosuid,nodev 0 0
             "boot disk must be excluded, got {:?}",
             devices
         );
-        assert!(!devices.contains(&"/dev/nvme0n2"), "tiny disk must be dropped");
+        assert!(
+            !devices.contains(&"/dev/nvme0n2"),
+            "tiny disk must be dropped"
+        );
         assert_eq!(devices, vec!["/dev/sda", "/dev/sdb"]);
 
         let _cleanup = fs::remove_dir_all(&tmp);

@@ -21,9 +21,7 @@ pub fn detect_interfaces() -> anyhow::Result<Vec<NetworkInterfaceSpec>> {
         Some(_) => cmd_log_append(
             "  -> networkd returned no interfaces; falling back to sysfs".to_string(),
         ),
-        None => cmd_log_append(
-            "  -> networkd unavailable; falling back to sysfs".to_string(),
-        ),
+        None => cmd_log_append("  -> networkd unavailable; falling back to sysfs".to_string()),
     }
 
     detect_interfaces_sysfs()
@@ -230,18 +228,14 @@ fn detect_interface_kind(iface_path: &Path, name: &str) -> InterfaceKind {
     InterfaceKind::Ethernet
 }
 
-pub fn detect_wifi_environment(
-    interfaces: &[NetworkInterfaceSpec],
-) -> Option<WifiEnvironment> {
+pub fn detect_wifi_environment(interfaces: &[NetworkInterfaceSpec]) -> Option<WifiEnvironment> {
     let has_wifi = interfaces.iter().any(|i| i.kind == InterfaceKind::Wifi);
     if !has_wifi {
         cmd_log_append("  -> no wifi interface present, skipping scan".to_string());
         return None;
     }
 
-    let wifi_iface = interfaces
-        .iter()
-        .find(|i| i.kind == InterfaceKind::Wifi)?;
+    let wifi_iface = interfaces.iter().find(|i| i.kind == InterfaceKind::Wifi)?;
 
     cmd_log_append(format!("$ scan wifi networks on {}", wifi_iface.name));
     let networks = scan_wifi_networks(&wifi_iface.name).unwrap_or_default();
@@ -283,9 +277,7 @@ fn scan_wifi_networks(interface: &str) -> anyhow::Result<Vec<WifiNetworkSpec>> {
     }
 
     // Fallback: try iwlist
-    let output = Command::new("iwlist")
-        .args([interface, "scan"])
-        .output();
+    let output = Command::new("iwlist").args([interface, "scan"]).output();
 
     if let Ok(output) = output {
         if output.status.success() {
@@ -350,10 +342,7 @@ fn scan_wifi_wpa_supplicant_dbus(interface: &str) -> Option<Vec<WifiNetworkSpec>
 }
 
 /// Parse a single BSS dbus object into a WifiNetworkSpec.
-fn parse_bss_object(
-    conn: &zbus::blocking::Connection,
-    bss_path: &str,
-) -> Option<WifiNetworkSpec> {
+fn parse_bss_object(conn: &zbus::blocking::Connection, bss_path: &str) -> Option<WifiNetworkSpec> {
     let get_prop = |prop: &str| -> Option<zbus::zvariant::OwnedValue> {
         let reply = conn
             .call_method(
@@ -397,10 +386,7 @@ fn parse_bss_object(
 }
 
 /// Determine security type from BSS dbus properties.
-fn determine_bss_security(
-    conn: &zbus::blocking::Connection,
-    bss_path: &str,
-) -> WifiSecurity {
+fn determine_bss_security(conn: &zbus::blocking::Connection, bss_path: &str) -> WifiSecurity {
     // Check if RSN (WPA2/WPA3) is present
     let has_rsn = conn
         .call_method(

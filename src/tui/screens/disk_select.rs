@@ -35,15 +35,18 @@ impl Screen for DiskSelectScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // intro
-                Constraint::Min(5),     // group list
-                Constraint::Length(5),  // detail panel
-                Constraint::Length(3),  // hints
+                Constraint::Length(3), // intro
+                Constraint::Min(5),    // group list
+                Constraint::Length(5), // detail panel
+                Constraint::Length(3), // hints
             ])
             .split(inner);
 
@@ -68,10 +71,8 @@ impl Screen for DiskSelectScreen {
                 .map(|(i, group)| {
                     let count = group.disk_count();
                     let total = group.total_human();
-                    let label = format!(
-                        "  {} {}   ×{}   {}",
-                        group.make, group.model, count, total
-                    );
+                    let label =
+                        format!("  {} {}   ×{}   {}", group.make, group.model, count, total);
 
                     let style = if i == self.selected_index {
                         Style::default()
@@ -146,10 +147,8 @@ impl Screen for DiskSelectScreen {
                 .wrap(Wrap { trim: true });
             f.render_widget(err_widget, chunks[3]);
         } else {
-            let hints = Paragraph::new(
-                "Enter/Space: select group  ↑/↓: move  q: quit",
-            )
-            .style(Style::default().fg(Color::DarkGray));
+            let hints = Paragraph::new("Enter/Space: select group  ↑/↓: move  q: quit")
+                .style(Style::default().fg(Color::DarkGray));
             f.render_widget(hints, chunks[3]);
         }
     }

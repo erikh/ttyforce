@@ -59,11 +59,7 @@ fn integration_enable_interface() {
     let result = exec.execute(&Operation::EnableInterface {
         interface: iface.clone(),
     });
-    assert!(
-        result.is_success(),
-        "EnableInterface failed: {:?}",
-        result
-    );
+    assert!(result.is_success(), "EnableInterface failed: {:?}", result);
 
     // recorded
     assert_eq!(exec.recorded_operations().len(), 1);
@@ -165,7 +161,10 @@ fn integration_check_dns_resolution() {
         OperationResult::DnsFailed(msg) => {
             // dig/getent may not be able to resolve in a minimal container;
             // this is acceptable — the code path was exercised
-            eprintln!("DNS resolution failed (expected in minimal container): {}", msg);
+            eprintln!(
+                "DNS resolution failed (expected in minimal container): {}",
+                msg
+            );
         }
         other => panic!("unexpected result: {:?}", other),
     }
@@ -179,7 +178,11 @@ fn integration_shutdown_interface() {
     let result = exec.execute(&Operation::ShutdownInterface {
         interface: iface.clone(),
     });
-    assert!(result.is_success(), "ShutdownInterface failed: {:?}", result);
+    assert!(
+        result.is_success(),
+        "ShutdownInterface failed: {:?}",
+        result
+    );
 
     // bring it back up
     exec.execute(&Operation::EnableInterface {
@@ -434,7 +437,10 @@ fn integration_btrfs_subvolume() {
         Err(e) => {
             eprintln!("btrfs list failed: {}", e);
             // Cleanup before returning
-            if let Err(ue) = std::process::Command::new("umount").arg(mount_point).output() {
+            if let Err(ue) = std::process::Command::new("umount")
+                .arg(mount_point)
+                .output()
+            {
                 eprintln!("umount cleanup: {}", ue);
             }
             std::fs::remove_dir(mount_point).ok();
@@ -442,10 +448,17 @@ fn integration_btrfs_subvolume() {
         }
     };
     let output = String::from_utf8_lossy(&check.stdout);
-    assert!(output.contains("@test"), "subvolume not found in:\n{}", output);
+    assert!(
+        output.contains("@test"),
+        "subvolume not found in:\n{}",
+        output
+    );
 
     // Cleanup (best-effort)
-    if let Err(e) = std::process::Command::new("umount").arg(mount_point).output() {
+    if let Err(e) = std::process::Command::new("umount")
+        .arg(mount_point)
+        .output()
+    {
         eprintln!("umount cleanup: {}", e);
     }
     if let Err(e) = std::fs::remove_dir(mount_point) {
@@ -474,11 +487,7 @@ fn integration_btrfs_raid_setup() {
         devices: vec![devs[0].clone(), devs[1].clone()],
         raid_level: "raid1".into(),
     });
-    assert!(
-        result.is_success(),
-        "BtrfsRaidSetup failed: {:?}",
-        result
-    );
+    assert!(result.is_success(), "BtrfsRaidSetup failed: {:?}", result);
 }
 
 // ---------------------------------------------------------------------------
@@ -687,7 +696,11 @@ fn integration_initrd_check_ip_address_prefers_ipv4() {
     // dummy0 has both families; IPv4 is preferred when present.
     match &result {
         OperationResult::IpAssigned(ip) => {
-            assert_eq!(ip, "10.99.99.1", "expected IPv4 to be preferred, got {}", ip);
+            assert_eq!(
+                ip, "10.99.99.1",
+                "expected IPv4 to be preferred, got {}",
+                ip
+            );
         }
         other => panic!("expected IpAssigned, got {:?}", other),
     }
@@ -790,7 +803,10 @@ fn integration_initrd_check_dns_resolution() {
             assert!(!ip.is_empty(), "resolved to empty string");
         }
         OperationResult::DnsFailed(msg) => {
-            eprintln!("DNS resolution failed (acceptable in minimal container): {}", msg);
+            eprintln!(
+                "DNS resolution failed (acceptable in minimal container): {}",
+                msg
+            );
         }
         other => panic!("unexpected result: {:?}", other),
     }
@@ -877,7 +893,11 @@ fn integration_resolve_via_errors_when_all_dead() {
         "example.com",
         std::time::Duration::from_millis(200),
     );
-    assert!(result.is_err(), "expected error when all servers are dead, got {:?}", result);
+    assert!(
+        result.is_err(),
+        "expected error when all servers are dead, got {:?}",
+        result
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -955,6 +975,135 @@ fn integration_routability_falls_back_when_no_local_resolver() {
 }
 
 // ---------------------------------------------------------------------------
+// TCP :443 connectivity probe (tcp_connect_probe) + its routability tier
+//
+// The "berkeley" case: ICMP echo and outbound plaintext :53 are filtered, but
+// outbound :443 (the DoH path) works, and the advertised IPv6 is a black hole.
+// These exercise the real `TcpStream::connect_timeout` path against a loopback
+// listener, and drive the real tier ordering in check_internet_routability_inner
+// with that real probe, so a :443-reachable network reports online.
+// ---------------------------------------------------------------------------
+
+/// A loopback TCP listener standing in for a reachable public `:443` endpoint.
+/// Keep the returned listener alive for the duration of the test.
+fn spawn_tcp_listener() -> (std::net::TcpListener, std::net::SocketAddr) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind tcp listener");
+    let addr = l.local_addr().expect("listener local_addr");
+    (l, addr)
+}
+
+/// A loopback address with nothing listening: connect is refused, not hung.
+fn dead_tcp() -> std::net::SocketAddr {
+    "127.0.0.1:1".parse().expect("parse dead tcp addr")
+}
+
+#[test]
+fn integration_tcp_connect_probe_reachable_and_dead() {
+    let (_listener, addr) = spawn_tcp_listener();
+    assert!(
+        ttyforce::engine::initrd_ops::syscall::tcp_connect_probe(
+            addr.ip(),
+            addr.port(),
+            std::time::Duration::from_millis(500),
+        )
+        .is_ok(),
+        "probe to a live listener should succeed"
+    );
+
+    let dead = dead_tcp();
+    assert!(
+        ttyforce::engine::initrd_ops::syscall::tcp_connect_probe(
+            dead.ip(),
+            dead.port(),
+            std::time::Duration::from_millis(300),
+        )
+        .is_err(),
+        "probe to a dead port should fail, not hang"
+    );
+}
+
+#[test]
+fn integration_routability_reachable_via_tcp443_when_icmp_filtered() {
+    // Real :443 listener reachable; ICMP filtered and no IPv6 in the stack.
+    // Routability must be InternetReachable via the real TCP probe (the fix).
+    let (_listener, addr) = spawn_tcp_listener();
+    let result = ttyforce::engine::initrd_ops::network::check_internet_routability_inner(
+        "eth0",
+        // Ignore the anycast target; probe the live loopback listener that
+        // stands in for a reachable public :443.
+        |_ip| {
+            ttyforce::engine::initrd_ops::syscall::tcp_connect_probe(
+                addr.ip(),
+                addr.port(),
+                std::time::Duration::from_millis(500),
+            )
+        },
+        |_| Err("icmpv4 filtered".to_string()),
+        |_| false,
+        |_| Err("no v6".to_string()),
+    );
+    assert!(
+        matches!(result, OperationResult::InternetReachable),
+        "expected reachable via TCP :443, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn integration_routability_no_internet_when_all_probes_filtered() {
+    // Dead :443 (real connect failure), ICMP filtered, no v6 -> NoInternet.
+    let dead = dead_tcp();
+    let result = ttyforce::engine::initrd_ops::network::check_internet_routability_inner(
+        "eth0",
+        |_ip| {
+            ttyforce::engine::initrd_ops::syscall::tcp_connect_probe(
+                dead.ip(),
+                dead.port(),
+                std::time::Duration::from_millis(200),
+            )
+        },
+        |_| Err("icmpv4 filtered".to_string()),
+        |_| false,
+        |_| Err("no v6".to_string()),
+    );
+    assert!(matches!(result, OperationResult::NoInternet));
+}
+
+#[test]
+fn integration_routability_local_resolver_dead_then_reachable_via_tcp443() {
+    // Full path: the local resolver is dead (real UDP timeout) so
+    // routability_local_first falls through to the inner probe, which reaches
+    // the internet over real TCP :443. Composes both real socket paths — the
+    // exact berkeley shape (local DNS unanswered, ICMP filtered, :443 up).
+    let (_listener, addr) = spawn_tcp_listener();
+    let result = ttyforce::engine::initrd_ops::network::routability_local_first(
+        &[dead_dns()],
+        "example.com",
+        std::time::Duration::from_millis(200),
+        || {
+            ttyforce::engine::initrd_ops::network::check_internet_routability_inner(
+                "eth0",
+                |_ip| {
+                    ttyforce::engine::initrd_ops::syscall::tcp_connect_probe(
+                        addr.ip(),
+                        addr.port(),
+                        std::time::Duration::from_millis(500),
+                    )
+                },
+                |_| Err("icmpv4 filtered".to_string()),
+                |_| false,
+                |_| Err("no v6".to_string()),
+            )
+        },
+    );
+    assert!(
+        matches!(result, OperationResult::InternetReachable),
+        "expected reachable via local-dead -> TCP :443 fallback, got {:?}",
+        result
+    );
+}
+
+// ---------------------------------------------------------------------------
 // dhcpcd directory population (prepare_dhcpcd_dirs_in)
 //
 // In the initrd, ttyforce must create the run/lease directories dhcpcd needs
@@ -984,7 +1133,11 @@ fn integration_prepare_dhcpcd_dirs_creates_run_and_lease_dirs() {
     }
     // Every created path stays under the root — no absolute-join escape.
     assert_eq!(made.len(), 3);
-    assert!(made.iter().all(|p| p.starts_with(&root)), "paths escaped root: {:?}", made);
+    assert!(
+        made.iter().all(|p| p.starts_with(&root)),
+        "paths escaped root: {:?}",
+        made
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -993,8 +1146,7 @@ fn integration_prepare_dhcpcd_dirs_creates_run_and_lease_dirs() {
 fn integration_prepare_dhcpcd_dirs_is_idempotent() {
     let root = dhcpcd_dirs_temp_root("idempotent");
     // Running twice (e.g. a DHCP retry) must not fail on already-existing dirs.
-    ttyforce::engine::initrd_ops::network::prepare_dhcpcd_dirs_in(&root)
-        .expect("first prepare");
+    ttyforce::engine::initrd_ops::network::prepare_dhcpcd_dirs_in(&root).expect("first prepare");
     ttyforce::engine::initrd_ops::network::prepare_dhcpcd_dirs_in(&root)
         .expect("second prepare is idempotent");
     assert!(root.join("var/db/dhcpcd").is_dir());

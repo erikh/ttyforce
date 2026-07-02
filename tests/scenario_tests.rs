@@ -103,13 +103,11 @@ fn test_wifi_select_refresh() -> Result<(), String> {
         },
     ];
 
-    let mut executor = TestExecutor::new(vec![
-        SimulatedResponse {
-            operation_match: OperationMatcher::ByType("ScanWifiNetworks".to_string()),
-            result: OperationResult::WifiScanResults(new_networks.clone()),
-            consume: false,
-        },
-    ]);
+    let mut executor = TestExecutor::new(vec![SimulatedResponse {
+        operation_match: OperationMatcher::ByType("ScanWifiNetworks".to_string()),
+        result: OperationResult::WifiScanResults(new_networks.clone()),
+        consume: false,
+    }]);
 
     // Go to wifi select
     sm.process_input(UserInput::Confirm, &mut executor);
@@ -150,12 +148,17 @@ fn test_wifi_wrong_password() -> Result<(), String> {
     // Should stay on wifi password screen with error
     assert_eq!(sm.current_screen, ScreenId::WifiPassword);
     assert!(sm.error_message.is_some());
-    assert!(sm.error_message.as_ref().is_some_and(|m| m.contains("Authentication failed")));
+    assert!(sm
+        .error_message
+        .as_ref()
+        .is_some_and(|m| m.contains("Authentication failed")));
 
     // Verify auth error was recorded in action manifest
-    let has_auth_error = sm.action_manifest.operations.iter().any(|op| {
-        matches!(&op.operation, Operation::WifiAuthError { .. })
-    });
+    let has_auth_error = sm
+        .action_manifest
+        .operations
+        .iter()
+        .any(|op| matches!(&op.operation, Operation::WifiAuthError { .. }));
     assert!(has_auth_error);
     Ok(())
 }
@@ -181,12 +184,17 @@ fn test_wifi_signal_timeout() -> Result<(), String> {
     // Should go back to wifi select
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
     assert!(sm.error_message.is_some());
-    assert!(sm.error_message.as_ref().is_some_and(|m| m.contains("timed out")));
+    assert!(sm
+        .error_message
+        .as_ref()
+        .is_some_and(|m| m.contains("timed out")));
 
     // Verify timeout was recorded in action manifest
-    let has_timeout = sm.action_manifest.operations.iter().any(|op| {
-        matches!(&op.operation, Operation::WifiConnectionTimeout { .. })
-    });
+    let has_timeout = sm
+        .action_manifest
+        .operations
+        .iter()
+        .any(|op| matches!(&op.operation, Operation::WifiConnectionTimeout { .. }));
     assert!(has_timeout);
     Ok(())
 }
@@ -226,7 +234,11 @@ fn test_wifi_successful_connect_with_ip() -> Result<(), String> {
     assert!(sm.network_state.is_online());
 
     // Verify IP was assigned to interface
-    let wlan = sm.interfaces.iter().find(|i| i.name == "wlan0").ok_or("wlan0 interface not found")?;
+    let wlan = sm
+        .interfaces
+        .iter()
+        .find(|i| i.name == "wlan0")
+        .ok_or("wlan0 interface not found")?;
     assert_eq!(wlan.ip_address, Some("192.168.1.100".to_string()));
     Ok(())
 }
@@ -299,17 +311,25 @@ fn test_full_install_ethernet_4disk_btrfs_raid5() -> Result<(), String> {
     // Install
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::InstallProgress);
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Installed
+    );
 
     // Check that BtrfsRaidSetup was called
     let ops = executor.recorded_operations();
-    let has_btrfs_raid = ops.iter().any(|r| matches!(&r.operation, Operation::BtrfsRaidSetup { .. }));
+    let has_btrfs_raid = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::BtrfsRaidSetup { .. }));
     assert!(has_btrfs_raid);
 
     // Reboot
     sm.process_input(UserInput::Confirm, &mut executor);
     sm.process_input(UserInput::RebootSystem, &mut executor);
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Rebooted);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Rebooted
+    );
     Ok(())
 }
 
@@ -319,14 +339,25 @@ fn test_full_install_ethernet_1disk() -> Result<(), String> {
     let mut executor = success_executor();
     let sm = run_ethernet_single_disk_install(hw, &mut executor);
 
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Installed
+    );
 
     // Verify operations
     let ops = executor.recorded_operations();
-    let has_partition = ops.iter().any(|r| matches!(&r.operation, Operation::PartitionDisk { .. }));
-    let has_mkfs = ops.iter().any(|r| matches!(&r.operation, Operation::MkfsBtrfs { .. }));
-    let has_subvol = ops.iter().any(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }));
-    let has_install = ops.iter().any(|r| matches!(&r.operation, Operation::InstallBaseSystem { .. }));
+    let has_partition = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::PartitionDisk { .. }));
+    let has_mkfs = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::MkfsBtrfs { .. }));
+    let has_subvol = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::CreateBtrfsSubvolume { .. }));
+    let has_install = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::InstallBaseSystem { .. }));
     assert!(has_partition);
     assert!(has_mkfs);
     assert!(has_subvol);
@@ -362,7 +393,10 @@ fn test_full_install_wifi_1disk() -> Result<(), String> {
 
     // Confirm and install
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Installed
+    );
     Ok(())
 }
 
@@ -444,11 +478,18 @@ fn test_ethernet_already_connected_skips_dhcp() -> Result<(), String> {
     assert!(op_types.contains(&"EnableInterface"));
     assert!(op_types.contains(&"CheckLinkAvailability"));
     assert!(op_types.contains(&"CheckIpAddress"));
-    assert!(!op_types.contains(&"ConfigureDhcp"), "DHCP should be skipped when IP is already assigned");
+    assert!(
+        !op_types.contains(&"ConfigureDhcp"),
+        "DHCP should be skipped when IP is already assigned"
+    );
     assert!(op_types.contains(&"SelectPrimaryInterface"));
 
     // Verify the IP was stored
-    let iface = sm.interfaces.iter().find(|i| i.name == "eth0").ok_or("eth0 interface not found")?;
+    let iface = sm
+        .interfaces
+        .iter()
+        .find(|i| i.name == "eth0")
+        .ok_or("eth0 interface not found")?;
     assert_eq!(iface.ip_address.as_deref(), Some("192.168.1.50"));
     Ok(())
 }
@@ -499,7 +540,10 @@ fn test_ethernet_no_ip_runs_dhcp() -> Result<(), String> {
 
     assert!(op_types.contains(&"EnableInterface"));
     assert!(op_types.contains(&"CheckLinkAvailability"));
-    assert!(op_types.contains(&"ConfigureDhcp"), "DHCP should run when no IP is assigned");
+    assert!(
+        op_types.contains(&"ConfigureDhcp"),
+        "DHCP should run when no IP is assigned"
+    );
     assert!(op_types.contains(&"CheckIpAddress"));
     Ok(())
 }
@@ -602,7 +646,10 @@ fn test_wifi_qr_code_connection() -> Result<(), String> {
     assert_eq!(sm.current_screen, ScreenId::WifiSelect);
 
     // Use QR code to connect
-    let result = sm.connect_wifi_qr("WIFI:T:WPA;S:HomeNetwork;P:correctpassword;;".to_string(), &mut executor);
+    let result = sm.connect_wifi_qr(
+        "WIFI:T:WPA;S:HomeNetwork;P:correctpassword;;".to_string(),
+        &mut executor,
+    );
     assert_eq!(result, Some(ScreenId::NetworkProgress));
     while sm.advance_connectivity(&mut executor) {}
     assert!(sm.network_state.is_online());
@@ -809,7 +856,9 @@ fn test_abort_install() -> Result<(), String> {
 
     // Verify abort operation was recorded
     let ops = executor.recorded_operations();
-    let has_abort = ops.iter().any(|r| matches!(&r.operation, Operation::Abort { .. }));
+    let has_abort = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::Abort { .. }));
     assert!(has_abort);
     Ok(())
 }
@@ -822,10 +871,15 @@ fn test_reboot_after_install() -> Result<(), String> {
 
     // Reboot
     sm.process_input(UserInput::RebootSystem, &mut executor);
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Rebooted);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Rebooted
+    );
 
     let ops = executor.recorded_operations();
-    let has_reboot = ops.iter().any(|r| matches!(&r.operation, Operation::Reboot));
+    let has_reboot = ops
+        .iter()
+        .any(|r| matches!(&r.operation, Operation::Reboot));
     assert!(has_reboot);
     Ok(())
 }
@@ -1085,9 +1139,16 @@ fn test_abort_after_ethernet_cleanup_ops() -> Result<(), String> {
         .collect();
 
     // CleanupNetworkConfig should appear before Abort
-    let cleanup_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig")
-        .ok_or(format!("expected CleanupNetworkConfig in ops: {:?}", op_types))?;
-    let abort_idx = op_types.iter().position(|t| *t == "Abort")
+    let cleanup_idx = op_types
+        .iter()
+        .position(|t| *t == "CleanupNetworkConfig")
+        .ok_or(format!(
+            "expected CleanupNetworkConfig in ops: {:?}",
+            op_types
+        ))?;
+    let abort_idx = op_types
+        .iter()
+        .position(|t| *t == "Abort")
         .ok_or("expected Abort in ops")?;
     assert!(cleanup_idx < abort_idx);
     Ok(())
@@ -1122,14 +1183,23 @@ fn test_abort_after_wifi_cleanup_ops() -> Result<(), String> {
         .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
         .collect();
 
-    let abort_idx = op_types.iter().position(|t| *t == "Abort")
+    let abort_idx = op_types
+        .iter()
+        .position(|t| *t == "Abort")
         .ok_or("expected Abort in ops")?;
-    let wpa_idx = op_types.iter().position(|t| *t == "CleanupWpaSupplicant")
+    let wpa_idx = op_types
+        .iter()
+        .position(|t| *t == "CleanupWpaSupplicant")
         .ok_or("expected CleanupWpaSupplicant")?;
-    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig")
+    let net_idx = op_types
+        .iter()
+        .position(|t| *t == "CleanupNetworkConfig")
         .ok_or("expected CleanupNetworkConfig")?;
 
-    assert!(wpa_idx < net_idx, "wpa cleanup should come before networkd cleanup");
+    assert!(
+        wpa_idx < net_idx,
+        "wpa cleanup should come before networkd cleanup"
+    );
     assert!(net_idx < abort_idx, "cleanup should come before Abort");
     Ok(())
 }
@@ -1152,7 +1222,12 @@ fn test_abort_no_artifacts_no_cleanup() -> Result<(), String> {
         .collect();
 
     // Only Abort, no cleanup ops
-    assert_eq!(op_types, vec!["Abort"], "expected only Abort, got: {:?}", op_types);
+    assert_eq!(
+        op_types,
+        vec!["Abort"],
+        "expected only Abort, got: {:?}",
+        op_types
+    );
     Ok(())
 }
 
@@ -1182,13 +1257,25 @@ fn test_abort_after_install_unmounts() -> Result<(), String> {
         .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
         .collect();
 
-    let abort_idx = op_types.iter().position(|t| *t == "Abort")
+    let abort_idx = op_types
+        .iter()
+        .position(|t| *t == "Abort")
         .ok_or("expected Abort in ops")?;
-    let unmount_idx = op_types.iter().position(|t| *t == "CleanupUnmount")
+    let unmount_idx = op_types
+        .iter()
+        .position(|t| *t == "CleanupUnmount")
         .ok_or(format!("expected CleanupUnmount in ops: {:?}", op_types))?;
-    let net_idx = op_types.iter().position(|t| *t == "CleanupNetworkConfig")
-        .ok_or(format!("expected CleanupNetworkConfig in ops: {:?}", op_types))?;
-    assert!(unmount_idx < net_idx, "unmount should come before network cleanup");
+    let net_idx = op_types
+        .iter()
+        .position(|t| *t == "CleanupNetworkConfig")
+        .ok_or(format!(
+            "expected CleanupNetworkConfig in ops: {:?}",
+            op_types
+        ))?;
+    assert!(
+        unmount_idx < net_idx,
+        "unmount should come before network cleanup"
+    );
     assert!(net_idx < abort_idx, "cleanup should come before Abort");
     Ok(())
 }
@@ -1281,7 +1368,10 @@ fn test_advance_connectivity_router_max_retries_error() -> Result<(), String> {
 
     assert!(matches!(sm.network_state, NetworkState::Error(_)));
     assert!(sm.error_message.is_some());
-    assert!(sm.error_message.as_ref().is_some_and(|m| m.contains("router")));
+    assert!(sm
+        .error_message
+        .as_ref()
+        .is_some_and(|m| m.contains("router")));
     Ok(())
 }
 
@@ -1416,7 +1506,10 @@ fn test_install_never_targets_root_partition() -> Result<(), String> {
                 assert_ne!(target, "/", "install target must never be /");
             }
             Operation::GenerateFstab { mount_point, .. } => {
-                assert_ne!(mount_point, "/", "fstab must be written inside mount point, not /");
+                assert_ne!(
+                    mount_point, "/",
+                    "fstab must be written inside mount point, not /"
+                );
             }
             Operation::PersistNetworkConfig { mount_point, .. } => {
                 assert_ne!(mount_point, "/", "network config must never write to /etc");
@@ -1466,8 +1559,11 @@ fn test_persist_network_config_targets_etc_subvolume() -> Result<(), String> {
         .find(|op| matches!(&op.operation, Operation::PersistNetworkConfig { .. }));
     let op = persist_op.ok_or("PersistNetworkConfig operation missing from manifest")?;
     if let Operation::PersistNetworkConfig { mount_point, .. } = &op.operation {
-        assert_eq!(mount_point, "/town-os/@etc",
-            "PersistNetworkConfig should write to @etc subvolume, got: {}", mount_point);
+        assert_eq!(
+            mount_point, "/town-os/@etc",
+            "PersistNetworkConfig should write to @etc subvolume, got: {}",
+            mount_point
+        );
     } else {
         return Err("expected PersistNetworkConfig operation".to_string());
     }
@@ -1487,8 +1583,11 @@ fn test_generate_fstab_targets_etc_subvolume() -> Result<(), String> {
         .find(|op| matches!(&op.operation, Operation::GenerateFstab { .. }));
     let op = fstab_op.ok_or("GenerateFstab operation missing from manifest")?;
     if let Operation::GenerateFstab { mount_point, .. } = &op.operation {
-        assert_eq!(mount_point, "/town-os/@etc",
-            "GenerateFstab should write to @etc subvolume, got: {}", mount_point);
+        assert_eq!(
+            mount_point, "/town-os/@etc",
+            "GenerateFstab should write to @etc subvolume, got: {}",
+            mount_point
+        );
     } else {
         return Err("expected GenerateFstab operation".to_string());
     }
@@ -1509,7 +1608,10 @@ fn test_cleanup_unmount_after_successful_install() -> Result<(), String> {
     sm.process_input(UserInput::SelectDiskGroup(0), &mut executor);
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
 
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Installed
+    );
 
     // Verify CleanupUnmount was emitted after install
     let op_types: Vec<&str> = sm
@@ -1526,9 +1628,13 @@ fn test_cleanup_unmount_after_successful_install() -> Result<(), String> {
     );
 
     // The final CleanupUnmount should come after InstallBaseSystem
-    let install_pos = op_types.iter().position(|t| *t == "InstallBaseSystem")
+    let install_pos = op_types
+        .iter()
+        .position(|t| *t == "InstallBaseSystem")
         .ok_or("expected InstallBaseSystem in ops")?;
-    let unmount_pos = op_types.iter().rposition(|t| *t == "CleanupUnmount")
+    let unmount_pos = op_types
+        .iter()
+        .rposition(|t| *t == "CleanupUnmount")
         .ok_or("expected CleanupUnmount in ops")?;
     assert!(
         unmount_pos > install_pos,
@@ -1764,8 +1870,14 @@ fn test_wps_full_install_flow() -> Result<(), String> {
         .iter()
         .map(|op| ttyforce::engine::executor::operation_type_name(&op.operation))
         .collect();
-    assert!(op_types.contains(&"WpsPbcStart"), "manifest should contain WpsPbcStart");
-    assert!(op_types.contains(&"WpsPbcStatus"), "manifest should contain WpsPbcStatus");
+    assert!(
+        op_types.contains(&"WpsPbcStart"),
+        "manifest should contain WpsPbcStart"
+    );
+    assert!(
+        op_types.contains(&"WpsPbcStatus"),
+        "manifest should contain WpsPbcStatus"
+    );
     Ok(())
 }
 
@@ -1920,11 +2032,10 @@ fn test_install_mode_easy_no_ethernet_hardware_drops_to_network_config() -> Resu
     assert!(sm.selected_interface.is_none());
     assert!(sm.carrier_candidates.is_empty());
     assert!(sm.carrier_wait_start.is_none());
-    assert!(
-        sm.error_message
-            .as_deref()
-            .is_some_and(|m| m.contains("ethernet"))
-    );
+    assert!(sm
+        .error_message
+        .as_deref()
+        .is_some_and(|m| m.contains("ethernet")));
     Ok(())
 }
 
@@ -2011,8 +2122,7 @@ fn test_install_mode_easy_carrier_wait_times_out_to_network_config() -> Result<(
     assert_eq!(sm.network_state, NetworkState::WaitingForCarrier);
 
     // Fast-forward the deadline past the 30s window.
-    sm.carrier_wait_start =
-        Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    sm.carrier_wait_start = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
     sm.advance_connectivity(&mut executor);
 
     assert_eq!(sm.current_screen, ScreenId::NetworkConfig);
@@ -2020,11 +2130,10 @@ fn test_install_mode_easy_carrier_wait_times_out_to_network_config() -> Result<(
     assert!(sm.carrier_candidates.is_empty());
     assert!(sm.carrier_wait_start.is_none());
     assert!(sm.selected_interface.is_none());
-    assert!(
-        sm.error_message
-            .as_deref()
-            .is_some_and(|m| m.contains("wired"))
-    );
+    assert!(sm
+        .error_message
+        .as_deref()
+        .is_some_and(|m| m.contains("wired")));
     // Poll candidates were brought down so the user's manual pick
     // isn't racing them.
     let shutdown_ops = executor
@@ -2046,13 +2155,15 @@ fn test_install_mode_easy_polls_every_ethernet_candidate() -> Result<(), String>
     // Two ethernet interfaces present, both starting without carrier.
     // Easy mode should enable both and poll both.
     let mut hw = load_hardware("wifi_dead_ethernet_1disk")?;
-    hw.network.interfaces.push(ttyforce::manifest::NetworkInterfaceSpec {
-        name: "eth1".to_string(),
-        kind: ttyforce::manifest::InterfaceKind::Ethernet,
-        mac: "aa:bb:cc:11:22:33".to_string(),
-        has_link: false,
-        has_carrier: false,
-    });
+    hw.network
+        .interfaces
+        .push(ttyforce::manifest::NetworkInterfaceSpec {
+            name: "eth1".to_string(),
+            kind: ttyforce::manifest::InterfaceKind::Ethernet,
+            mac: "aa:bb:cc:11:22:33".to_string(),
+            has_link: false,
+            has_carrier: false,
+        });
     let mut sm = InstallerStateMachine::new_with_mode_select(hw);
     let mut executor = TestExecutor::new(vec![SimulatedResponse {
         operation_match: OperationMatcher::ByType("CheckLinkAvailability".to_string()),
@@ -2065,7 +2176,10 @@ fn test_install_mode_easy_polls_every_ethernet_candidate() -> Result<(), String>
         &mut executor,
     );
     assert_eq!(sm.network_state, NetworkState::WaitingForCarrier);
-    assert_eq!(sm.carrier_candidates, vec!["eth0".to_string(), "eth1".to_string()]);
+    assert_eq!(
+        sm.carrier_candidates,
+        vec!["eth0".to_string(), "eth1".to_string()]
+    );
 
     // One tick polls both candidates.
     sm.advance_connectivity(&mut executor);
@@ -2176,7 +2290,10 @@ fn test_install_mode_easy_full_install_flow() -> Result<(), String> {
 
     sm.process_input(UserInput::ConfirmInstall, &mut executor);
     assert_eq!(sm.current_screen, ScreenId::InstallProgress);
-    assert_eq!(sm.action_manifest.final_state, InstallerFinalState::Installed);
+    assert_eq!(
+        sm.action_manifest.final_state,
+        InstallerFinalState::Installed
+    );
 
     // RAID5 on 4 identical disks means BtrfsRaidSetup should have been used.
     let ops = executor.recorded_operations();

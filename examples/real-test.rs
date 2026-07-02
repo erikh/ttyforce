@@ -69,28 +69,47 @@ fn print_usage() {
 
 fn print_hardware_summary(hardware: &HardwareManifest) {
     let ifaces = &hardware.network.interfaces;
-    let eth_count = ifaces.iter().filter(|i| i.kind == ttyforce::manifest::InterfaceKind::Ethernet).count();
-    let wifi_count = ifaces.iter().filter(|i| i.kind == ttyforce::manifest::InterfaceKind::Wifi).count();
+    let eth_count = ifaces
+        .iter()
+        .filter(|i| i.kind == ttyforce::manifest::InterfaceKind::Ethernet)
+        .count();
+    let wifi_count = ifaces
+        .iter()
+        .filter(|i| i.kind == ttyforce::manifest::InterfaceKind::Wifi)
+        .count();
 
     eprintln!();
     eprintln!("  Interfaces: {} ethernet, {} wifi", eth_count, wifi_count);
     for iface in ifaces {
         let link = if iface.has_link { "link" } else { "no-link" };
-        let carrier = if iface.has_carrier { "carrier" } else { "no-carrier" };
-        eprintln!("    {} ({:?}) — {}, {}", iface.name, iface.kind, link, carrier);
+        let carrier = if iface.has_carrier {
+            "carrier"
+        } else {
+            "no-carrier"
+        };
+        eprintln!(
+            "    {} ({:?}) — {}, {}",
+            iface.name, iface.kind, link, carrier
+        );
     }
 
     eprintln!("  Disks: {}", hardware.disks.len());
     for disk in &hardware.disks {
         let size_gb = disk.size_bytes / 1_000_000_000;
-        eprintln!("    {} — {} {} ({} GB)", disk.device, disk.make, disk.model, size_gb);
+        eprintln!(
+            "    {} — {} {} ({} GB)",
+            disk.device, disk.make, disk.model, size_gb
+        );
     }
 
     if let Some(wifi_env) = &hardware.network.wifi_environment {
         if !wifi_env.available_networks.is_empty() {
             eprintln!("  WiFi networks: {}", wifi_env.available_networks.len());
             for net in &wifi_env.available_networks {
-                eprintln!("    {} ({}dBm, {:?})", net.ssid, net.signal_strength, net.security);
+                eprintln!(
+                    "    {} ({}dBm, {:?})",
+                    net.ssid, net.signal_strength, net.security
+                );
             }
         }
     }

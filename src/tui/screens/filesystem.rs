@@ -29,15 +29,13 @@ struct FsOption {
 }
 
 fn filesystem_options() -> Vec<FsOption> {
-    vec![
-        FsOption {
-            fs: FilesystemType::Btrfs,
-            label: "Btrfs  [Recommended]",
-            description: "Modern copy-on-write filesystem built into the Linux kernel.\n\
+    vec![FsOption {
+        fs: FilesystemType::Btrfs,
+        label: "Btrfs  [Recommended]",
+        description: "Modern copy-on-write filesystem built into the Linux kernel.\n\
                           Supports snapshots, compression, and transparent RAID.\n\
                           Excellent tooling support. Recommended for most installations.",
-        },
-    ]
+    }]
 }
 
 impl Screen for FilesystemScreen {
@@ -54,15 +52,18 @@ impl Screen for FilesystemScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),  // intro
-                Constraint::Min(4),     // option list
-                Constraint::Length(6),  // description panel
-                Constraint::Length(3),  // hints
+                Constraint::Length(2), // intro
+                Constraint::Min(4),    // option list
+                Constraint::Length(6), // description panel
+                Constraint::Length(3), // hints
             ])
             .split(inner);
 
@@ -135,10 +136,8 @@ impl Screen for FilesystemScreen {
                 .wrap(Wrap { trim: true });
             f.render_widget(err_widget, chunks[3]);
         } else {
-            let hints = Paragraph::new(
-                "Enter/Space: select  ↑/↓: move  Esc: back  q: quit",
-            )
-            .style(Style::default().fg(Color::DarkGray));
+            let hints = Paragraph::new("Enter/Space: select  ↑/↓: move  Esc: back  q: quit")
+                .style(Style::default().fg(Color::DarkGray));
             f.render_widget(hints, chunks[3]);
         }
     }

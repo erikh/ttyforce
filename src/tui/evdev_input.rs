@@ -35,10 +35,14 @@ impl EvdevWatcher {
 
             let fd = device.as_raw_fd();
             let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL).unwrap_or(0);
-            let new_flags = nix::fcntl::OFlag::from_bits_truncate(flags)
-                | nix::fcntl::OFlag::O_NONBLOCK;
+            let new_flags =
+                nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK;
             if let Err(e) = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(new_flags)) {
-                kmsg_log(&format!("evdev: failed to set non-blocking on {:?}: {}", device.name(), e));
+                kmsg_log(&format!(
+                    "evdev: failed to set non-blocking on {:?}: {}",
+                    device.name(),
+                    e
+                ));
                 continue;
             }
 
@@ -48,7 +52,10 @@ impl EvdevWatcher {
         if devices.is_empty() {
             kmsg_log("evdev: no keyboard devices found, falling back to crossterm-only");
         } else {
-            kmsg_log(&format!("evdev: watching {} keyboard device(s)", devices.len()));
+            kmsg_log(&format!(
+                "evdev: watching {} keyboard device(s)",
+                devices.len()
+            ));
         }
 
         Self { devices }

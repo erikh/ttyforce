@@ -30,10 +30,9 @@ pub fn execute(op: &Operation) -> OperationResult {
             ssid,
             password,
         } => network::configure_wifi_ssid_auth(interface, ssid, password),
-        Operation::ConfigureWifiQrCode {
-            interface,
-            qr_data,
-        } => network::configure_wifi_qr_code(interface, qr_data),
+        Operation::ConfigureWifiQrCode { interface, qr_data } => {
+            network::configure_wifi_qr_code(interface, qr_data)
+        }
 
         // Network — DHCP via dhcpcd
         Operation::ConfigureDhcp { interface } => network::configure_dhcp(interface),
@@ -47,9 +46,7 @@ pub fn execute(op: &Operation) -> OperationResult {
             network::check_link_availability(interface)
         }
         Operation::CheckIpAddress { interface } => network::check_ip_address(interface),
-        Operation::CheckUpstreamRouter { interface } => {
-            network::check_upstream_router(interface)
-        }
+        Operation::CheckUpstreamRouter { interface } => network::check_upstream_router(interface),
         Operation::CheckInternetRoutability { interface } => {
             network::check_internet_routability(interface)
         }
@@ -111,12 +108,8 @@ pub fn execute(op: &Operation) -> OperationResult {
         Operation::Abort { .. } => OperationResult::Success,
 
         // Cleanup
-        Operation::CleanupNetworkConfig { interface } => {
-            network::cleanup_network_config(interface)
-        }
-        Operation::CleanupWpaSupplicant { interface } => {
-            network::cleanup_wpa_supplicant(interface)
-        }
+        Operation::CleanupNetworkConfig { interface } => network::cleanup_network_config(interface),
+        Operation::CleanupWpaSupplicant { interface } => network::cleanup_wpa_supplicant(interface),
         Operation::CleanupUnmount { mount_point } => unmount_syscall(mount_point),
 
         // Getty operations
@@ -128,7 +121,12 @@ pub fn execute(op: &Operation) -> OperationResult {
 
 /// Mount a filesystem using the mount(2) syscall.
 /// For btrfs, runs `btrfs device scan` first so RAID members are discovered.
-fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str, options: Option<&str>) -> OperationResult {
+fn mount_filesystem_syscall(
+    device: &str,
+    mount_point: &str,
+    fs_type: &str,
+    options: Option<&str>,
+) -> OperationResult {
     if let Err(e) = fs::create_dir_all(mount_point) {
         return OperationResult::Error(format!(
             "failed to create mount point {}: {}",
@@ -161,10 +159,7 @@ fn mount_filesystem_syscall(device: &str, mount_point: &str, fs_type: &str, opti
 /// Unmount a filesystem using the umount2(2) syscall. Best-effort.
 fn unmount_syscall(mount_point: &str) -> OperationResult {
     if let Err(e) = nix::mount::umount2(mount_point, nix::mount::MntFlags::MNT_DETACH) {
-        crate::engine::real_ops::cmd_log_append(format!(
-            "  umount2 warning (best-effort): {}",
-            e
-        ));
+        crate::engine::real_ops::cmd_log_append(format!("  umount2 warning (best-effort): {}", e));
     }
     OperationResult::Success
 }

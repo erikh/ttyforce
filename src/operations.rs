@@ -217,12 +217,7 @@ impl std::fmt::Display for Operation {
             Operation::BtrfsRaidSetup {
                 devices,
                 raid_level,
-            } => write!(
-                f,
-                "Btrfs {} on {}",
-                raid_level,
-                devices.join(", ")
-            ),
+            } => write!(f, "Btrfs {} on {}", raid_level, devices.join(", ")),
             Operation::MountFilesystem {
                 device,
                 mount_point,
@@ -230,7 +225,11 @@ impl std::fmt::Display for Operation {
                 options,
             } => {
                 if let Some(opts) = options {
-                    write!(f, "Mount {} ({}, {}) at {}", device, fs_type, opts, mount_point)
+                    write!(
+                        f,
+                        "Mount {} ({}, {}) at {}",
+                        device, fs_type, opts, mount_point
+                    )
                 } else {
                     write!(f, "Mount {} ({}) at {}", device, fs_type, mount_point)
                 }
@@ -245,11 +244,7 @@ impl std::fmt::Display for Operation {
                 mount_point,
                 device,
                 fs_type,
-            } => write!(
-                f,
-                "Generate fstab: {} {} {}",
-                device, mount_point, fs_type
-            ),
+            } => write!(f, "Generate fstab: {} {} {}", device, mount_point, fs_type),
             Operation::PersistNetworkConfig {
                 mount_point,
                 interface,

@@ -3,7 +3,7 @@
 //! Uses `ip` and `ping` commands instead of raw libc calls, keeping the entire
 //! crate free of unsafe code.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::engine::real_ops::run_cmd;
 
@@ -34,7 +34,11 @@ pub fn get_interface_ipv4(interface: &str) -> Option<Ipv4Addr> {
 /// loopback addresses are never returned. Returns None if no global address
 /// is assigned.
 pub fn get_interface_ipv6(interface: &str) -> Option<Ipv6Addr> {
-    let output = run_cmd("ip", &["-6", "-o", "addr", "show", interface, "scope", "global"]).ok()?;
+    let output = run_cmd(
+        "ip",
+        &["-6", "-o", "addr", "show", interface, "scope", "global"],
+    )
+    .ok()?;
     parse_ipv6_addr_output(&output)
 }
 
@@ -70,10 +74,13 @@ pub fn parse_ipv6_addr_output(output: &str) -> Option<Ipv6Addr> {
 /// reach. Only an address in 2000::/3 (global unicast) means real IPv6 is in
 /// the stack.
 pub fn interface_has_global_unicast_ipv6(interface: &str) -> bool {
-    run_cmd("ip", &["-6", "-o", "addr", "show", interface, "scope", "global"])
-        .ok()
-        .map(|out| parse_has_global_unicast_ipv6(&out))
-        .unwrap_or(false)
+    run_cmd(
+        "ip",
+        &["-6", "-o", "addr", "show", interface, "scope", "global"],
+    )
+    .ok()
+    .map(|out| parse_has_global_unicast_ipv6(&out))
+    .unwrap_or(false)
 }
 
 /// Scan `ip -6 -o addr show` output for any global-unicast (2000::/3) address.
@@ -112,9 +119,34 @@ pub fn icmp_ping6(addr: Ipv6Addr, timeout: std::time::Duration) -> Result<(), St
     let timeout_secs = timeout.as_secs().max(1);
     run_cmd(
         "ping",
-        &["-6", "-c1", &format!("-W{}", timeout_secs), &addr.to_string()],
+        &[
+            "-6",
+            "-c1",
+            &format!("-W{}", timeout_secs),
+            &addr.to_string(),
+        ],
     )?;
     Ok(())
+}
+
+/// Attempt a TCP connection to `addr:port`, succeeding only if the three-way
+/// handshake completes within `timeout`.
+///
+/// This is the connectivity probe that survives the networks ICMP/`:53` probes
+/// don't: captive/guest WiFi (e.g. the "berkeley" network) commonly filter ICMP
+/// echo and outbound plaintext DNS while still allowing outbound `:443` — the
+/// exact path DoH uses. A completed handshake to a public anycast host on `:443`
+/// therefore proves routable internet even when every ping is dropped and the
+/// advertised IPv6 is a black hole.
+pub fn tcp_connect_probe(
+    addr: IpAddr,
+    port: u16,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    let sockaddr = SocketAddr::new(addr, port);
+    std::net::TcpStream::connect_timeout(&sockaddr, timeout)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Compute ICMP checksum (RFC 1071).
@@ -178,7 +210,10 @@ mod tests {
     #[test]
     fn test_parse_ipv6_addr_output_empty() {
         assert_eq!(parse_ipv6_addr_output(""), None);
-        assert_eq!(parse_ipv6_addr_output("2: eth0    inet 192.168.1.5/24"), None);
+        assert_eq!(
+            parse_ipv6_addr_output("2: eth0    inet 192.168.1.5/24"),
+            None
+        );
     }
 
     #[test]
@@ -223,6 +258,8 @@ mod tests {
     #[test]
     fn test_global_unicast_empty() {
         assert!(!parse_has_global_unicast_ipv6(""));
-        assert!(!parse_has_global_unicast_ipv6("2: eth0    inet 192.168.1.5/24"));
+        assert!(!parse_has_global_unicast_ipv6(
+            "2: eth0    inet 192.168.1.5/24"
+        ));
     }
 }

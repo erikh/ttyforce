@@ -36,21 +36,25 @@ impl Screen for NetworkScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),  // intro paragraph
-                Constraint::Min(6),     // interface list
-                Constraint::Length(3),  // hints
+                Constraint::Length(4), // intro paragraph
+                Constraint::Min(6),    // interface list
+                Constraint::Length(3), // hints
             ])
             .split(inner);
 
         // --- Intro ---
-        let has_connected_eth = state.interfaces.iter().any(|i| {
-            i.kind == InterfaceKind::Ethernet && i.has_link && i.has_carrier
-        });
+        let has_connected_eth = state
+            .interfaces
+            .iter()
+            .any(|i| i.kind == InterfaceKind::Ethernet && i.has_link && i.has_carrier);
 
         let intro_text = if has_connected_eth {
             "A wired connection is available and ready to use.\n\
@@ -90,10 +94,7 @@ impl Screen for NetworkScreen {
                     .map(|ip| format!("  {}", ip))
                     .unwrap_or_default();
 
-                let label = format!(
-                    "[{}] {}  ({}){}",
-                    kind_label, iface.name, status, ip_part
-                );
+                let label = format!("[{}] {}  ({}){}", kind_label, iface.name, status, ip_part);
 
                 let style = if i == self.selected_index {
                     Style::default()

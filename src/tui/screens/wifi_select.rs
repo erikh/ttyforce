@@ -35,14 +35,17 @@ impl Screen for WifiSelectScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),  // interface info
-                Constraint::Min(5),     // network list
-                Constraint::Length(3),  // hints / error
+                Constraint::Length(2), // interface info
+                Constraint::Min(5),    // network list
+                Constraint::Length(3), // hints / error
             ])
             .split(inner);
 
@@ -53,8 +56,7 @@ impl Screen for WifiSelectScreen {
             .map(|name| format!("Scanning on interface: {}", name))
             .unwrap_or_else(|| "No interface selected".to_string());
 
-        let iface_para = Paragraph::new(iface_text)
-            .style(Style::default().fg(Color::Yellow));
+        let iface_para = Paragraph::new(iface_text).style(Style::default().fg(Color::Yellow));
         f.render_widget(iface_para, chunks[0]);
 
         // --- Network list ---
@@ -69,7 +71,11 @@ impl Screen for WifiSelectScreen {
                 .map(|(i, net)| {
                     let signal = net.signal_display();
                     let security = net.security_display();
-                    let freq_band = if net.frequency_mhz >= 5000 { "5 GHz" } else { "2.4 GHz" };
+                    let freq_band = if net.frequency_mhz >= 5000 {
+                        "5 GHz"
+                    } else {
+                        "2.4 GHz"
+                    };
                     let reachable = if net.reachable { "" } else { " [unreachable]" };
 
                     let label = format!(
@@ -98,10 +104,7 @@ impl Screen for WifiSelectScreen {
                 .collect()
         };
 
-        let header = format!(
-            " Signal  SSID{:.<26}  dBm   Band   Security",
-            ""
-        );
+        let header = format!(" Signal  SSID{:.<26}  dBm   Band   Security", "");
 
         let list = List::new(items)
             .block(
@@ -125,10 +128,8 @@ impl Screen for WifiSelectScreen {
                 .wrap(Wrap { trim: true });
             f.render_widget(err_widget, chunks[2]);
         } else {
-            let hint = Paragraph::new(
-                "Enter: connect  ↑/↓: move  r: refresh  Esc: back  q: quit",
-            )
-            .style(Style::default().fg(Color::DarkGray));
+            let hint = Paragraph::new("Enter: connect  ↑/↓: move  r: refresh  Esc: back  q: quit")
+                .style(Style::default().fg(Color::DarkGray));
             f.render_widget(hint, chunks[2]);
         }
     }

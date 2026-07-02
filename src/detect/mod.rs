@@ -132,7 +132,10 @@ fn prepare_wifi_hardware() {
         for i in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(250));
             if has_wifi_interface() {
-                cmd_log_append(format!("  -> wifi interface appeared after {}ms", (i + 1) * 250));
+                cmd_log_append(format!(
+                    "  -> wifi interface appeared after {}ms",
+                    (i + 1) * 250
+                ));
                 return;
             }
         }
@@ -144,7 +147,10 @@ fn prepare_wifi_hardware() {
                 .lines()
                 .filter(|l| {
                     let lower = l.to_lowercase();
-                    lower.contains("firmware") && (lower.contains("fail") || lower.contains("error") || lower.contains("not found"))
+                    lower.contains("firmware")
+                        && (lower.contains("fail")
+                            || lower.contains("error")
+                            || lower.contains("not found"))
                 })
                 .collect();
             if !fw_errors.is_empty() {

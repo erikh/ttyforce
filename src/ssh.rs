@@ -43,10 +43,7 @@ pub fn fetch_github_keys(username: &str) -> Result<String, String> {
         if line.is_empty() {
             continue;
         }
-        if !line.starts_with("ssh-")
-            && !line.starts_with("ecdsa-")
-            && !line.starts_with("sk-")
-        {
+        if !line.starts_with("ssh-") && !line.starts_with("ecdsa-") && !line.starts_with("sk-") {
             return Err(format!(
                 "unexpected response (not SSH keys): {}",
                 &line[..line.len().min(60)]
@@ -59,7 +56,11 @@ pub fn fetch_github_keys(username: &str) -> Result<String, String> {
 
 /// Install SSH keys to `<mount_point>/ssh/authorized_keys/<system_user>`.
 /// Appends to any existing keys and deduplicates.
-pub fn install_ssh_keys(mount_point: &str, system_user: &str, keys: &str) -> Result<String, String> {
+pub fn install_ssh_keys(
+    mount_point: &str,
+    system_user: &str,
+    keys: &str,
+) -> Result<String, String> {
     let dir = format!("{}/ssh/authorized_keys", mount_point);
     write_authorized_keys(&dir, system_user, keys)?;
     Ok(format!("{}/{}", dir, system_user))
@@ -201,8 +202,7 @@ mod tests {
         let keys = "ssh-ed25519 AAAAC3test1 user@host\nssh-rsa AAAAB3test2 user@host\n";
         write_authorized_keys(dir_str, "root", keys)?;
 
-        let content = std::fs::read_to_string(dir.join("root"))
-            .map_err(|e| e.to_string())?;
+        let content = std::fs::read_to_string(dir.join("root")).map_err(|e| e.to_string())?;
         assert!(content.contains("ssh-ed25519 AAAAC3test1"));
         assert!(content.contains("ssh-rsa AAAAB3test2"));
 
@@ -221,8 +221,7 @@ mod tests {
         write_authorized_keys(dir_str, "root", keys)?;
         write_authorized_keys(dir_str, "root", keys)?;
 
-        let content = std::fs::read_to_string(dir.join("root"))
-            .map_err(|e| e.to_string())?;
+        let content = std::fs::read_to_string(dir.join("root")).map_err(|e| e.to_string())?;
         let count = content.matches("ssh-ed25519 AAAAC3test1").count();
         assert_eq!(count, 1, "key should appear exactly once");
 

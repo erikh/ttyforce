@@ -35,15 +35,18 @@ impl Screen for ConfirmScreen {
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(outer, area);
 
-        let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+        let inner = area.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),   // warning header
-                Constraint::Min(10),     // summary table
-                Constraint::Length(3),   // confirm buttons
-                Constraint::Length(2),   // hints
+                Constraint::Length(2), // warning header
+                Constraint::Min(10),   // summary table
+                Constraint::Length(3), // confirm buttons
+                Constraint::Length(2), // hints
             ])
             .split(inner);
 
@@ -63,10 +66,7 @@ impl Screen for ConfirmScreen {
         let mut lines: Vec<Line> = vec![Line::from("")];
 
         // Network
-        let iface = state
-            .selected_interface
-            .as_deref()
-            .unwrap_or("<none>");
+        let iface = state.selected_interface.as_deref().unwrap_or("<none>");
         let ssid_part = state
             .selected_ssid
             .as_deref()
@@ -88,7 +88,7 @@ impl Screen for ConfirmScreen {
         lines.push(Line::from(vec![
             Span::styled("  Network:     ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{}{} — {}{}",iface, ssid_part, net_status, ip_part),
+                format!("{}{} — {}{}", iface, ssid_part, net_status, ip_part),
                 Style::default().fg(Color::White),
             ),
         ]));
@@ -143,23 +143,22 @@ impl Screen for ConfirmScreen {
             .as_ref()
             .map(|r| r.display_name().to_string())
             .unwrap_or_else(|| "<none>".to_string());
-        let usable_str = if let (Some(raid), Some(idx)) =
-            (&state.selected_raid, state.selected_disk_group)
-        {
-            if let Some(group) = state.disk_groups.get(idx) {
-                let usable = raid.usable_capacity(group.total_bytes(), group.disk_count());
-                let gb = usable as f64 / 1_073_741_824.0;
-                if gb >= 1024.0 {
-                    format!("  ({:.1} TB usable)", gb / 1024.0)
+        let usable_str =
+            if let (Some(raid), Some(idx)) = (&state.selected_raid, state.selected_disk_group) {
+                if let Some(group) = state.disk_groups.get(idx) {
+                    let usable = raid.usable_capacity(group.total_bytes(), group.disk_count());
+                    let gb = usable as f64 / 1_073_741_824.0;
+                    if gb >= 1024.0 {
+                        format!("  ({:.1} TB usable)", gb / 1024.0)
+                    } else {
+                        format!("  ({:.1} GB usable)", gb)
+                    }
                 } else {
-                    format!("  ({:.1} GB usable)", gb)
+                    String::new()
                 }
             } else {
                 String::new()
-            }
-        } else {
-            String::new()
-        };
+            };
 
         lines.push(Line::from(vec![
             Span::styled("  RAID:        ", Style::default().fg(Color::DarkGray)),

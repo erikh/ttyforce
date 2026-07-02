@@ -167,11 +167,7 @@ impl GettyApp {
         let system_services = api_client.fetch_system_services();
         let all_services = api_client.fetch_all_services();
 
-        let kmsg_reader = if console_mode {
-            open_kmsg()
-        } else {
-            None
-        };
+        let kmsg_reader = if console_mode { open_kmsg() } else { None };
 
         let audit_entries = api_client.fetch_audit_log().unwrap_or_default();
 
@@ -634,7 +630,8 @@ impl GettyApp {
                 self.journal_child = Some(c);
             }
             Err(e) => {
-                self.journal_lines.push(format!("Failed to start journalctl: {}", e));
+                self.journal_lines
+                    .push(format!("Failed to start journalctl: {}", e));
             }
         }
     }
@@ -872,11 +869,7 @@ impl GettyApp {
     }
 
     /// Execute a getty action.
-    pub fn execute_action(
-        &mut self,
-        action: &GettyAction,
-        executor: &mut dyn OperationExecutor,
-    ) {
+    pub fn execute_action(&mut self, action: &GettyAction, executor: &mut dyn OperationExecutor) {
         match action {
             GettyAction::None
             | GettyAction::Login
@@ -909,7 +902,9 @@ impl GettyApp {
         // on the next boot. The wipe is then driven by town.sledgehammer on the
         // kernel cmdline exactly as on the GRUB path.
         if self.sledgehammer_tryboot {
-            cmd_log_append("sledgehammer: rebooting into Pi firmware tryboot (0 tryboot)".to_string());
+            cmd_log_append(
+                "sledgehammer: rebooting into Pi firmware tryboot (0 tryboot)".to_string(),
+            );
             if self.mock_mode {
                 cmd_log_append("  -> mock: skipping tryboot reboot".to_string());
                 return;
@@ -928,7 +923,10 @@ impl GettyApp {
             }
         };
 
-        cmd_log_append(format!("sledgehammer: setting grub-reboot to entry {}", entry));
+        cmd_log_append(format!(
+            "sledgehammer: setting grub-reboot to entry {}",
+            entry
+        ));
 
         if let Err(e) = crate::engine::real_ops::run_cmd("grub-reboot", &[&entry]) {
             cmd_log_append(format!("  -> FAILED: grub-reboot: {}", e));
@@ -1040,7 +1038,7 @@ impl GettyApp {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(5), // Title bar
-                    Constraint::Min(5),   // Full journal -f
+                    Constraint::Min(5),    // Full journal -f
                     Constraint::Length(3), // Action bar
                 ])
                 .split(area);
@@ -1075,10 +1073,7 @@ impl GettyApp {
         // Quad top row: service status (left) | system metrics (right)
         let quad_top = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(chunks[1]);
         self.render_service_status(f, quad_top[0]);
         self.render_system_info(f, quad_top[1]);
@@ -1086,10 +1081,7 @@ impl GettyApp {
         // Quad bottom row: audit log (left) | journal -xe (right)
         let quad_bottom = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(chunks[2]);
         self.render_audit_log(f, quad_bottom[0]);
         self.render_xe_journal(f, quad_bottom[1]);
@@ -1106,55 +1098,60 @@ impl GettyApp {
     }
 
     fn render_title(&self, f: &mut ratatui::Frame, area: Rect) {
-        let version = self
-            .system_info
-            .town_os_version
-            .as_deref()
-            .unwrap_or("");
+        let version = self.system_info.town_os_version.as_deref().unwrap_or("");
 
         let url = format!("http://{}", self.system_info.mdns_url);
 
         let api_status = match &self.system_services {
-            Ok(services) if services.iter().all(|s| s.active_state == "active") => {
-                Span::styled(" ready ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-            }
-            Ok(services) if services.iter().any(|s| s.active_state == "failed") => {
-                Span::styled(" degraded ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-            }
-            Ok(_) => {
-                Span::styled(" starting ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-            }
-            Err(_) => {
-                Span::styled(" unavailable ", Style::default().fg(Color::Red))
-            }
+            Ok(services) if services.iter().all(|s| s.active_state == "active") => Span::styled(
+                " ready ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Ok(services) if services.iter().any(|s| s.active_state == "failed") => Span::styled(
+                " degraded ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Ok(_) => Span::styled(
+                " starting ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Err(_) => Span::styled(" unavailable ", Style::default().fg(Color::Red)),
         };
 
         let version_span = if version.is_empty() {
             Span::styled("Town OS", Style::default().fg(Color::DarkGray))
         } else {
-            Span::styled(format!("Town OS {}", version), Style::default().fg(Color::DarkGray))
+            Span::styled(
+                format!("Town OS {}", version),
+                Style::default().fg(Color::DarkGray),
+            )
         };
 
-        let hostname_line = Line::from(vec![
-            Span::styled(
-                &self.system_info.hostname,
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-        ]);
+        let hostname_line = Line::from(vec![Span::styled(
+            &self.system_info.hostname,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )]);
 
         let detail_line = Line::from(vec![
-            Span::styled(&url, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &url,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  "),
             api_status,
             Span::raw("  "),
             version_span,
         ]);
 
-        let title = Paragraph::new(vec![
-            Line::from(""),
-            hostname_line,
-            detail_line,
-        ])
+        let title = Paragraph::new(vec![Line::from(""), hostname_line, detail_line])
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, area);
@@ -1186,17 +1183,17 @@ impl GettyApp {
         let lines = vec![
             Line::from(vec![
                 Span::styled("Kernel: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(format!(
-                    "{} {}",
-                    info.kernel_version, info.architecture
-                )),
+                Span::raw(format!("{} {}", info.kernel_version, info.architecture)),
                 Span::styled("     CPU: ", Style::default().fg(Color::DarkGray)),
                 Span::raw(format!("{} ({} cores)", info.cpu_model, info.cpu_cores)),
             ]),
             Line::from(vec![
                 Span::styled("Load:   ", Style::default().fg(Color::DarkGray)),
                 Span::raw(format!("{:.2}", info.load_average)),
-                Span::styled("              Memory: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "              Memory: ",
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::raw(format!(
                     "{} / {} MB ({}%)",
                     info.mem_used_mb, info.mem_total_mb, mem_pct
@@ -1256,11 +1253,7 @@ impl GettyApp {
                 let inner_height = area.height.saturating_sub(2) as usize;
                 let visible: Vec<_> = services.iter().take(inner_height).collect();
 
-                let name_width = visible
-                    .iter()
-                    .map(|svc| svc.name.len())
-                    .max()
-                    .unwrap_or(0);
+                let name_width = visible.iter().map(|svc| svc.name.len()).max().unwrap_or(0);
 
                 let items: Vec<ListItem> = visible
                     .iter()
@@ -1276,10 +1269,7 @@ impl GettyApp {
 
                         let line = Line::from(vec![
                             Span::raw(format!("{:<width$} ", svc.name, width = name_width)),
-                            Span::styled(
-                                svc.active_state.clone(),
-                                state_style,
-                            ),
+                            Span::styled(svc.active_state.clone(), state_style),
                         ]);
                         ListItem::new(line)
                     })
@@ -1289,12 +1279,10 @@ impl GettyApp {
                 f.render_widget(list, area);
             }
             Err(err) => {
-                let lines = vec![
-                    Line::from(Span::styled(
-                        err.to_string(),
-                        Style::default().fg(Color::Yellow),
-                    )),
-                ];
+                let lines = vec![Line::from(Span::styled(
+                    err.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ))];
                 let paragraph = Paragraph::new(lines).block(block);
                 f.render_widget(paragraph, area);
             }
@@ -1323,11 +1311,8 @@ impl GettyApp {
             .padding(Padding::horizontal(1));
 
         let inner_height = area.height.saturating_sub(2) as usize;
-        let (start, end) = journal_window(
-            self.journal_lines.len(),
-            self.journal_scroll,
-            inner_height,
-        );
+        let (start, end) =
+            journal_window(self.journal_lines.len(), self.journal_scroll, inner_height);
         let visible: Vec<Line> = self.journal_lines[start..end]
             .iter()
             .map(|line| {
@@ -1398,7 +1383,9 @@ impl GettyApp {
                 if entry.success {
                     spans.push(Span::styled(
                         "OK ",
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 } else {
                     spans.push(Span::styled(
@@ -1414,7 +1401,9 @@ impl GettyApp {
                 let path_padded = format!("{:<width$}", path_display, width = path_w);
                 spans.push(Span::styled(
                     path_padded,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ));
 
                 spans.push(Span::raw(" "));
@@ -1441,10 +1430,7 @@ impl GettyApp {
                         Style::default().fg(Color::Red),
                     ));
                 } else {
-                    spans.push(Span::styled(
-                        " ".repeat(detail_w),
-                        Style::default(),
-                    ));
+                    spans.push(Span::styled(" ".repeat(detail_w), Style::default()));
                 }
 
                 spans.push(Span::raw(" "));
@@ -1519,7 +1505,6 @@ impl GettyApp {
         f.render_widget(paragraph, area);
     }
 
-
     fn render_actions(&self, f: &mut ratatui::Frame, area: Rect) {
         let text = if self.quit_enabled {
             "  [.] Login   [s] Status   [l] Log   [q] Quit   [@] Reconfigure   [R] Reboot   [p] Power Off   [PgUp/PgDn] Scroll"
@@ -1527,13 +1512,13 @@ impl GettyApp {
             "  [.] Login   [s] Status   [l] Log   [@] Reconfigure   [R] Reboot   [p] Power Off   [PgUp/PgDn] Scroll"
         };
         let actions = Paragraph::new(text)
-        .alignment(Alignment::Center)
-        .style(Style::default().fg(Color::White))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            );
         f.render_widget(actions, area);
     }
 
@@ -1596,20 +1581,13 @@ impl GettyApp {
     }
 
     fn render_sledgehammer_confirm(&self, f: &mut ratatui::Frame, area: Rect) {
-        let input = self
-            .sledgehammer_input
-            .as_deref()
-            .unwrap_or("");
+        let input = self.sledgehammer_input.as_deref().unwrap_or("");
         let text = format!(
             "  Type SLEDGEHAMMER to wipe all data and reboot: {}_    (Esc to cancel)",
             input
         );
         let paragraph = Paragraph::new(text)
-            .style(
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -1715,15 +1693,12 @@ fn open_kmsg() -> Option<BufReader<File>> {
 /// Set a file descriptor to non-blocking mode using fcntl.
 fn set_nonblocking(stdout: &impl std::os::unix::io::AsRawFd) {
     let fd = std::os::unix::io::AsRawFd::as_raw_fd(stdout);
-    let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL)
-        .unwrap_or(0);
-    let new_flags = nix::fcntl::OFlag::from_bits_truncate(flags)
-        | nix::fcntl::OFlag::O_NONBLOCK;
+    let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL).unwrap_or(0);
+    let new_flags = nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK;
     if let Err(e) = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(new_flags)) {
         eprintln!("fcntl F_SETFL: {}", e);
     }
 }
-
 
 /// Format a Unix timestamp as (date, time) strings.
 /// Returns ("YYYY-MM-DD", "HH:MM:SS") in UTC.
@@ -1752,7 +1727,16 @@ fn format_unix_timestamp(secs: u64) -> (String, String) {
     let month_days: [u64; 12] = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
 
     let mut month: u64 = 1;
@@ -1791,9 +1775,11 @@ mod tests {
     fn test_panel_auto_to_status_when_all_active() {
         let mut app = test_app();
         app.panel_view = PanelView::Auto;
-        app.system_services = Ok(vec![
-            ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
-        ]);
+        app.system_services = Ok(vec![ServiceInfo {
+            name: "a.service".into(),
+            active_state: "active".into(),
+            description: String::new(),
+        }]);
         app.manage_journal();
         assert_eq!(app.panel_view, PanelView::Status);
     }
@@ -1802,9 +1788,11 @@ mod tests {
     fn test_panel_auto_stays_when_not_all_active() {
         let mut app = test_app();
         app.panel_view = PanelView::Auto;
-        app.system_services = Ok(vec![
-            ServiceInfo { name: "a.service".into(), active_state: "activating".into(), description: String::new() },
-        ]);
+        app.system_services = Ok(vec![ServiceInfo {
+            name: "a.service".into(),
+            active_state: "activating".into(),
+            description: String::new(),
+        }]);
         app.manage_journal();
         assert_eq!(app.panel_view, PanelView::Auto);
     }
@@ -1901,10 +1889,7 @@ mod tests {
             assert_eq!(app.map_key(key), GettyAction::None);
         }
 
-        assert_eq!(
-            app.sledgehammer_input.as_deref(),
-            Some("SLEDGEHAMMER")
-        );
+        assert_eq!(app.sledgehammer_input.as_deref(), Some("SLEDGEHAMMER"));
 
         let enter = KeyEvent::from(KeyCode::Enter);
         assert_eq!(app.map_key(enter), GettyAction::Sledgehammer);
@@ -2072,8 +2057,16 @@ mod tests {
     fn test_all_services_active_all_active() {
         let mut app = test_app();
         app.system_services = Ok(vec![
-            ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
-            ServiceInfo { name: "b.service".into(), active_state: "active".into(), description: String::new() },
+            ServiceInfo {
+                name: "a.service".into(),
+                active_state: "active".into(),
+                description: String::new(),
+            },
+            ServiceInfo {
+                name: "b.service".into(),
+                active_state: "active".into(),
+                description: String::new(),
+            },
         ]);
         assert!(app.all_services_active());
     }
@@ -2082,8 +2075,16 @@ mod tests {
     fn test_all_services_active_some_activating() {
         let mut app = test_app();
         app.system_services = Ok(vec![
-            ServiceInfo { name: "a.service".into(), active_state: "active".into(), description: String::new() },
-            ServiceInfo { name: "b.service".into(), active_state: "activating".into(), description: String::new() },
+            ServiceInfo {
+                name: "a.service".into(),
+                active_state: "active".into(),
+                description: String::new(),
+            },
+            ServiceInfo {
+                name: "b.service".into(),
+                active_state: "activating".into(),
+                description: String::new(),
+            },
         ]);
         assert!(!app.all_services_active());
     }
@@ -2190,8 +2191,16 @@ mod tests {
         let app = test_app();
         let result = app.substitute_issue_escapes("\\d \\t");
         // Should contain date and time patterns (YYYY-MM-DD HH:MM:SS)
-        assert!(result.contains('-'), "expected date with dashes: {}", result);
-        assert!(result.contains(':'), "expected time with colons: {}", result);
+        assert!(
+            result.contains('-'),
+            "expected date with dashes: {}",
+            result
+        );
+        assert!(
+            result.contains(':'),
+            "expected time with colons: {}",
+            result
+        );
     }
 
     #[test]
@@ -2370,9 +2379,15 @@ mod tests {
         });
         app.map_key(KeyEvent::from(KeyCode::Char('a')));
         app.map_key(KeyEvent::from(KeyCode::Char('b')));
-        assert_eq!(app.ssh_input.as_ref().map(|s| s.github_username.as_str()), Some("ab"));
+        assert_eq!(
+            app.ssh_input.as_ref().map(|s| s.github_username.as_str()),
+            Some("ab")
+        );
         app.map_key(KeyEvent::from(KeyCode::Backspace));
-        assert_eq!(app.ssh_input.as_ref().map(|s| s.github_username.as_str()), Some("a"));
+        assert_eq!(
+            app.ssh_input.as_ref().map(|s| s.github_username.as_str()),
+            Some("a")
+        );
     }
 
     #[test]
@@ -2457,7 +2472,10 @@ mod tests {
         let mut executor = MockExecutor::new(vec![]);
         app.execute_ssh_key_import(&mut executor);
         // Should advance to next user after success
-        let ssh_state = app.ssh_input.as_ref().expect("ssh_input should still exist");
+        let ssh_state = app
+            .ssh_input
+            .as_ref()
+            .expect("ssh_input should still exist");
         assert_eq!(ssh_state.current_user_idx, 1);
         assert!(ssh_state.github_username.is_empty());
     }
@@ -2495,7 +2513,10 @@ mod tests {
         }]);
         app.execute_ssh_key_import(&mut executor);
         // Should stay on same user after failure
-        let ssh_state = app.ssh_input.as_ref().expect("ssh_input should still exist");
+        let ssh_state = app
+            .ssh_input
+            .as_ref()
+            .expect("ssh_input should still exist");
         assert_eq!(ssh_state.current_user_idx, 0);
         assert!(ssh_state.status_message.is_some());
         let (_, success) = ssh_state.status_message.as_ref().unwrap();
@@ -2509,7 +2530,10 @@ mod tests {
         // On a system with journalctl, a child should be spawned.
         // On CI or containers without journalctl, an error line is added instead.
         let has_child = app.xe_journal_child.is_some();
-        let has_error = app.xe_journal_lines.iter().any(|l| l.contains("Failed to start"));
+        let has_error = app
+            .xe_journal_lines
+            .iter()
+            .any(|l| l.contains("Failed to start"));
         assert!(has_child || has_error);
         // Clean up
         app.stop_xe_journal();

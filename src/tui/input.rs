@@ -18,12 +18,8 @@ pub fn map_key_event(key: KeyEvent, screen: &ScreenId, selected_index: usize) ->
         KeyCode::Char('s') if matches!(screen, ScreenId::NetworkProgress) => {
             Some(UserInput::ShowWifiQr)
         }
-        KeyCode::Char('y') if matches!(screen, ScreenId::WpsPrompt) => {
-            Some(UserInput::WpsAccept)
-        }
-        KeyCode::Char('n') if matches!(screen, ScreenId::WpsPrompt) => {
-            Some(UserInput::WpsDecline)
-        }
+        KeyCode::Char('y') if matches!(screen, ScreenId::WpsPrompt) => Some(UserInput::WpsAccept),
+        KeyCode::Char('n') if matches!(screen, ScreenId::WpsPrompt) => Some(UserInput::WpsDecline),
         KeyCode::Char('a') => Some(UserInput::AbortInstall),
         _ => None,
     }

@@ -11,8 +11,8 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 
 use crate::engine::executor::OperationExecutor;
-use crate::engine::state_machine::{InstallerStateMachine, ScreenId, UserInput};
 use crate::engine::real_ops::kmsg_log;
+use crate::engine::state_machine::{InstallerStateMachine, ScreenId, UserInput};
 use crate::tui::input::map_key_event;
 
 /// Redirect stdin and stdout to the given TTY device.
@@ -22,16 +22,12 @@ pub(crate) fn redirect_to_tty(tty_path: &str) -> io::Result<(i32, i32)> {
     let tty_fd = tty_file.as_raw_fd();
 
     // Save current stdin/stdout fds
-    let saved_stdin = nix::unistd::dup(0)
-        .map_err(io::Error::other)?;
-    let saved_stdout = nix::unistd::dup(1)
-        .map_err(io::Error::other)?;
+    let saved_stdin = nix::unistd::dup(0).map_err(io::Error::other)?;
+    let saved_stdout = nix::unistd::dup(1).map_err(io::Error::other)?;
 
     // Redirect stdin and stdout to the TTY
-    nix::unistd::dup2(tty_fd, 0)
-        .map_err(io::Error::other)?;
-    nix::unistd::dup2(tty_fd, 1)
-        .map_err(io::Error::other)?;
+    nix::unistd::dup2(tty_fd, 0).map_err(io::Error::other)?;
+    nix::unistd::dup2(tty_fd, 1).map_err(io::Error::other)?;
 
     // tty_file is consumed here but the fd remains via dup2
     std::mem::forget(tty_file);
@@ -143,7 +139,11 @@ impl App {
         }
     }
 
-    pub fn run(&mut self, executor: &mut dyn OperationExecutor, tty: Option<&str>) -> io::Result<()> {
+    pub fn run(
+        &mut self,
+        executor: &mut dyn OperationExecutor,
+        tty: Option<&str>,
+    ) -> io::Result<()> {
         let saved_fds = if let Some(tty_path) = tty {
             kmsg_log(&format!("redirecting TUI to {}", tty_path));
             match redirect_to_tty(tty_path) {
@@ -547,8 +547,7 @@ impl App {
                     let qr = r - 1;
                     let qc = c - 1;
                     if qr >= 0 && qr < width as i32 && qc >= 0 && qc < width as i32 {
-                        modules[(qr as usize) * width + (qc as usize)]
-                            == qrcode::Color::Dark
+                        modules[(qr as usize) * width + (qc as usize)] == qrcode::Color::Dark
                     } else {
                         false // quiet zone = light
                     }
@@ -589,10 +588,9 @@ impl App {
                                 "\u{2584}\u{2584}",
                                 Style::default().fg(Color::Black).bg(Color::White),
                             ),
-                            (false, false) => (
-                                "  ",
-                                Style::default().fg(Color::White).bg(Color::White),
-                            ),
+                            (false, false) => {
+                                ("  ", Style::default().fg(Color::White).bg(Color::White))
+                            }
                         };
                         spans.push(Span::styled(ch, style));
                     }
@@ -601,17 +599,16 @@ impl App {
                     row += 2;
                 }
             } else {
-                lines.push(Line::from(
-                    "  Failed to generate QR code"
-                        .to_string(),
-                ));
+                lines.push(Line::from("  Failed to generate QR code".to_string()));
             }
         } else {
             lines.push(Line::from("  No WiFi credentials available"));
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from("  Scan with your phone to connect to this network"));
+        lines.push(Line::from(
+            "  Scan with your phone to connect to this network",
+        ));
         lines.push(Line::from("  Press Enter or Esc to go back"));
 
         let content_height = lines.len() as u16 + 2;
@@ -707,11 +704,7 @@ impl App {
             );
         }
 
-        let content_height = items
-            .iter()
-            .map(|i| i.height() as u16)
-            .sum::<u16>()
-            + 2;
+        let content_height = items.iter().map(|i| i.height() as u16).sum::<u16>() + 2;
         let height_pct = (content_height * 100 / area.height.max(1)).clamp(30, 80);
         let center = centered_rect(65, height_pct, area);
 
@@ -755,8 +748,12 @@ impl App {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!("  {}\n    {}", opt.display_name(), opt.description()))
-                    .style(style)
+                ListItem::new(format!(
+                    "  {}\n    {}",
+                    opt.display_name(),
+                    opt.description()
+                ))
+                .style(style)
             })
             .collect();
 
@@ -787,13 +784,21 @@ impl App {
         let disk_summary = if single_mode {
             if let Some(disk_idx) = self.state_machine.selected_disk {
                 let disk = &self.state_machine.all_disks[disk_idx];
-                format!("{} — {} {} ({})", disk.device, disk.make, disk.model, disk.size_human())
+                format!(
+                    "{} — {} {} ({})",
+                    disk.device,
+                    disk.make,
+                    disk.model,
+                    disk.size_human()
+                )
             } else {
                 "None".to_string()
             }
         } else {
             let group_idx = self.state_machine.selected_disk_group.unwrap_or(0);
-            self.state_machine.disk_groups.get(group_idx)
+            self.state_machine
+                .disk_groups
+                .get(group_idx)
                 .map(|g| g.display_name())
                 .unwrap_or_else(|| "None".to_string())
         };
@@ -810,7 +815,11 @@ impl App {
             self.state_machine.network_state,
             self.state_machine.selected_filesystem,
             raid_name,
-            if single_mode { "Disk      " } else { "Disk Group" },
+            if single_mode {
+                "Disk      "
+            } else {
+                "Disk Group"
+            },
             disk_summary,
         );
 
@@ -841,7 +850,9 @@ impl App {
     }
 
     fn render_ssh_key_import(&self, f: &mut ratatui::Frame, area: Rect) {
-        let current_user = self.state_machine.ssh_users
+        let current_user = self
+            .state_machine
+            .ssh_users
             .get(self.state_machine.ssh_current_user_idx)
             .map(|s| s.as_str())
             .unwrap_or("unknown");
@@ -850,13 +861,21 @@ impl App {
         let user_num = self.state_machine.ssh_current_user_idx + 1;
 
         let mut lines = vec![
-            format!("  Import SSH keys for: {} (user {} of {})", current_user, user_num, user_count),
+            format!(
+                "  Import SSH keys for: {} (user {} of {})",
+                current_user, user_num, user_count
+            ),
             String::new(),
-            format!("  Keys will be written to {}/ssh/authorized_keys/{}", self.state_machine.mount_point, current_user),
+            format!(
+                "  Keys will be written to {}/ssh/authorized_keys/{}",
+                self.state_machine.mount_point, current_user
+            ),
             String::new(),
         ];
 
-        let queued = self.state_machine.ssh_keys
+        let queued = self
+            .state_machine
+            .ssh_keys
             .get(current_user)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
@@ -947,11 +966,7 @@ impl App {
                     let password = self.password_input.clone();
                     self.password_input.clear();
                     let input = UserInput::EnterWifiPassword(password);
-                    if self
-                        .state_machine
-                        .process_input(input, executor)
-                        .is_some()
-                    {
+                    if self.state_machine.process_input(input, executor).is_some() {
                         self.selected_index = 0;
                     }
                     return;
@@ -1005,8 +1020,7 @@ impl App {
                 }
                 KeyCode::Esc => {
                     self.ssh_username_input.clear();
-                    self.state_machine
-                        .process_input(UserInput::Back, executor);
+                    self.state_machine.process_input(UserInput::Back, executor);
                     self.selected_index = 0;
                     return;
                 }
@@ -1039,11 +1053,7 @@ impl App {
             let is_exit = matches!(input, UserInput::ExitInstaller);
             let is_terminal = matches!(input, UserInput::AbortInstall)
                 && self.state_machine.current_screen == ScreenId::Confirm;
-            if self
-                .state_machine
-                .process_input(input, executor)
-                .is_some()
-            {
+            if self.state_machine.process_input(input, executor).is_some() {
                 self.selected_index = 0;
             }
             if is_exit || is_terminal {
@@ -1077,7 +1087,11 @@ mod tests {
         let saved_stdout = nix::unistd::dup(1).map_err(|e| format!("dup stdout: {}", e))?;
 
         let result = redirect_to_tty("/dev/null");
-        assert!(result.is_ok(), "redirect_to_tty(/dev/null) failed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "redirect_to_tty(/dev/null) failed: {:?}",
+            result
+        );
 
         let (inner_stdin, inner_stdout) = result.map_err(|e| format!("redirect: {}", e))?;
         // After redirect, fd 0 and 1 should point to /dev/null.

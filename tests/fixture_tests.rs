@@ -18,7 +18,10 @@ fn test_load_ethernet_4disk_same() -> Result<(), String> {
     assert!(hw.network.interfaces[0].has_carrier);
     assert_eq!(hw.disks.len(), 4);
     // All same make/model
-    assert!(hw.disks.iter().all(|d| d.make == "Samsung" && d.model == "870 EVO"));
+    assert!(hw
+        .disks
+        .iter()
+        .all(|d| d.make == "Samsung" && d.model == "870 EVO"));
     Ok(())
 }
 
@@ -37,7 +40,11 @@ fn test_load_wifi_1disk() -> Result<(), String> {
     assert_eq!(hw.network.interfaces.len(), 1);
     assert_eq!(hw.network.interfaces[0].kind, InterfaceKind::Wifi);
     assert!(hw.network.wifi_environment.is_some());
-    let wifi = hw.network.wifi_environment.as_ref().ok_or("wifi_environment is None")?;
+    let wifi = hw
+        .network
+        .wifi_environment
+        .as_ref()
+        .ok_or("wifi_environment is None")?;
     assert_eq!(wifi.available_networks.len(), 2);
     assert_eq!(hw.disks.len(), 1);
     Ok(())
@@ -46,10 +53,18 @@ fn test_load_wifi_1disk() -> Result<(), String> {
 #[test]
 fn test_load_wifi_crowded_1disk() -> Result<(), String> {
     let hw = load_hardware("wifi_crowded_1disk")?;
-    let wifi = hw.network.wifi_environment.as_ref().ok_or("wifi_environment is None")?;
+    let wifi = hw
+        .network
+        .wifi_environment
+        .as_ref()
+        .ok_or("wifi_environment is None")?;
     assert_eq!(wifi.available_networks.len(), 10);
     // Verify some are unreachable
-    let unreachable_count = wifi.available_networks.iter().filter(|n| !n.reachable).count();
+    let unreachable_count = wifi
+        .available_networks
+        .iter()
+        .filter(|n| !n.reachable)
+        .count();
     assert!(unreachable_count >= 2);
     Ok(())
 }
@@ -147,18 +162,9 @@ fn test_raid_options_4disk() {
 
 #[test]
 fn test_raid_recommended() {
-    assert_eq!(
-        RaidConfig::recommended_for_count(1),
-        RaidConfig::Single
-    );
-    assert_eq!(
-        RaidConfig::recommended_for_count(2),
-        RaidConfig::BtrfsRaid1
-    );
-    assert_eq!(
-        RaidConfig::recommended_for_count(4),
-        RaidConfig::BtrfsRaid5
-    );
+    assert_eq!(RaidConfig::recommended_for_count(1), RaidConfig::Single);
+    assert_eq!(RaidConfig::recommended_for_count(2), RaidConfig::BtrfsRaid1);
+    assert_eq!(RaidConfig::recommended_for_count(4), RaidConfig::BtrfsRaid5);
 }
 
 #[test]
@@ -166,7 +172,10 @@ fn test_raid_usable_capacity() {
     let total = 4_000_000_000_000u64; // 4TB total
     assert_eq!(RaidConfig::Single.usable_capacity(total, 4), total);
     assert_eq!(RaidConfig::BtrfsRaid1.usable_capacity(total, 2), total / 2);
-    assert_eq!(RaidConfig::BtrfsRaid5.usable_capacity(total, 4), total * 3 / 4);
+    assert_eq!(
+        RaidConfig::BtrfsRaid5.usable_capacity(total, 4),
+        total * 3 / 4
+    );
 }
 
 // === Initial State Tests ===

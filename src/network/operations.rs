@@ -106,10 +106,7 @@ pub fn bring_online_wifi_qr(iface: &NetworkInterface, qr_data: &str) -> Vec<Oper
     ]
 }
 
-pub fn shutdown_non_primary(
-    interfaces: &[NetworkInterface],
-    primary: &str,
-) -> Vec<Operation> {
+pub fn shutdown_non_primary(interfaces: &[NetworkInterface], primary: &str) -> Vec<Operation> {
     interfaces
         .iter()
         .filter(|i| i.name != primary && i.enabled)

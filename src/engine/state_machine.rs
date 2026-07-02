@@ -155,7 +155,12 @@ impl InstallerStateMachine {
             .network
             .wifi_environment
             .as_ref()
-            .map(|env| env.available_networks.iter().map(WifiNetwork::from).collect())
+            .map(|env| {
+                env.available_networks
+                    .iter()
+                    .map(WifiNetwork::from)
+                    .collect()
+            })
             .unwrap_or_default();
 
         Self {
@@ -231,8 +236,7 @@ impl InstallerStateMachine {
                 mac_address: mac,
             };
             let persist_result = executor.execute(&op);
-            self.action_manifest
-                .record(op, persist_result.to_outcome());
+            self.action_manifest.record(op, persist_result.to_outcome());
         }
     }
 
@@ -278,9 +282,7 @@ impl InstallerStateMachine {
             }
 
             // === Network Config Screen ===
-            (ScreenId::NetworkConfig, UserInput::Confirm) => {
-                self.auto_detect_network(executor)
-            }
+            (ScreenId::NetworkConfig, UserInput::Confirm) => self.auto_detect_network(executor),
             (ScreenId::NetworkConfig, UserInput::Select(idx)) => {
                 self.select_interface(idx, executor)
             }
@@ -298,12 +300,8 @@ impl InstallerStateMachine {
             (ScreenId::WifiSelect, UserInput::SelectWifiNetwork(idx)) => {
                 self.select_wifi_network(idx)
             }
-            (ScreenId::WifiSelect, UserInput::RefreshWifiScan) => {
-                self.refresh_wifi_scan(executor)
-            }
-            (ScreenId::WifiSelect, UserInput::InitiateWps) => {
-                self.start_wps(executor)
-            }
+            (ScreenId::WifiSelect, UserInput::RefreshWifiScan) => self.refresh_wifi_scan(executor),
+            (ScreenId::WifiSelect, UserInput::InitiateWps) => self.start_wps(executor),
             (ScreenId::WifiSelect, UserInput::Back) => {
                 self.current_screen = ScreenId::NetworkConfig;
                 Some(ScreenId::NetworkConfig)
@@ -313,9 +311,7 @@ impl InstallerStateMachine {
             }
 
             // === WPS Prompt Screen ===
-            (ScreenId::WpsPrompt, UserInput::WpsAccept) => {
-                self.start_wps(executor)
-            }
+            (ScreenId::WpsPrompt, UserInput::WpsAccept) => self.start_wps(executor),
             (ScreenId::WpsPrompt, UserInput::WpsDecline) => {
                 self.current_screen = ScreenId::WifiPassword;
                 Some(ScreenId::WifiPassword)
@@ -494,7 +490,10 @@ impl InstallerStateMachine {
             // === SSH Key Import ===
             (ScreenId::SshKeyImport, UserInput::ImportSshKeys(username)) => {
                 if let Some(current_user) = self.ssh_users.get(self.ssh_current_user_idx).cloned() {
-                    self.ssh_keys.entry(current_user).or_default().push(username);
+                    self.ssh_keys
+                        .entry(current_user)
+                        .or_default()
+                        .push(username);
                 }
                 Some(ScreenId::SshKeyImport) // stay on screen for more usernames
             }
@@ -549,9 +548,7 @@ impl InstallerStateMachine {
             }
 
             // Global quit
-            (_, UserInput::Quit) => {
-                self.abort(executor, "User quit".to_string())
-            }
+            (_, UserInput::Quit) => self.abort(executor, "User quit".to_string()),
 
             _ => None,
         }
@@ -587,9 +584,7 @@ impl InstallerStateMachine {
             // user might still have wifi, which Easy mode refuses to
             // auto-pick).
             self.current_screen = ScreenId::NetworkConfig;
-            self.error_message = Some(
-                "No ethernet detected — select an interface".to_string(),
-            );
+            self.error_message = Some("No ethernet detected — select an interface".to_string());
             return Some(ScreenId::NetworkConfig);
         }
 
@@ -603,9 +598,7 @@ impl InstallerStateMachine {
             let result = executor.execute(&op);
             self.action_manifest.record(op, result.to_outcome());
             if !result.is_error() {
-                if let Some(iface) =
-                    self.interfaces.iter_mut().find(|i| &i.name == name)
-                {
+                if let Some(iface) = self.interfaces.iter_mut().find(|i| &i.name == name) {
                     iface.enabled = true;
                 }
             }
@@ -1183,8 +1176,7 @@ impl InstallerStateMachine {
                 mac_address: mac,
             };
             let persist_result = executor.execute(&op);
-            self.action_manifest
-                .record(op, persist_result.to_outcome());
+            self.action_manifest.record(op, persist_result.to_outcome());
         }
 
         // Import SSH keys from GitHub
@@ -1228,11 +1220,7 @@ impl InstallerStateMachine {
         Some(ScreenId::InstallProgress)
     }
 
-    fn abort(
-        &mut self,
-        executor: &mut dyn OperationExecutor,
-        reason: String,
-    ) -> Option<ScreenId> {
+    fn abort(&mut self, executor: &mut dyn OperationExecutor, reason: String) -> Option<ScreenId> {
         self.cleanup(executor);
 
         let op = Operation::Abort {
@@ -1370,7 +1358,8 @@ impl InstallerStateMachine {
                 if let Some(start) = self.wps_start_time {
                     if start.elapsed() > std::time::Duration::from_secs(120) {
                         self.wps_start_time = None;
-                        self.error_message = Some("WPS timed out — no router responded".to_string());
+                        self.error_message =
+                            Some("WPS timed out — no router responded".to_string());
                         self.network_state = NetworkState::Scanning;
                         self.current_screen = ScreenId::WifiSelect;
                         return true;
@@ -1417,9 +1406,7 @@ impl InstallerStateMachine {
                 self.action_manifest.record(ip_op, ip_result.to_outcome());
 
                 if let OperationResult::IpAssigned(ip) = &ip_result {
-                    if let Some(iface) =
-                        self.interfaces.iter_mut().find(|i| i.name == iface_name)
-                    {
+                    if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == iface_name) {
                         iface.ip_address = Some(ip.clone());
                     }
                     self.network_state = NetworkState::IpAssigned;
@@ -1442,8 +1429,7 @@ impl InstallerStateMachine {
                             interface: iface_name.clone(),
                         };
                         let ip_result2 = executor.execute(&ip_op2);
-                        self.action_manifest
-                            .record(ip_op2, ip_result2.to_outcome());
+                        self.action_manifest.record(ip_op2, ip_result2.to_outcome());
                         if let OperationResult::IpAssigned(ip) = &ip_result2 {
                             if let Some(iface) =
                                 self.interfaces.iter_mut().find(|i| i.name == iface_name)
@@ -1513,8 +1499,7 @@ impl InstallerStateMachine {
                     if self.connectivity_retries >= DNS_MAX_RETRIES {
                         self.network_state =
                             NetworkState::Error("DNS resolution failed".to_string());
-                        self.error_message =
-                            Some("DNS resolution failed".to_string());
+                        self.error_message = Some("DNS resolution failed".to_string());
                     }
                 } else {
                     self.network_state = NetworkState::CheckingDns;
@@ -1562,9 +1547,7 @@ impl InstallerStateMachine {
                 // Winner. Mark carrier seen so render reflects reality,
                 // then jump past enable/link-check into DHCP — the
                 // interface was already enabled in start_easy_mode().
-                if let Some(iface) =
-                    self.interfaces.iter_mut().find(|i| &i.name == cand)
-                {
+                if let Some(iface) = self.interfaces.iter_mut().find(|i| &i.name == cand) {
                     iface.has_link = true;
                     iface.has_carrier = true;
                 }
@@ -1591,9 +1574,7 @@ impl InstallerStateMachine {
                 };
                 let result = executor.execute(&op);
                 self.action_manifest.record(op, result.to_outcome());
-                if let Some(iface) =
-                    self.interfaces.iter_mut().find(|i| &i.name == cand)
-                {
+                if let Some(iface) = self.interfaces.iter_mut().find(|i| &i.name == cand) {
                     iface.enabled = false;
                 }
             }
@@ -1601,9 +1582,8 @@ impl InstallerStateMachine {
             self.carrier_wait_start = None;
             self.network_state = NetworkState::Offline;
             self.current_screen = ScreenId::NetworkConfig;
-            self.error_message = Some(
-                "No wired carrier after 30s — select an interface".to_string(),
-            );
+            self.error_message =
+                Some("No wired carrier after 30s — select an interface".to_string());
         }
         true
     }

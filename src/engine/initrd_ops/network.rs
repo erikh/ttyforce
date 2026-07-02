@@ -32,7 +32,10 @@ pub fn enable_interface(interface: &str) -> OperationResult {
     }
 
     // Wait for carrier — ioctl IFF_UP is asynchronous
-    cmd_log_append(format!("  waiting for carrier on {} (up to 5s) ...", interface));
+    cmd_log_append(format!(
+        "  waiting for carrier on {} (up to 5s) ...",
+        interface
+    ));
     let carrier_path = format!("/sys/class/net/{}/carrier", interface);
     let mut last_state: Option<String> = None;
     for i in 0..50 {
@@ -41,7 +44,11 @@ pub fn enable_interface(interface: &str) -> OperationResult {
             .map(|v| v.trim().to_string())
             .unwrap_or_else(|e| format!("err:{}", e));
         if val == "1" {
-            cmd_log_append(format!("  -> carrier up on {} after {}ms", interface, (i + 1) * 100));
+            cmd_log_append(format!(
+                "  -> carrier up on {} after {}ms",
+                interface,
+                (i + 1) * 100
+            ));
             return OperationResult::Success;
         }
         // Heartbeat once per second so the log never appears stalled.
@@ -92,19 +99,14 @@ pub fn scan_wifi_networks(interface: &str) -> OperationResult {
             let networks: Vec<WifiNetwork> = specs.iter().map(WifiNetwork::from).collect();
             OperationResult::WifiScanResults(networks)
         }
-        Err(e) => {
-            match run_cmd("iwlist", &[interface, "scan"]) {
-                Ok(output) => {
-                    let specs = parse_iwlist_scan(&output);
-                    let networks: Vec<WifiNetwork> =
-                        specs.iter().map(WifiNetwork::from).collect();
-                    OperationResult::WifiScanResults(networks)
-                }
-                Err(_) => {
-                    OperationResult::Error(format!("wifi scan failed on {}: {}", interface, e))
-                }
+        Err(e) => match run_cmd("iwlist", &[interface, "scan"]) {
+            Ok(output) => {
+                let specs = parse_iwlist_scan(&output);
+                let networks: Vec<WifiNetwork> = specs.iter().map(WifiNetwork::from).collect();
+                OperationResult::WifiScanResults(networks)
             }
-        }
+            Err(_) => OperationResult::Error(format!("wifi scan failed on {}: {}", interface, e)),
+        },
     }
 }
 
@@ -136,10 +138,7 @@ pub fn authenticate_wifi(interface: &str, ssid: &str, password: &str) -> Operati
     }
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    match run_cmd(
-        "wpa_supplicant",
-        &["-B", "-i", interface, "-c", &conf_path],
-    ) {
+    match run_cmd("wpa_supplicant", &["-B", "-i", interface, "-c", &conf_path]) {
         Ok(_) => {
             std::thread::sleep(std::time::Duration::from_secs(3));
             OperationResult::WifiAuthenticated
@@ -207,10 +206,7 @@ pub fn wps_pbc_start(interface: &str) -> OperationResult {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Start wpa_supplicant
-    if let Err(e) = run_cmd(
-        "wpa_supplicant",
-        &["-B", "-i", interface, "-c", &conf_path],
-    ) {
+    if let Err(e) = run_cmd("wpa_supplicant", &["-B", "-i", interface, "-c", &conf_path]) {
         return OperationResult::Error(format!("wpa_supplicant failed: {}", e));
     }
 
@@ -377,7 +373,10 @@ fn configure_dhcp_with(
     // state machine. We just want to give the lease time to settle so the
     // first router check has a fighting chance.
     if check_route(interface) {
-        cmd_log_append(format!("  -> {} default route already installed", interface));
+        cmd_log_append(format!(
+            "  -> {} default route already installed",
+            interface
+        ));
         return OperationResult::Success;
     }
     for attempt in 1..=route_attempts {
@@ -642,8 +641,10 @@ fn ensure_working_resolver(interface: &str) {
     // Probe: can these nameservers resolve our routability probe host? This
     // mirrors exactly what curl needs (it resolves via /etc/resolv.conf).
     let probe = |ns: &[String]| -> bool {
-        let socks: Vec<SocketAddr> =
-            ns.iter().filter_map(|n| parse_nameserver_socket(n)).collect();
+        let socks: Vec<SocketAddr> = ns
+            .iter()
+            .filter_map(|n| parse_nameserver_socket(n))
+            .collect();
         !socks.is_empty() && resolve_via(&socks, ROUTABILITY_PROBE_HOST, timeout).is_ok()
     };
 
@@ -667,15 +668,20 @@ fn ensure_working_resolver(interface: &str) {
         current.join(" "),
         chosen.join(" ")
     ));
-    let content: String = chosen.iter().map(|ns| format!("nameserver {}\n", ns)).collect();
+    let content: String = chosen
+        .iter()
+        .map(|ns| format!("nameserver {}\n", ns))
+        .collect();
     if let Err(e) = fs::write("/etc/resolv.conf", &content) {
         cmd_log_append(format!("  repair resolv.conf failed: {}", e));
         return;
     }
 
     // Test again: confirm the repaired set resolves, for the log/manifest.
-    let socks: Vec<SocketAddr> =
-        chosen.iter().filter_map(|n| parse_nameserver_socket(n)).collect();
+    let socks: Vec<SocketAddr> = chosen
+        .iter()
+        .filter_map(|n| parse_nameserver_socket(n))
+        .collect();
     match resolve_via(&socks, ROUTABILITY_PROBE_HOST, timeout) {
         Ok(ip) => cmd_log_append(format!("  -> repaired resolver works ({})", ip)),
         Err(e) => cmd_log_append(format!("  -> still no resolution after repair: {}", e)),
@@ -878,6 +884,7 @@ pub fn check_internet_routability(interface: &str) -> OperationResult {
         || {
             check_internet_routability_inner(
                 interface,
+                |ip| super::syscall::tcp_connect_probe(ip, 443, std::time::Duration::from_secs(3)),
                 |ip| super::syscall::icmp_ping(ip, std::time::Duration::from_secs(3)),
                 super::syscall::interface_has_global_unicast_ipv6,
                 |ip| super::syscall::icmp_ping6(ip, std::time::Duration::from_secs(3)),
@@ -953,15 +960,51 @@ fn local_resolver_candidates(interface: &str) -> Vec<String> {
 
 /// Testable core of [`check_internet_routability`] with injected probes.
 ///
-/// `has_ipv6` gates the IPv6 fallback: when the interface has no global-unicast
-/// IPv6 address there is no routable IPv6 in the stack, so `ping6` is never
-/// invoked.
-fn check_internet_routability_inner(
+/// Tier order, stopping at the first success:
+///  1. **TCP `:443`** to the public anycast hosts (`tcp443`) — the probe that
+///     works on ICMP/`:53`-filtered networks, since it uses the same outbound
+///     `:443` path as DoH. Tried over IPv4, then IPv6 when the stack has a
+///     global-unicast v6 address.
+///  2. **ICMPv4** echo (`ping4`) — some networks drop `:443` to these hosts but
+///     still answer ping.
+///  3. **ICMPv6** echo (`ping6`), only when a global v6 address is present.
+///
+/// `has_ipv6` gates every IPv6 probe and is consulted lazily — only after the
+/// IPv4 tiers fail — so a reachable IPv4 path never triggers a v6 lookup. A
+/// failed IPv6 ping is therefore no longer authoritative on its own: it is only
+/// reached once TCP `:443` (v4 **and** v6) and ICMPv4 have all failed, so a
+/// filtered-`:443`/dead-SLAAC network no longer reports `NoInternet` while a
+/// working `:443` path exists.
+///
+/// `pub` so the tier ordering can be integration-tested (against a real
+/// loopback TCP listener) without the host's real routing state, mirroring
+/// [`routability_local_first`].
+pub fn check_internet_routability_inner(
     interface: &str,
+    tcp443: impl Fn(IpAddr) -> Result<(), String>,
     ping4: impl Fn(Ipv4Addr) -> Result<(), String>,
     has_ipv6: impl Fn(&str) -> bool,
     ping6: impl Fn(Ipv6Addr) -> Result<(), String>,
 ) -> OperationResult {
+    let v6 = Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111);
+
+    // Tier 1: TCP :443 over IPv4.
+    for addr in PUBLIC_FALLBACK_DNS {
+        let ip: Ipv4Addr = match addr.parse() {
+            Ok(ip) => ip,
+            Err(_) => continue,
+        };
+        cmd_log_append(format!("$ tcp-connect {}:443", ip));
+        match tcp443(IpAddr::V4(ip)) {
+            Ok(_) => {
+                cmd_log_append("  -> :443 reachable (TCPv4)".to_string());
+                return OperationResult::InternetReachable;
+            }
+            Err(e) => cmd_log_append(format!("  -> {}:443 unreachable: {}", ip, e)),
+        }
+    }
+
+    // Tier 2: ICMPv4 echo (some networks drop :443 but answer ping).
     for addr in PUBLIC_FALLBACK_DNS {
         let ip: Ipv4Addr = match addr.parse() {
             Ok(ip) => ip,
@@ -979,6 +1022,8 @@ fn check_internet_routability_inner(
         }
     }
 
+    // IPv6 gate: consulted lazily, only after every IPv4 tier has failed, so a
+    // reachable IPv4 path never triggers a v6 lookup.
     if !has_ipv6(interface) {
         cmd_log_append(format!(
             "  -> no global IPv6 address on {}, skipping IPv6 routability check",
@@ -987,7 +1032,17 @@ fn check_internet_routability_inner(
         return OperationResult::NoInternet;
     }
 
-    let v6 = Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111);
+    // Tier 3: TCP :443 over IPv6.
+    cmd_log_append(format!("$ tcp-connect [{}]:443", v6));
+    match tcp443(IpAddr::V6(v6)) {
+        Ok(_) => {
+            cmd_log_append("  -> :443 reachable (TCPv6)".to_string());
+            return OperationResult::InternetReachable;
+        }
+        Err(e) => cmd_log_append(format!("  -> [{}]:443 unreachable: {}", v6, e)),
+    }
+
+    // Tier 4: ICMPv6 echo.
     cmd_log_append(format!("$ ping {} (ICMPv6 echo)", v6));
     match ping6(v6) {
         Ok(_) => {
@@ -1016,10 +1071,7 @@ pub fn check_dns_resolution(interface: &str, hostname: &str) -> OperationResult 
         }
         Err(e) => {
             cmd_log_append(format!("  -> FAILED: {}", e));
-            OperationResult::DnsFailed(format!(
-                "DNS resolution failed for {}: {}",
-                hostname, e
-            ))
+            OperationResult::DnsFailed(format!("DNS resolution failed for {}: {}", hostname, e))
         }
     }
 }
@@ -1036,7 +1088,10 @@ fn dns_resolve(interface: &str, hostname: &str) -> Result<String, String> {
     if candidates.is_empty() {
         return Err("no nameserver found".to_string());
     }
-    cmd_log_append(format!("  nameservers (in order): {}", candidates.join(", ")));
+    cmd_log_append(format!(
+        "  nameservers (in order): {}",
+        candidates.join(", ")
+    ));
 
     let dests: Vec<SocketAddr> = candidates
         .iter()
@@ -1138,11 +1193,16 @@ fn query_one(
     query: &[u8],
     timeout: std::time::Duration,
 ) -> Result<String, String> {
-    let bind_addr = if dest.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let bind_addr = if dest.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
     let sock = UdpSocket::bind(bind_addr).map_err(|e| format!("bind: {}", e))?;
     sock.set_read_timeout(Some(timeout))
         .map_err(|e| format!("set_read_timeout: {}", e))?;
-    sock.send_to(query, dest).map_err(|e| format!("send: {}", e))?;
+    sock.send_to(query, dest)
+        .map_err(|e| format!("send: {}", e))?;
     let mut buf = [0u8; 512];
     let n = sock.recv(&mut buf).map_err(|e| format!("recv: {}", e))?;
     parse_dns_response(&buf[..n])
@@ -1310,13 +1370,14 @@ pub fn cleanup_wpa_supplicant(interface: &str) -> OperationResult {
 
 /// Persist the network configuration established during the initrd session
 /// to the installed system's /etc so it boots with working networking.
-pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &str) -> OperationResult {
+pub fn persist_network_config(
+    mount_point: &str,
+    interface: &str,
+    mac_address: &str,
+) -> OperationResult {
     let target_networkd_dir = format!("{}/systemd/network", mount_point);
     if let Err(e) = fs::create_dir_all(&target_networkd_dir) {
-        return OperationResult::Error(format!(
-            "failed to create {}: {}",
-            target_networkd_dir, e
-        ));
+        return OperationResult::Error(format!("failed to create {}: {}", target_networkd_dir, e));
     }
 
     cmd_log_append(format!(
@@ -1325,13 +1386,14 @@ pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &
     ));
     let network_unit = generate_persist_network_config(interface, mac_address);
     let network_path = format!("{}/20-{}.network", target_networkd_dir, interface);
-    cmd_log_append(format!("  writing {} ({} bytes)", network_path, network_unit.len()));
+    cmd_log_append(format!(
+        "  writing {} ({} bytes)",
+        network_path,
+        network_unit.len()
+    ));
     cmd_log_append(format!("  content: {}", network_unit.trim()));
     if let Err(e) = fs::write(&network_path, &network_unit) {
-        return OperationResult::Error(format!(
-            "failed to write {}: {}",
-            network_path, e
-        ));
+        return OperationResult::Error(format!("failed to write {}: {}", network_path, e));
     }
 
     // If we have a wpa_supplicant config, copy it to the installed system
@@ -1339,16 +1401,10 @@ pub fn persist_network_config(mount_point: &str, interface: &str, mac_address: &
     if std::path::Path::new(&wpa_src).exists() {
         let wpa_target_dir = format!("{}/wpa_supplicant", mount_point);
         if let Err(e) = fs::create_dir_all(&wpa_target_dir) {
-            return OperationResult::Error(format!(
-                "failed to create {}: {}",
-                wpa_target_dir, e
-            ));
+            return OperationResult::Error(format!("failed to create {}: {}", wpa_target_dir, e));
         }
 
-        let wpa_target = format!(
-            "{}/wpa_supplicant-{}.conf",
-            wpa_target_dir, interface
-        );
+        let wpa_target = format!("{}/wpa_supplicant-{}.conf", wpa_target_dir, interface);
         if let Err(e) = fs::copy(&wpa_src, &wpa_target) {
             return OperationResult::Error(format!(
                 "failed to copy wpa_supplicant config to {}: {}",
@@ -1403,6 +1459,7 @@ mod tests {
         let ping6_calls = AtomicU32::new(0);
         let result = check_internet_routability_inner(
             "eth0",
+            |_| Err("no 443".to_string()),
             |_| Ok(()),
             |_| panic!("has_ipv6 must not be consulted when IPv4 is reachable"),
             |_| {
@@ -1421,6 +1478,7 @@ mod tests {
         let ping6_calls = AtomicU32::new(0);
         let result = check_internet_routability_inner(
             "eth0",
+            |_| Err("no 443".to_string()),
             |_| Err("filtered".to_string()),
             |_| false,
             |_| {
@@ -1441,6 +1499,7 @@ mod tests {
         let ping6_calls = AtomicU32::new(0);
         let result = check_internet_routability_inner(
             "eth0",
+            |_| Err("no 443".to_string()),
             |_| Err("no v4".to_string()),
             |_| true,
             |_| {
@@ -1456,9 +1515,68 @@ mod tests {
     fn test_routability_ipv6_present_but_unreachable_is_no_internet() {
         let result = check_internet_routability_inner(
             "eth0",
+            |_| Err("no 443".to_string()),
             |_| Err("no v4".to_string()),
             |_| true,
             |_| Err("no v6".to_string()),
+        );
+        assert!(matches!(result, OperationResult::NoInternet));
+    }
+
+    #[test]
+    fn test_routability_tcp443_reachable_skips_icmp_and_ipv6() {
+        // TCP :443 succeeds first (the berkeley case: ICMP + :53 filtered, :443
+        // allowed). ICMP and the IPv6 gate must never be consulted.
+        let ping4_calls = AtomicU32::new(0);
+        let result = check_internet_routability_inner(
+            "eth0",
+            |_| Ok(()),
+            |_| {
+                ping4_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            |_| panic!("has_ipv6 must not be consulted when :443 is reachable"),
+            |_| panic!("ping6 must not run when :443 is reachable"),
+        );
+        assert!(matches!(result, OperationResult::InternetReachable));
+        assert_eq!(
+            ping4_calls.load(Ordering::SeqCst),
+            0,
+            "ICMPv4 must not run once TCP :443 has proven reachability"
+        );
+    }
+
+    #[test]
+    fn test_routability_tcp443_v6_reachable_when_v4_filtered() {
+        // Everything IPv4 is filtered but the stack has a global v6 and :443 is
+        // reachable over IPv6 — must report reachable via the TCPv6 tier without
+        // ever pinging.
+        let result = check_internet_routability_inner(
+            "eth0",
+            |ip| {
+                if ip.is_ipv6() {
+                    Ok(())
+                } else {
+                    Err("v4 :443 filtered".to_string())
+                }
+            },
+            |_| Err("icmpv4 filtered".to_string()),
+            |_| true,
+            |_| panic!("ICMPv6 must not run once TCP :443/v6 succeeds"),
+        );
+        assert!(matches!(result, OperationResult::InternetReachable));
+    }
+
+    #[test]
+    fn test_routability_all_tiers_filtered_is_no_internet() {
+        // TCP :443 (v4+v6), ICMPv4, and ICMPv6 all filtered with a v6 in the
+        // stack -> NoInternet, but only after every tier was actually tried.
+        let result = check_internet_routability_inner(
+            "eth0",
+            |_| Err("no 443".to_string()),
+            |_| Err("no icmpv4".to_string()),
+            |_| true,
+            |_| Err("no icmpv6".to_string()),
         );
         assert!(matches!(result, OperationResult::NoInternet));
     }
@@ -1569,7 +1687,10 @@ fe800000000000000000000000000001 \
             Some("2001:db8::1".parse().unwrap())
         );
         assert_eq!(parse_proc_hex_ipv6("tooshort"), None);
-        assert_eq!(parse_proc_hex_ipv6("zz010db8000000000000000000000001"), None);
+        assert_eq!(
+            parse_proc_hex_ipv6("zz010db8000000000000000000000001"),
+            None
+        );
     }
 
     // ── Nameserver socket parsing (IPv4 / IPv6 / zoned) ─────────────────
@@ -1639,7 +1760,10 @@ fe800000000000000000000000000001 \
         let mut verified = packet;
         verified[2] = (cksum >> 8) as u8;
         verified[3] = (cksum & 0xff) as u8;
-        assert_eq!(crate::engine::initrd_ops::syscall::icmp_checksum(&verified), 0);
+        assert_eq!(
+            crate::engine::initrd_ops::syscall::icmp_checksum(&verified),
+            0
+        );
     }
 
     #[test]
@@ -1648,7 +1772,7 @@ fe800000000000000000000000000001 \
         // Header: 12 bytes
         assert_eq!(query[0..2], [0x12, 0x34]); // ID
         assert_eq!(query[4..6], [0, 1]); // QDCOUNT=1
-        // Question starts at offset 12
+                                         // Question starts at offset 12
         assert_eq!(query[12], 7); // "example" length
         assert_eq!(&query[13..20], b"example");
         assert_eq!(query[20], 3); // "com" length
@@ -1664,14 +1788,14 @@ fe800000000000000000000000000001 \
         // Header
         resp.extend_from_slice(&[0x12, 0x34, 0x81, 0x80]); // ID, flags
         resp.extend_from_slice(&[0, 1, 0, 1, 0, 0, 0, 0]); // QD=1, AN=1
-        // Question: example.com A IN
+                                                           // Question: example.com A IN
         resp.push(7);
         resp.extend_from_slice(b"example");
         resp.push(3);
         resp.extend_from_slice(b"com");
         resp.push(0);
         resp.extend_from_slice(&[0, 1, 0, 1]); // QTYPE=A, QCLASS=IN
-        // Answer: compressed name, A record
+                                               // Answer: compressed name, A record
         resp.extend_from_slice(&[0xc0, 0x0c]); // name pointer to offset 12
         resp.extend_from_slice(&[0, 1]); // TYPE=A
         resp.extend_from_slice(&[0, 1]); // CLASS=IN
@@ -1757,7 +1881,11 @@ fe800000000000000000000000000001 \
         assert_eq!(out.first(), Some(&"192.168.122.1".to_string()));
         let gw = out.iter().position(|n| n == "192.168.122.1").unwrap();
         let pubp = out.iter().position(|n| n == "8.8.8.8").unwrap();
-        assert!(gw < pubp, "gateway must come before public fallback: {:?}", out);
+        assert!(
+            gw < pubp,
+            "gateway must come before public fallback: {:?}",
+            out
+        );
     }
 
     #[test]
@@ -1767,7 +1895,11 @@ fe800000000000000000000000000001 \
         let current = vec!["8.8.8.8".to_string()];
         let local = vec!["192.168.122.1".to_string()];
         let out = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, |_| false);
-        assert!(out.iter().any(|n| n == "192.168.122.1"), "must include gateway: {:?}", out);
+        assert!(
+            out.iter().any(|n| n == "192.168.122.1"),
+            "must include gateway: {:?}",
+            out
+        );
         assert_ne!(out, current, "must not retain the blocked-only seed");
     }
 
@@ -1779,7 +1911,11 @@ fe800000000000000000000000000001 \
         let local = vec!["192.168.122.1".to_string()];
         // Probe would return true, but empty current must NOT short-circuit.
         let out = select_working_resolvers(&current, &local, &PUBLIC_FALLBACK_DNS, |_| true);
-        assert!(out.iter().any(|n| n == "192.168.122.1"), "must include gateway: {:?}", out);
+        assert!(
+            out.iter().any(|n| n == "192.168.122.1"),
+            "must include gateway: {:?}",
+            out
+        );
     }
 
     #[test]
@@ -1819,7 +1955,11 @@ fe800000000000000000000000000001 \
         assert_eq!(order.first(), Some(&"192.168.122.1".to_string()));
         let gw_pos = order.iter().position(|n| n == "192.168.122.1").unwrap();
         let pub_pos = order.iter().position(|n| n == "8.8.8.8").unwrap();
-        assert!(gw_pos < pub_pos, "gateway must precede public fallback: {:?}", order);
+        assert!(
+            gw_pos < pub_pos,
+            "gateway must precede public fallback: {:?}",
+            order
+        );
     }
 
     #[test]
@@ -1970,7 +2110,8 @@ domain_name_servers=8.8.8.8 8.8.4.4
 domain_name='example.local'
 lease_time=86400
 ";
-        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some from parse_dhcpcd_lease_dns")?;
+        let result =
+            parse_dhcpcd_lease_dns(lease).ok_or("expected Some from parse_dhcpcd_lease_dns")?;
         assert!(result.contains("nameserver 8.8.8.8\n"));
         assert!(result.contains("nameserver 8.8.4.4\n"));
         assert!(result.contains("search example.local\n"));
@@ -1980,7 +2121,8 @@ lease_time=86400
     #[test]
     fn test_parse_dhcpcd_lease_dns_no_domain() -> Result<(), String> {
         let lease = "domain_name_servers=1.1.1.1\n";
-        let result = parse_dhcpcd_lease_dns(lease).ok_or("expected Some from parse_dhcpcd_lease_dns")?;
+        let result =
+            parse_dhcpcd_lease_dns(lease).ok_or("expected Some from parse_dhcpcd_lease_dns")?;
         assert_eq!(result, "nameserver 1.1.1.1\n");
         assert!(!result.contains("search"));
         Ok(())
@@ -2083,7 +2225,10 @@ subnet_mask=255.255.255.0
             "nameserver 10.0.0.1\nnameserver 10.0.0.3\n".to_string(),
         ];
         let out = combine_resolv_fragments(&frags).ok_or("expected Some")?;
-        assert_eq!(out, "nameserver 10.0.0.1\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n");
+        assert_eq!(
+            out,
+            "nameserver 10.0.0.1\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n"
+        );
         Ok(())
     }
 
@@ -2119,15 +2264,17 @@ subnet_mask=255.255.255.0
         fs::write(base.join("eth0.dhcp"), "nameserver 192.168.50.1\n")
             .map_err(|e| e.to_string())?;
         fs::write(base.join("eth0.ra"), "nameserver fe80::1\n").map_err(|e| e.to_string())?;
-        fs::write(base.join("wlan0.dhcp"), "nameserver 10.9.9.9\n")
-            .map_err(|e| e.to_string())?;
+        fs::write(base.join("wlan0.dhcp"), "nameserver 10.9.9.9\n").map_err(|e| e.to_string())?;
 
         let dir = base.to_string_lossy().to_string();
         let frags = read_resolv_fragments_from_dirs(&[&dir], "eth0");
         let combined = combine_resolv_fragments(&frags).ok_or("expected Some")?;
         assert!(combined.contains("nameserver 192.168.50.1\n"));
         assert!(combined.contains("nameserver fe80::1\n"));
-        assert!(!combined.contains("10.9.9.9"), "wlan0 must not leak into eth0");
+        assert!(
+            !combined.contains("10.9.9.9"),
+            "wlan0 must not leak into eth0"
+        );
 
         fs::remove_dir_all(&base).map_err(|e| e.to_string())?;
         Ok(())
@@ -2163,8 +2310,8 @@ subnet_mask=255.255.255.0
 
     #[test]
     fn test_parse_wifi_qr_no_password() -> Result<(), String> {
-        let (ssid, pass) = parse_wifi_qr("WIFI:T:nopass;S:OpenNet;;")
-            .ok_or("expected Some from parse_wifi_qr")?;
+        let (ssid, pass) =
+            parse_wifi_qr("WIFI:T:nopass;S:OpenNet;;").ok_or("expected Some from parse_wifi_qr")?;
         assert_eq!(ssid, "OpenNet");
         assert_eq!(pass, ""); // no password = empty string
         Ok(())

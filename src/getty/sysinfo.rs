@@ -63,8 +63,7 @@ impl SystemInfo {
         let (disk_total_gb, disk_used_gb, disk_available_gb) = probe_disk_usage(mount_point);
 
         let route_content = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
-        let (default_interface, _gateway) = parse_proc_route(&route_content)
-            .unwrap_or_default();
+        let (default_interface, _gateway) = parse_proc_route(&route_content).unwrap_or_default();
 
         let ip_address = if !default_interface.is_empty() {
             crate::engine::initrd_ops::syscall::get_interface_ipv4(&default_interface)
@@ -129,17 +128,12 @@ impl SystemInfo {
         let (iface, _gw) = parse_proc_route(&route_content).unwrap_or_default();
 
         self.ip_address = if !iface.is_empty() {
-            crate::engine::initrd_ops::syscall::get_interface_ipv4(&iface)
-                .map(|ip| ip.to_string())
+            crate::engine::initrd_ops::syscall::get_interface_ipv4(&iface).map(|ip| ip.to_string())
         } else {
             None
         };
 
-        self.default_interface = if iface.is_empty() {
-            None
-        } else {
-            Some(iface)
-        };
+        self.default_interface = if iface.is_empty() { None } else { Some(iface) };
 
         self.network_online = check_online();
     }
@@ -208,8 +202,8 @@ pub fn probe_disk_usage(path: &str) -> (f64, f64, f64) {
         Ok(stat) => {
             let block_size = stat.fragment_size() as f64;
             let total = (stat.blocks() as f64 * block_size) / (1024.0 * 1024.0 * 1024.0);
-            let available = (stat.blocks_available() as f64 * block_size)
-                / (1024.0 * 1024.0 * 1024.0);
+            let available =
+                (stat.blocks_available() as f64 * block_size) / (1024.0 * 1024.0 * 1024.0);
             let used = total - available;
             (total, used, available)
         }
@@ -362,7 +356,10 @@ eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
 eth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
 ";
         let result = parse_proc_route(content);
-        assert!(result.is_some(), "parse_proc_route should return Some for valid route table");
+        assert!(
+            result.is_some(),
+            "parse_proc_route should return Some for valid route table"
+        );
         if let Some((iface, gw)) = result {
             assert_eq!(iface, "eth0");
             // 0101A8C0 in little-endian = 192.168.1.1
