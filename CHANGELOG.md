@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 (2026-07-02)
+
+### Features
+
+- routability detection now survives networks that filter ICMP echo and
+  outbound plaintext :53 while allowing :443, and that advertise a black-holed
+  IPv6 (e.g. the "berkeley" network). `check_internet_routability` gains a
+  TCP :443 probe tier (`tcp_connect_probe` in `syscall.rs`) tried before ICMP,
+  and consults the IPv6 gate lazily — only after every IPv4 tier fails — so a
+  failed v6 ping is no longer authoritative and a reachable :443/DoH path
+  reports online. `check_internet_routability_inner` is made `pub` for
+  integration testing; the existing tier tests are updated and new unit tests
+  (TCP:443 v4 skips ICMP/v6, TCP:443 v6 when v4 filtered, all-filtered →
+  NoInternet) plus hermetic integration tests (real loopback TCP listener, and
+  the full local-resolver-dead → TCP:443 fallback compose) are added
+
 ## 0.4.10 (2026-06-30)
 
 ### Fixes
