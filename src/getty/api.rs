@@ -113,21 +113,14 @@ impl TownApiClient {
 
     /// Fetch all services: system services + package units.
     /// Used for the status panel display.
+    ///
+    /// A failure on either endpoint is returned, not swallowed. Discarding it
+    /// silently is what let a body the client could not parse render as a panel
+    /// with no services in it — indistinguishable from a box that genuinely has
+    /// none, and impossible to diagnose from the screen.
     pub fn fetch_all_services(&self) -> Result<Vec<ServiceInfo>, String> {
-        let mut all = Vec::new();
-
-        if let Ok(body) = self.http_get("/system-services") {
-            if let Ok(services) = parse_units_json(&body) {
-                all.extend(services);
-            }
-        }
-
-        if let Ok(body) = self.http_get("/systemd/units?limit=100") {
-            if let Ok(services) = parse_units_json(&body) {
-                all.extend(services);
-            }
-        }
-
+        let mut all = parse_units_json(&self.http_get("/system-services")?)?;
+        all.extend(parse_units_json(&self.http_get("/systemd/units?limit=100")?)?);
         Ok(all)
     }
 
@@ -167,22 +160,7 @@ impl TownApiClient {
             .read_to_string(&mut response)
             .map_err(|e| format!("read failed: {}", e))?;
 
-        // Find the body after the HTTP headers (\r\n\r\n separator)
-        let body_start = response.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
-        let body = &response[body_start..];
-
-        // Check for HTTP error status
-        if let Some(status_line) = response.lines().next() {
-            if let Some(code_str) = status_line.split_whitespace().nth(1) {
-                if let Ok(code) = code_str.parse::<u16>() {
-                    if code >= 400 {
-                        return Err(format!("API returned HTTP {}", code));
-                    }
-                }
-            }
-        }
-
-        Ok(body.to_string())
+        parse_http_response(&response)
     }
 
     /// Perform an HTTP POST request to the Town OS API.
@@ -216,20 +194,92 @@ impl TownApiClient {
             .read_to_string(&mut response)
             .map_err(|e| format!("read failed: {}", e))?;
 
-        let body_start = response.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
-        let body = &response[body_start..];
+        parse_http_response(&response)
+    }
+}
 
-        if let Some(status_line) = response.lines().next() {
-            if let Some(code_str) = status_line.split_whitespace().nth(1) {
-                if let Ok(code) = code_str.parse::<u16>() {
-                    if code >= 400 {
-                        return Err(format!("API returned HTTP {}", code));
-                    }
-                }
+/// Split an HTTP/1.1 response into status, headers and body, and return the body
+/// with its transfer encoding undone.
+///
+/// The Town OS API is an HTTP/1.1 server and frames a response one of two ways
+/// depending only on how big it is: a small one gets `Content-Length` and arrives
+/// verbatim, a large one gets `Transfer-Encoding: chunked` and arrives as
+/// `<hex-len>\r\n<bytes>\r\n...0\r\n\r\n`. Handing the chunked form straight to a
+/// JSON parser fails on the leading length line — so the status panel would show
+/// every service on a box with few of them and NONE on a box with many, which is
+/// exactly backwards. An HTTP/1.1 client has to decode chunked; there is no
+/// opting out.
+pub fn parse_http_response(response: &str) -> Result<String, String> {
+    let sep = response
+        .find("\r\n\r\n")
+        .ok_or_else(|| "malformed HTTP response: no header terminator".to_string())?;
+    let head = &response[..sep];
+    let body = &response[sep + 4..];
+
+    let mut lines = head.lines();
+    let status_line = lines
+        .next()
+        .ok_or_else(|| "malformed HTTP response: no status line".to_string())?;
+    if let Some(code_str) = status_line.split_whitespace().nth(1) {
+        if let Ok(code) = code_str.parse::<u16>() {
+            if code >= 400 {
+                return Err(format!("API returned HTTP {}", code));
             }
         }
+    }
 
-        Ok(body.to_string())
+    let chunked = lines.any(|line| match line.split_once(':') {
+        Some((name, value)) => {
+            name.trim().eq_ignore_ascii_case("transfer-encoding")
+                && value.to_ascii_lowercase().contains("chunked")
+        }
+        None => false,
+    });
+    if !chunked {
+        return Ok(body.to_string());
+    }
+
+    let decoded = decode_chunked(body.as_bytes())?;
+    String::from_utf8(decoded).map_err(|e| format!("chunked body is not valid UTF-8: {}", e))
+}
+
+/// Decode a chunked transfer-encoded body.
+///
+/// Operates on bytes, not chars: a chunk length counts bytes, and a service
+/// description carrying any non-ASCII character would put a byte offset in the
+/// middle of a UTF-8 sequence — slicing a &str there panics.
+fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    loop {
+        let line_end = rest
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or_else(|| "malformed chunked body: unterminated chunk size".to_string())?;
+        let size_line = std::str::from_utf8(&rest[..line_end])
+            .map_err(|e| format!("malformed chunk size: {}", e))?;
+        // A chunk size may carry extensions: "1a;name=value".
+        let size_text = size_line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|e| format!("malformed chunk size {:?}: {}", size_text, e))?;
+
+        rest = &rest[line_end + 2..];
+        if size == 0 {
+            return Ok(out);
+        }
+        if rest.len() < size {
+            return Err(format!(
+                "truncated chunked body: want {} bytes, have {}",
+                size,
+                rest.len()
+            ));
+        }
+        out.extend_from_slice(&rest[..size]);
+        rest = &rest[size..];
+
+        if !rest.starts_with(b"\r\n") {
+            return Err("malformed chunked body: missing chunk terminator".to_string());
+        }
+        rest = &rest[2..];
     }
 }
 
@@ -622,5 +672,101 @@ mod tests {
     fn test_format_detail_json_number_value() {
         let detail = r#"{"port":8080}"#;
         assert_eq!(format_detail_json(detail), "port=8080");
+    }
+
+    /// A Content-Length response arrives verbatim.
+    #[test]
+    fn test_parse_http_response_content_length() -> Result<(), String> {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n{\"entries\":[],\"has_more\":false,\"total_pages\":1,\"total_count\":0}";
+        let body = parse_http_response(response)?;
+        assert_eq!(
+            body,
+            r#"{"entries":[],"has_more":false,"total_pages":1,"total_count":0}"#
+        );
+        Ok(())
+    }
+
+    /// Regression: the status panel went blank because the API chunks any
+    /// response big enough — and /system-services, the endpoint that carries
+    /// every running service, is always big enough. The body then begins with a
+    /// hex length line, serde rejects it, and the panel renders empty as though
+    /// the box had no services at all. This is the shape the real box returns.
+    #[test]
+    fn test_parse_http_response_chunked() -> Result<(), String> {
+        let json = r#"[{"Name":"town-os-system--rolodex.service","ActiveState":"active","Description":"Town OS System Service: Rolodex DNS"}]"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            json.len(),
+            json
+        );
+
+        let body = parse_http_response(&response)?;
+        assert_eq!(body, json);
+
+        // And it now parses all the way through to the panel's data type.
+        let services = parse_units_json(&body)?;
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].name, "town-os-system--rolodex.service");
+        assert_eq!(services[0].active_state, "active");
+        Ok(())
+    }
+
+    /// A body split across several chunks is reassembled in order.
+    #[test]
+    fn test_parse_http_response_chunked_multiple_chunks() -> Result<(), String> {
+        let response = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n[{\"a\"\r\n4\r\n:1}]\r\n0\r\n\r\n";
+        assert_eq!(parse_http_response(response)?, r#"[{"a":1}]"#);
+        Ok(())
+    }
+
+    /// The header match is case-insensitive and tolerates chunk extensions.
+    #[test]
+    fn test_parse_http_response_chunked_case_and_extensions() -> Result<(), String> {
+        let response =
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: Chunked\r\n\r\n3;foo=bar\r\n[1]\r\n0\r\n\r\n";
+        assert_eq!(parse_http_response(response)?, "[1]");
+        Ok(())
+    }
+
+    /// Chunk lengths are byte counts, so a multi-byte character must not be
+    /// sliced through the middle.
+    #[test]
+    fn test_parse_http_response_chunked_multibyte() -> Result<(), String> {
+        let json = r#"[{"Description":"café"}]"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            json.len(),
+            json
+        );
+        assert_eq!(parse_http_response(&response)?, json);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_http_response_error_status() {
+        let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\n{}";
+        let err = parse_http_response(response).expect_err("403 must be an error");
+        assert!(err.contains("403"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_parse_http_response_truncated_chunk() {
+        let response = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nff\r\n[1]\r\n0\r\n\r\n";
+        let err = parse_http_response(response).expect_err("a short chunk must be an error");
+        assert!(err.contains("truncated"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_parse_http_response_bad_chunk_size() {
+        let response = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n[1]\r\n0\r\n\r\n";
+        let err = parse_http_response(response).expect_err("a bad chunk size must be an error");
+        assert!(err.contains("chunk size"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_parse_http_response_no_header_terminator() {
+        let err = parse_http_response("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n")
+            .expect_err("a headerless response must be an error");
+        assert!(err.contains("header terminator"), "unexpected error: {}", err);
     }
 }
