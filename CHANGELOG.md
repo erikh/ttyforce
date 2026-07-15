@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1 (2026-07-15)
+
+### Fixes
+
+- getty now decodes chunked HTTP responses from the Town OS API. The API frames
+  responses by size — small ones get `Content-Length`, large ones get
+  `Transfer-Encoding: chunked` — and the chunked form was fed straight to serde,
+  which choked on the leading hex length line. The result was an empty services
+  panel on exactly the boxes running the most services. Chunked bodies are now
+  decoded over raw bytes (so multi-byte descriptions aren't sliced mid-sequence),
+  and `fetch_all_services` no longer swallows parse errors, so a decode failure
+  surfaces instead of masquerading as a box with no services
+
 ## 0.5.0 (2026-07-02)
 
 ### Features
