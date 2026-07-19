@@ -30,6 +30,7 @@ fn map_enter(screen: &ScreenId, selected_index: usize) -> Option<UserInput> {
         ScreenId::InstallModeSelect => Some(UserInput::Select(selected_index)),
         ScreenId::NetworkConfig => Some(UserInput::Select(selected_index)),
         ScreenId::WifiSelect => Some(UserInput::SelectWifiNetwork(selected_index)),
+        ScreenId::WifiCountry => None, // searchable list: typing + Enter handled in app.rs
         ScreenId::WifiPassword => None, // handled by text input widget
         ScreenId::WpsPrompt => None,    // y/n keys handle this
         ScreenId::WpsWaiting => None,   // auto-advances via polling

@@ -14,6 +14,10 @@ pub enum ScreenId {
     InstallModeSelect,
     NetworkConfig,
     WifiSelect,
+    /// Searchable regulatory-country picker. Shown between WifiSelect and the
+    /// password/WPS step, and only when the kernel wifi regulatory domain is
+    /// unset (see `regulatory_domain_unset`) — otherwise it is skipped.
+    WifiCountry,
     WifiPassword,
     WpsPrompt,
     WpsWaiting,
@@ -80,6 +84,9 @@ pub enum UserInput {
     // Wifi
     RefreshWifiScan,
     SelectWifiNetwork(usize),
+    /// A regulatory country was chosen from the WifiCountry picker; payload is
+    /// the ISO 3166-1 alpha-2 code (e.g. "US").
+    SelectCountry(String),
     EnterWifiPassword(String),
     InitiateWps,
     WpsAccept,
@@ -111,6 +118,11 @@ pub struct InstallerStateMachine {
     pub selected_interface: Option<String>,
     pub selected_ssid: Option<String>,
     pub wifi_password: Option<String>,
+    /// Regulatory country (ISO 3166-1 alpha-2) chosen for wifi. Set only when the
+    /// WifiCountry picker ran. Kept on the machine so it is applied once (via
+    /// `iw reg set`) and is available to reuse later — e.g. seeding locale/keymap
+    /// defaults for i18n.
+    pub wifi_country: Option<String>,
     pub selected_disk_group: Option<usize>,
     pub selected_disk: Option<usize>,
     pub selected_filesystem: FilesystemType,
@@ -173,6 +185,7 @@ impl InstallerStateMachine {
             selected_interface: None,
             selected_ssid: None,
             wifi_password: None,
+            wifi_country: None,
             selected_disk_group: None,
             selected_disk: None,
             selected_filesystem: FilesystemType::default(),
@@ -308,6 +321,30 @@ impl InstallerStateMachine {
             }
             (ScreenId::WifiSelect, UserInput::AbortInstall) => {
                 self.abort(executor, "User aborted at wifi select".to_string())
+            }
+
+            // === Wifi Country (regulatory domain) Screen ===
+            (ScreenId::WifiCountry, UserInput::SelectCountry(code)) => {
+                self.wifi_country = Some(code.clone());
+                // Apply immediately so the kernel/firmware regulatory domain is
+                // in place before wpa_supplicant asks for the AP's channel. This
+                // is the step that clears the brcmfmac `-52` channel rejection.
+                // set_regulatory_domain logs the `iw reg set` to the command log;
+                // it is intentionally not an executor Operation (it is a global
+                // side effect, not a per-interface installer action).
+                if let OperationResult::Error(e) =
+                    crate::engine::initrd_ops::network::set_regulatory_domain(&code)
+                {
+                    self.error_message = Some(format!("Failed to set wifi country: {}", e));
+                }
+                self.wifi_auth_screen()
+            }
+            (ScreenId::WifiCountry, UserInput::Back) => {
+                self.current_screen = ScreenId::WifiSelect;
+                Some(ScreenId::WifiSelect)
+            }
+            (ScreenId::WifiCountry, UserInput::AbortInstall) => {
+                self.abort(executor, "User aborted at wifi country".to_string())
             }
 
             // === WPS Prompt Screen ===
@@ -844,7 +881,37 @@ impl InstallerStateMachine {
         self.selected_ssid = Some(network.ssid.clone());
         self.network_state = NetworkState::NetworkSelected;
 
-        if network.security == crate::manifest::WifiSecurity::Open {
+        // Detour through the country picker first, but only when it is actually
+        // needed: the kernel wifi regulatory domain is unset (world "00") and we
+        // have not already chosen one this run. Without a country set, brcmfmac
+        // chips (the Raspberry Pi's onboard wifi) reject the AP's channel and the
+        // connection silently fails at DHCP — so we collect it before auth. When
+        // the domain is already set, or on non-wifi drivers where the probe fails
+        // closed, this is skipped and the flow is unchanged.
+        if self.wifi_country.is_none()
+            && crate::engine::initrd_ops::network::regulatory_domain_unset()
+        {
+            self.current_screen = ScreenId::WifiCountry;
+            return Some(ScreenId::WifiCountry);
+        }
+
+        self.wifi_auth_screen()
+    }
+
+    /// Transition from "a network is selected" to the correct auth screen:
+    /// straight to password entry for an open network, or the WPS prompt for a
+    /// secured one. Shared by network selection and the post-country-pick path so
+    /// the branching lives in exactly one place. Looks the network up by the
+    /// stored SSID because the country detour discards the selection index.
+    fn wifi_auth_screen(&mut self) -> Option<ScreenId> {
+        let is_open = self
+            .selected_ssid
+            .as_ref()
+            .and_then(|ssid| self.wifi_networks.iter().find(|n| &n.ssid == ssid))
+            .map(|n| n.security == crate::manifest::WifiSecurity::Open)
+            .unwrap_or(false);
+
+        if is_open {
             // No password needed for open networks — skip WPS prompt too
             self.current_screen = ScreenId::WifiPassword;
             Some(ScreenId::WifiPassword)

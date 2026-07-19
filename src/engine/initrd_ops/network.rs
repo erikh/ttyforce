@@ -89,6 +89,54 @@ fn set_interface_up(interface: &str, up: bool) -> Result<(), String> {
     super::syscall::set_interface_up(interface, up)
 }
 
+// ── Wifi regulatory domain (external tool: iw) ─────────────────────────
+
+/// True when the kernel's global wifi regulatory domain is unset — the world
+/// domain "00".
+///
+/// This is the condition that makes the Raspberry Pi's brcmfmac wifi
+/// unusable: in the world domain the CYW43455 firmware refuses the access
+/// point's channel (`brcmf_set_channel ... fail, reason -52` in dmesg), so
+/// association never completes and DHCP silently fails. The installer calls this
+/// after a network is picked to decide whether to prompt for a country.
+///
+/// `iw reg get` prints a block per wiphy plus a `global` block, each starting
+/// with a `country XX:` line; `country 00:` is the unset/world marker. On any
+/// failure to run or parse `iw`, this returns `false` — better to skip the
+/// prompt than to pop a spurious one on hardware that never needed it (wired
+/// installs, or drivers that self-manage their regulatory domain).
+pub fn regulatory_domain_unset() -> bool {
+    match run_cmd("iw", &["reg", "get"]) {
+        Ok(out) => out
+            .lines()
+            .any(|l| l.trim_start().starts_with("country 00:")),
+        Err(e) => {
+            cmd_log_append(format!("  iw reg get failed: {}", e));
+            false
+        }
+    }
+}
+
+/// Set the kernel wifi regulatory domain to an ISO 3166-1 alpha-2 country code
+/// via `iw reg set`.
+///
+/// brcmfmac registers a regulatory notifier, so the kernel domain set here is
+/// forwarded to the chip firmware — which is what unlocks the AP's channel and
+/// clears the `-52` failure. The set is asynchronous, so we pause briefly to let
+/// the driver apply it before wpa_supplicant starts requesting channels.
+/// Best-effort: a failure is logged and returned, but the caller may still try
+/// to associate (a permissive channel can succeed regardless).
+pub fn set_regulatory_domain(country: &str) -> OperationResult {
+    cmd_log_append(format!("$ iw reg set {}", country));
+    match run_cmd("iw", &["reg", "set", country]) {
+        Ok(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            OperationResult::Success
+        }
+        Err(e) => OperationResult::Error(format!("iw reg set {} failed: {}", country, e)),
+    }
+}
+
 // ── Wifi (external tools: iw, wpa_supplicant) ──────────────────────────
 
 /// Scan for wifi networks using iw (no dbus).

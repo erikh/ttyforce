@@ -102,6 +102,8 @@ pub struct App {
     pub selected_index: usize,
     pub password_input: String,
     pub ssh_username_input: String,
+    /// Live search text for the WifiCountry picker.
+    pub country_filter: String,
     pub should_quit: bool,
 }
 
@@ -135,6 +137,7 @@ impl App {
             selected_index: 0,
             password_input: String::new(),
             ssh_username_input: String::new(),
+            country_filter: String::new(),
             should_quit: false,
         }
     }
@@ -266,6 +269,7 @@ impl App {
             ScreenId::InstallModeSelect => self.render_install_mode_select(f, area),
             ScreenId::NetworkConfig => self.render_network_config(f, area),
             ScreenId::WifiSelect => self.render_wifi_select(f, area),
+            ScreenId::WifiCountry => self.render_wifi_country(f, area),
             ScreenId::WifiPassword => self.render_wifi_password(f, area),
             ScreenId::WpsPrompt => self.render_wps_prompt(f, area),
             ScreenId::WpsWaiting => self.render_wps_waiting(f, area),
@@ -402,6 +406,60 @@ impl App {
                 .border_style(Style::default().fg(Color::Cyan)),
         );
         f.render_widget(list, center);
+    }
+
+    fn render_wifi_country(&self, f: &mut ratatui::Frame, area: Rect) {
+        let filtered = crate::network::country::filter_countries(&self.country_filter);
+
+        let center = centered_rect(60, 80, area);
+        let outer = Block::default()
+            .title(" WiFi Country — type to search, \u{2191}/\u{2193} select, Enter confirm, Esc back ")
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = outer.inner(center);
+        f.render_widget(outer, center);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(1)])
+            .split(inner);
+
+        // Search prompt line (why here and not the block title: it updates on
+        // every keystroke and needs to sit above the results, not in the border).
+        let search = Paragraph::new(format!("  Search: {}_", self.country_filter));
+        f.render_widget(search, chunks[0]);
+
+        if filtered.is_empty() {
+            f.render_widget(Paragraph::new("  No matching countries"), chunks[1]);
+            return;
+        }
+
+        // Scroll a window of the filtered list around the selection so a long
+        // list (or a narrowed search) always keeps the highlighted row visible.
+        let rows = chunks[1].height.max(1) as usize;
+        let sel = self.selected_index.min(filtered.len() - 1);
+        let max_start = filtered.len().saturating_sub(rows);
+        let start = sel.saturating_sub(rows.saturating_sub(1) / 2).min(max_start);
+
+        let items: Vec<ListItem> = filtered
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(rows)
+            .map(|(i, c)| {
+                let style = if i == sel {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("  {}  {}", c.code, c.name)).style(style)
+            })
+            .collect();
+
+        f.render_widget(List::new(items), chunks[1]);
     }
 
     fn render_wifi_password(&self, f: &mut ratatui::Frame, area: Rect) {
@@ -983,6 +1041,55 @@ impl App {
                     self.password_input.clear();
                     self.state_machine.process_input(UserInput::Back, executor);
                     self.selected_index = 0;
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        // Handle the searchable country picker: typing filters the list, the
+        // arrows move within the filtered results, Enter selects the highlighted
+        // one. selected_index is clamped against the current filtered length so a
+        // narrowing search can never point past the end.
+        if self.state_machine.current_screen == ScreenId::WifiCountry {
+            let filtered = crate::network::country::filter_countries(&self.country_filter);
+            match key.code {
+                KeyCode::Enter => {
+                    if let Some(country) = filtered.get(self.selected_index) {
+                        let code = country.code.to_string();
+                        self.country_filter.clear();
+                        self.selected_index = 0;
+                        self.state_machine
+                            .process_input(UserInput::SelectCountry(code), executor);
+                    }
+                    return;
+                }
+                KeyCode::Backspace => {
+                    self.country_filter.pop();
+                    self.selected_index = 0;
+                    return;
+                }
+                KeyCode::Up => {
+                    if self.selected_index > 0 {
+                        self.selected_index -= 1;
+                    }
+                    return;
+                }
+                KeyCode::Down => {
+                    if self.selected_index + 1 < filtered.len() {
+                        self.selected_index += 1;
+                    }
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    self.country_filter.push(c);
+                    self.selected_index = 0;
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.country_filter.clear();
+                    self.selected_index = 0;
+                    self.state_machine.process_input(UserInput::Back, executor);
                     return;
                 }
                 _ => return,
